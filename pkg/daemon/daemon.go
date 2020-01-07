@@ -64,6 +64,8 @@ func New(
 	ptpUpdate	*LinuxPTPConfUpdate,
 	stopCh		<-chan struct{},
 ) *Daemon {
+	RegisterMetrics(nodeName)
+
 	return &Daemon{
 		nodeName:	nodeName,
 		namespace:	namespace,
@@ -105,6 +107,8 @@ func printWhenNotNil(p *string, description string) {
 
 func applyNodePTPProfile(pm *ProcessManager, nodeProfile *ptpv1.PtpProfile) error {
 	glog.Infof("in applyNodePTPProfile")
+
+	addFlagsForMonitor(nodeProfile)
 
 	glog.Infof("updating NodePTPProfile to:")
 	glog.Infof("------------------------------------")
@@ -171,7 +175,7 @@ func phc2sysCreateCmd(nodeProfile *ptpv1.PtpProfile) *exec.Cmd {
 
 // ptp4lCreateCmd generate ptp4l command
 func ptp4lCreateCmd(nodeProfile *ptpv1.PtpProfile) *exec.Cmd {
-	cmdLine := fmt.Sprintf("/usr/sbin/ptp4l -m -f %s -i %s %s",
+	cmdLine := fmt.Sprintf("/usr/sbin/ptp4l -f %s -i %s %s",
 		PTP4L_CONF_FILE_PATH,
 		*nodeProfile.Interface,
 		*nodeProfile.Ptp4lOpts)
@@ -201,7 +205,9 @@ func cmdRun(p *ptpProcess) {
 	scanner := bufio.NewScanner(cmdReader)
 	go func() {
 		for scanner.Scan() {
-			fmt.Printf("%s\n", scanner.Text())
+			output := scanner.Text()
+			fmt.Printf("%s\n", output)
+			extractMetrics(p.name,output)
 		}
 		done <- struct{}{}
 	}()
