@@ -6,8 +6,8 @@
     "generateName": "3",
     "namespace": "4",
     "selfLink": "5",
-    "uid": "7",
-    "resourceVersion": "11042405498087606203",
+    "uid": "ą飋īqJ枊a8衍`Ĩɘ.蘯6ċV夸e",
+    "resourceVersion": "16964250748386560239",
     "generation": 8071137005907523419,
     "creationTimestamp": null,
     "deletionGracePeriodSeconds": -4955867275792137171,
@@ -36,50 +36,49 @@
         "manager": "16",
         "operation": "鐊唊飙Ş-U圴÷a/ɔ}摁(湗Ć]",
         "apiVersion": "17",
-        "fieldsType": "18"
+        "fields": {"18":{"19":null}}
       }
     ]
   },
   "spec": {
     "ports": [
       {
-        "name": "19",
-        "protocol": "@Hr鯹)晿",
-        "port": 202283346,
-        "targetPort": "20",
-        "nodePort": -474380055
+        "name": "24",
+        "protocol": "脽ěĂ凗蓏Ŋ蛊ĉy緅縕",
+        "port": -1493017703,
+        "targetPort": -123438221,
+        "nodePort": 2048967527
       }
     ],
     "selector": {
-      "21": "22"
+      "25": "26"
     },
-    "clusterIP": "23",
-    "type": ".蘯6ċV夸",
+    "clusterIP": "27",
+    "type": "ǡƏS$+½H",
     "externalIPs": [
-      "24"
+      "28"
     ],
-    "sessionAffinity": "ɑ",
-    "loadBalancerIP": "25",
+    "sessionAffinity": "洝尿彀",
+    "loadBalancerIP": "29",
     "loadBalancerSourceRanges": [
-      "26"
+      "30"
     ],
-    "externalName": "27",
-    "externalTrafficPolicy": "ʤ脽ěĂ凗蓏Ŋ蛊ĉy緅縕\u003eŽ",
-    "healthCheckNodePort": -1095807277,
+    "externalName": "31",
+    "externalTrafficPolicy": "螩B",
+    "healthCheckNodePort": -21009133,
     "publishNotReadyAddresses": true,
     "sessionAffinityConfig": {
       "clientIP": {
-        "timeoutSeconds": -1973740160
+        "timeoutSeconds": -1487653240
       }
-    },
-    "ipFamily": "³-Ǐ忄*齧獚敆ȎțêɘĲ斬"
+    }
   },
   "status": {
     "loadBalancer": {
       "ingress": [
         {
-          "ip": "28",
-          "hostname": "29"
+          "ip": "32",
+          "hostname": "33"
         }
       ]
     }

@@ -30,7 +30,7 @@ import (
 	"k8s.io/gengo/namer"
 	"k8s.io/gengo/types"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	conversionargs "k8s.io/code-generator/cmd/conversion-gen/args"
 )
@@ -638,7 +638,7 @@ func (g *genConversion) preexists(inType, outType *types.Type) (*types.Type, boo
 }
 
 func (g *genConversion) Init(c *generator.Context, w io.Writer) error {
-	if klog.V(5) {
+	if klog.V(5).Enabled() {
 		if m, ok := g.useUnsafe.(equalMemoryTypes); ok {
 			var result []string
 			klog.Infof("All objects without identical memory layout:")
@@ -1068,6 +1068,11 @@ func (g *genConversion) generateFromUrlValues(inType, outType *types.Type, sw *g
 	}
 	sw.Do("func auto"+nameTmpl+"(in *$.inType|raw$, out *$.outType|raw$, s $.Scope|raw$) error {\n", args)
 	for _, outMember := range outType.Members {
+		if tagvals := extractTag(outMember.CommentLines); tagvals != nil && tagvals[0] == "false" {
+			// This field is excluded from conversion.
+			sw.Do("// INFO: in."+outMember.Name+" opted out of conversion generation\n", nil)
+			continue
+		}
 		jsonTag := reflect.StructTag(outMember.Tags).Get("json")
 		index := strings.Index(jsonTag, ",")
 		if index == -1 {

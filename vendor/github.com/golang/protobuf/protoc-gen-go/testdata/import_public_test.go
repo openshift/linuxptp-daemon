@@ -41,23 +41,23 @@ import (
 )
 
 func TestImportPublicLink(t *testing.T) {
-	// mainpb.[ME] should be interchangeable with subpb.[ME].
+	// mainpb.[ME] should be interchangable with subpb.[ME].
 	var _ mainpb.M = subpb.M{}
 	var _ mainpb.E = subpb.E(0)
 	_ = &mainpb.Public{
 		M: &mainpb.M{},
-		E: mainpb.E_ZERO.Enum(),
+		E: mainpb.E_ZERO,
 		Local: &mainpb.Local{
 			M: &mainpb.M{},
-			E: mainpb.E_ZERO.Enum(),
+			E: mainpb.E_ZERO,
 		},
 	}
 	_ = &mainpb.Public{
 		M: &subpb.M{},
-		E: subpb.E_ZERO.Enum(),
+		E: subpb.E_ZERO,
 		Local: &mainpb.Local{
 			M: &subpb.M{},
-			E: subpb.E_ZERO.Enum(),
+			E: subpb.E_ZERO,
 		},
 	}
 	_ = &mainpb.M{

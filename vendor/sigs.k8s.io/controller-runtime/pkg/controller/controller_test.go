@@ -18,9 +18,11 @@ package controller_test
 
 import (
 	"fmt"
+	rt "runtime"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -87,6 +89,29 @@ var _ = Describe("controller.Controller", func() {
 			c2, err := controller.New("c2", m, controller.Options{Reconciler: rec})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(c2).ToNot(BeNil())
+
+			close(done)
+		})
+
+		// This test has been marked as pending because it has been causing lots of flakes in CI.
+		// It should be rewritten at some point later in the future.
+		XIt("should not leak goroutines when stop", func(done Done) {
+			// TODO(directxman12): After closing the proper leaks on watch this must be reduced to 0
+			// The leaks currently come from the event-related code (as in corev1.Event).
+			threshold := 3
+
+			m, err := manager.New(cfg, manager.Options{})
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = controller.New("new-controller", m, controller.Options{Reconciler: rec})
+			Expect(err).NotTo(HaveOccurred())
+
+			startGoroutines := rt.NumGoroutine()
+			s := make(chan struct{})
+			close(s)
+
+			Expect(m.Start(s)).NotTo(HaveOccurred())
+			Expect(rt.NumGoroutine() - startGoroutines).To(BeNumerically("<=", threshold))
 
 			close(done)
 		})

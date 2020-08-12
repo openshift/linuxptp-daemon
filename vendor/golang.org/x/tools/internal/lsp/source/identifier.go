@@ -6,22 +6,20 @@ package source
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
 	"strconv"
 
-	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/internal/event"
 	"golang.org/x/tools/internal/lsp/protocol"
-	"golang.org/x/tools/internal/span"
-	"golang.org/x/tools/internal/telemetry/trace"
 	errors "golang.org/x/xerrors"
 )
 
 // IdentifierInfo holds information about an identifier in Go source.
 type IdentifierInfo struct {
 	Name     string
-	File     ParseGoHandle
 	Snapshot Snapshot
 	mappedRange
 
@@ -32,122 +30,138 @@ type IdentifierInfo struct {
 
 	Declaration Declaration
 
-	pkg              Package
-	ident            *ast.Ident
-	wasEmbeddedField bool
-	qf               types.Qualifier
+	ident *ast.Ident
+
+	// enclosing is an expression used to determine the link anchor for an
+	// identifier. If it's a named type, it should be exported.
+	enclosing types.Type
+
+	pkg Package
+	qf  types.Qualifier
 }
 
 type Declaration struct {
-	mappedRange
+	MappedRange []mappedRange
 	node        ast.Node
 	obj         types.Object
-	wasImplicit bool
+
+	// typeSwitchImplicit indicates that the declaration is in an implicit
+	// type switch. Its type is the type of the variable on the right-hand
+	// side of the type switch.
+	typeSwitchImplicit types.Type
 }
 
 // Identifier returns identifier information for a position
 // in a file, accounting for a potentially incomplete selector.
-func Identifier(ctx context.Context, view View, f File, pos protocol.Position) (*IdentifierInfo, error) {
-	snapshot, cphs, err := view.CheckPackageHandles(ctx, f)
-	if err != nil {
-		return nil, err
-	}
-	cph, err := WidestCheckPackageHandle(cphs)
-	if err != nil {
-		return nil, err
-	}
-	pkg, err := cph.Check(ctx)
-	if err != nil {
-		return nil, err
-	}
-	ph, err := pkg.File(f.URI())
-	if err != nil {
-		return nil, err
-	}
-	file, m, _, err := ph.Cached()
-	if err != nil {
-		return nil, err
-	}
-	spn, err := m.PointSpan(pos)
-	if err != nil {
-		return nil, err
-	}
-	rng, err := spn.Range(m.Converter)
-	if err != nil {
-		return nil, err
-	}
-	return findIdentifier(ctx, snapshot, pkg, file, rng.Start)
-}
-
-func findIdentifier(ctx context.Context, snapshot Snapshot, pkg Package, file *ast.File, pos token.Pos) (*IdentifierInfo, error) {
-	if result, err := identifier(ctx, snapshot, pkg, file, pos); err != nil || result != nil {
-		return result, err
-	}
-	// If the position is not an identifier but immediately follows
-	// an identifier or selector period (as is common when
-	// requesting a completion), use the path to the preceding node.
-	ident, err := identifier(ctx, snapshot, pkg, file, pos-1)
-	if ident == nil && err == nil {
-		err = errors.New("no identifier found")
-	}
-	return ident, err
-}
-
-// identifier checks a single position for a potential identifier.
-func identifier(ctx context.Context, snapshot Snapshot, pkg Package, file *ast.File, pos token.Pos) (*IdentifierInfo, error) {
-	ctx, done := trace.StartSpan(ctx, "source.identifier")
+func Identifier(ctx context.Context, snapshot Snapshot, fh FileHandle, pos protocol.Position) (*IdentifierInfo, error) {
+	ctx, done := event.Start(ctx, "source.Identifier")
 	defer done()
 
-	var err error
+	pkg, pgf, err := getParsedFile(ctx, snapshot, fh, NarrowestPackage)
+	if err != nil {
+		return nil, fmt.Errorf("getting file for Identifier: %w", err)
+	}
+	spn, err := pgf.Mapper.PointSpan(pos)
+	if err != nil {
+		return nil, err
+	}
+	rng, err := spn.Range(pgf.Mapper.Converter)
+	if err != nil {
+		return nil, err
+	}
+	return findIdentifier(ctx, snapshot, pkg, pgf.File, rng.Start)
+}
 
-	// Handle import specs separately, as there is no formal position for a package declaration.
-	if result, err := importSpec(ctx, snapshot, pkg, file, pos); result != nil || err != nil {
-		return result, err
-	}
-	path, _ := astutil.PathEnclosingInterval(file, pos, pos)
-	if path == nil {
-		return nil, errors.Errorf("can't find node enclosing position")
-	}
-	view := pkg.View()
-	uri := span.FileURI(view.Session().Cache().FileSet().Position(pos).Filename)
-	var ph ParseGoHandle
-	for _, h := range pkg.Files() {
-		if h.File().Identity().URI == uri {
-			ph = h
+var ErrNoIdentFound = errors.New("no identifier found")
+
+func findIdentifier(ctx context.Context, snapshot Snapshot, pkg Package, file *ast.File, pos token.Pos) (*IdentifierInfo, error) {
+	// Handle import specs separately, as there is no formal position for a
+	// package declaration.
+	if result, err := importSpec(snapshot, pkg, file, pos); result != nil || err != nil {
+		if snapshot.View().Options().ImportShortcut.ShowDefinition() {
+			return result, err
 		}
-	}
-	result := &IdentifierInfo{
-		File:     ph,
-		Snapshot: snapshot,
-		qf:       qualifier(file, pkg.GetTypes(), pkg.GetTypesInfo()),
-		pkg:      pkg,
-		ident:    searchForIdent(path[0]),
-	}
-	// No identifier at the given position.
-	if result.ident == nil {
 		return nil, nil
 	}
+	path := pathEnclosingObjNode(file, pos)
+	if path == nil {
+		return nil, ErrNoIdentFound
+	}
+
+	qf := qualifier(file, pkg.GetTypes(), pkg.GetTypesInfo())
+
+	ident, _ := path[0].(*ast.Ident)
+	if ident == nil {
+		return nil, ErrNoIdentFound
+	}
+	// Special case for package declarations, since they have no
+	// corresponding types.Object.
+	if ident == file.Name {
+		rng, err := posToMappedRange(snapshot, pkg, file.Name.Pos(), file.Name.End())
+		if err != nil {
+			return nil, err
+		}
+		var declAST *ast.File
+		for _, pgf := range pkg.CompiledGoFiles() {
+			if pgf.File.Doc != nil {
+				declAST = pgf.File
+			}
+		}
+		// If there's no package documentation, just use current file.
+		if declAST == nil {
+			declAST = file
+		}
+		declRng, err := posToMappedRange(snapshot, pkg, declAST.Name.Pos(), declAST.Name.End())
+		if err != nil {
+			return nil, err
+		}
+		return &IdentifierInfo{
+			Name:        file.Name.Name,
+			ident:       file.Name,
+			mappedRange: rng,
+			pkg:         pkg,
+			qf:          qf,
+			Snapshot:    snapshot,
+			Declaration: Declaration{
+				node:        declAST.Name,
+				MappedRange: []mappedRange{declRng},
+			},
+		}, nil
+	}
+
+	result := &IdentifierInfo{
+		Snapshot:  snapshot,
+		qf:        qf,
+		pkg:       pkg,
+		ident:     ident,
+		enclosing: searchForEnclosing(pkg.GetTypesInfo(), path),
+	}
+
+	var wasEmbeddedField bool
 	for _, n := range path[1:] {
 		if field, ok := n.(*ast.Field); ok {
-			result.wasEmbeddedField = len(field.Names) == 0
+			wasEmbeddedField = len(field.Names) == 0
 			break
 		}
 	}
+
 	result.Name = result.ident.Name
-	if result.mappedRange, err = posToMappedRange(ctx, pkg, result.ident.Pos(), result.ident.End()); err != nil {
+	var err error
+	if result.mappedRange, err = posToMappedRange(snapshot, pkg, result.ident.Pos(), result.ident.End()); err != nil {
 		return nil, err
 	}
+
 	result.Declaration.obj = pkg.GetTypesInfo().ObjectOf(result.ident)
 	if result.Declaration.obj == nil {
-		// If there was no types.Object for the declaration, there might be an implicit local variable
-		// declaration in a type switch.
-		if objs := typeSwitchVar(pkg.GetTypesInfo(), path); len(objs) > 0 {
+		// If there was no types.Object for the declaration, there might be an
+		// implicit local variable declaration in a type switch.
+		if objs, typ := typeSwitchImplicits(pkg, path); len(objs) > 0 {
 			// There is no types.Object for the declaration of an implicit local variable,
 			// but all of the types.Objects associated with the usages of this variable can be
 			// used to connect it back to the declaration.
 			// Preserve the first of these objects and treat it as if it were the declaring object.
 			result.Declaration.obj = objs[0]
-			result.Declaration.wasImplicit = true
+			result.Declaration.typeSwitchImplicit = typ
 		} else {
 			// Probably a type error.
 			return nil, errors.Errorf("no object for ident %v", result.Name)
@@ -156,22 +170,29 @@ func identifier(ctx context.Context, snapshot Snapshot, pkg Package, file *ast.F
 
 	// Handle builtins separately.
 	if result.Declaration.obj.Parent() == types.Universe {
-		obj := view.BuiltinPackage().Lookup(result.Name)
-		if obj == nil {
-			return result, nil
+		builtin, err := snapshot.BuiltinPackage(ctx)
+		if err != nil {
+			return nil, err
 		}
-		decl, ok := obj.Decl.(ast.Node)
+		builtinObj := builtin.Package.Scope.Lookup(result.Name)
+		if builtinObj == nil {
+			return nil, fmt.Errorf("no builtin object for %s", result.Name)
+		}
+		decl, ok := builtinObj.Decl.(ast.Node)
 		if !ok {
 			return nil, errors.Errorf("no declaration for %s", result.Name)
 		}
 		result.Declaration.node = decl
-		if result.Declaration.mappedRange, err = nameToMappedRange(ctx, pkg, decl.Pos(), result.Name); err != nil {
-			return nil, err
-		}
+
+		// The builtin package isn't in the dependency graph, so the usual utilities
+		// won't work here.
+		rng := newMappedRange(snapshot.FileSet(), builtin.ParsedFile.Mapper, decl.Pos(), decl.Pos()+token.Pos(len(result.Name)))
+		result.Declaration.MappedRange = append(result.Declaration.MappedRange, rng)
+
 		return result, nil
 	}
 
-	if result.wasEmbeddedField {
+	if wasEmbeddedField {
 		// The original position was on the embedded field declaration, so we
 		// try to dig out the type and jump to that instead.
 		if v, ok := result.Declaration.obj.(*types.Var); ok {
@@ -181,19 +202,13 @@ func identifier(ctx context.Context, snapshot Snapshot, pkg Package, file *ast.F
 		}
 	}
 
-	for _, obj := range pkg.GetTypesInfo().Implicits {
-		if obj.Pos() == result.Declaration.obj.Pos() {
-			// Mark this declaration as implicit, since it will not
-			// appear in a (*types.Info).Defs map.
-			result.Declaration.wasImplicit = true
-			break
-		}
-	}
-
-	if result.Declaration.mappedRange, err = objToMappedRange(ctx, pkg, result.Declaration.obj); err != nil {
+	rng, err := objToMappedRange(snapshot, pkg, result.Declaration.obj)
+	if err != nil {
 		return nil, err
 	}
-	if result.Declaration.node, err = objToNode(ctx, pkg, result.Declaration.obj); err != nil {
+	result.Declaration.MappedRange = append(result.Declaration.MappedRange, rng)
+
+	if result.Declaration.node, err = objToDecl(ctx, snapshot, pkg, result.Declaration.obj); err != nil {
 		return nil, err
 	}
 	typ := pkg.GetTypesInfo().TypeOf(result.ident)
@@ -207,21 +222,48 @@ func identifier(ctx context.Context, snapshot Snapshot, pkg Package, file *ast.F
 		if hasErrorType(result.Type.Object) {
 			return result, nil
 		}
-		if result.Type.mappedRange, err = objToMappedRange(ctx, pkg, result.Type.Object); err != nil {
+		if result.Type.mappedRange, err = objToMappedRange(snapshot, pkg, result.Type.Object); err != nil {
 			return nil, err
 		}
 	}
 	return result, nil
 }
 
-func searchForIdent(n ast.Node) *ast.Ident {
-	switch node := n.(type) {
-	case *ast.Ident:
-		return node
-	case *ast.SelectorExpr:
-		return node.Sel
-	case *ast.StarExpr:
-		return searchForIdent(node.X)
+func searchForEnclosing(info *types.Info, path []ast.Node) types.Type {
+	for _, n := range path {
+		switch n := n.(type) {
+		case *ast.SelectorExpr:
+			if sel, ok := info.Selections[n]; ok {
+				recv := deref(sel.Recv())
+
+				// Keep track of the last exported type seen.
+				var exported types.Type
+				if named, ok := recv.(*types.Named); ok && named.Obj().Exported() {
+					exported = named
+				}
+				// We don't want the last element, as that's the field or
+				// method itself.
+				for _, index := range sel.Index()[:len(sel.Index())-1] {
+					if r, ok := recv.Underlying().(*types.Struct); ok {
+						recv = deref(r.Field(index).Type())
+						if named, ok := recv.(*types.Named); ok && named.Obj().Exported() {
+							exported = named
+						}
+					}
+				}
+				return exported
+			}
+		case *ast.CompositeLit:
+			if t, ok := info.Types[n]; ok {
+				return t.Type
+			}
+		case *ast.TypeSpec:
+			if _, ok := n.Type.(*ast.StructType); ok {
+				if t, ok := info.Defs[n.Name]; ok {
+					return t.Type()
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -241,44 +283,20 @@ func hasErrorType(obj types.Object) bool {
 	return types.IsInterface(obj.Type()) && obj.Pkg() == nil && obj.Name() == "error"
 }
 
-func objToNode(ctx context.Context, pkg Package, obj types.Object) (ast.Decl, error) {
-	view := pkg.View()
-	uri := span.FileURI(view.Session().Cache().FileSet().Position(obj.Pos()).Filename)
-	ph, _, err := pkg.FindFile(ctx, uri)
+func objToDecl(ctx context.Context, snapshot Snapshot, srcPkg Package, obj types.Object) (ast.Decl, error) {
+	pgf, _, err := findPosInPackage(snapshot, srcPkg, obj.Pos())
 	if err != nil {
 		return nil, err
 	}
-	declAST, _, _, err := ph.Cached()
-	if declAST == nil {
+	posToDecl, err := snapshot.PosToDecl(ctx, pgf)
+	if err != nil {
 		return nil, err
 	}
-	if !(declAST.Pos() <= obj.Pos() && obj.Pos() <= declAST.End()) {
-		return nil, errors.Errorf("no file for %s", obj.Name())
-	}
-	path, _ := astutil.PathEnclosingInterval(declAST, obj.Pos(), obj.Pos())
-	if path == nil {
-		return nil, errors.Errorf("no path for object %v", obj.Name())
-	}
-	for _, node := range path {
-		switch node := node.(type) {
-		case *ast.GenDecl:
-			// Type names, fields, and methods.
-			switch obj.(type) {
-			case *types.TypeName, *types.Var, *types.Const, *types.Func:
-				return node, nil
-			}
-		case *ast.FuncDecl:
-			// Function signatures.
-			if _, ok := obj.(*types.Func); ok {
-				return node, nil
-			}
-		}
-	}
-	return nil, nil // didn't find a node, but don't fail
+	return posToDecl[obj.Pos()], nil
 }
 
 // importSpec handles positions inside of an *ast.ImportSpec.
-func importSpec(ctx context.Context, snapshot Snapshot, pkg Package, file *ast.File, pos token.Pos) (*IdentifierInfo, error) {
+func importSpec(snapshot Snapshot, pkg Package, file *ast.File, pos token.Pos) (*IdentifierInfo, error) {
 	var imp *ast.ImportSpec
 	for _, spec := range file.Imports {
 		if spec.Path.Pos() <= pos && pos < spec.Path.End() {
@@ -292,72 +310,102 @@ func importSpec(ctx context.Context, snapshot Snapshot, pkg Package, file *ast.F
 	if err != nil {
 		return nil, errors.Errorf("import path not quoted: %s (%v)", imp.Path.Value, err)
 	}
-	uri := span.FileURI(pkg.View().Session().Cache().FileSet().Position(pos).Filename)
-	var ph ParseGoHandle
-	for _, h := range pkg.Files() {
-		if h.File().Identity().URI == uri {
-			ph = h
-		}
-	}
 	result := &IdentifierInfo{
-		File:     ph,
 		Snapshot: snapshot,
 		Name:     importPath,
 		pkg:      pkg,
 	}
-	if result.mappedRange, err = posToMappedRange(ctx, pkg, imp.Path.Pos(), imp.Path.End()); err != nil {
+	if result.mappedRange, err = posToMappedRange(snapshot, pkg, imp.Path.Pos(), imp.Path.End()); err != nil {
 		return nil, err
 	}
 	// Consider the "declaration" of an import spec to be the imported package.
-	importedPkg, err := pkg.GetImport(ctx, importPath)
+	importedPkg, err := pkg.GetImport(importPath)
 	if err != nil {
 		return nil, err
 	}
-	if importedPkg.GetSyntax() == nil {
-		return nil, errors.Errorf("no syntax for for %q", importPath)
-	}
-	// Heuristic: Jump to the longest (most "interesting") file of the package.
-	var dest *ast.File
-	for _, f := range importedPkg.GetSyntax() {
-		if dest == nil || f.End()-f.Pos() > dest.End()-dest.Pos() {
-			dest = f
+	// Return all of the files in the package as the definition of the import spec.
+	for _, dst := range importedPkg.GetSyntax() {
+		rng, err := posToMappedRange(snapshot, pkg, dst.Pos(), dst.End())
+		if err != nil {
+			return nil, err
 		}
+		result.Declaration.MappedRange = append(result.Declaration.MappedRange, rng)
 	}
-	if dest == nil {
-		return nil, errors.Errorf("package %q has no files", importPath)
-	}
-	if result.Declaration.mappedRange, err = posToMappedRange(ctx, pkg, dest.Pos(), dest.End()); err != nil {
-		return nil, err
-	}
+
 	result.Declaration.node = imp
 	return result, nil
 }
 
-// typeSwitchVar handles the special case of a local variable implicitly defined in a type switch.
-// In such cases, the definition of the implicit variable will not be recorded in the *types.Info.Defs  map,
-// but rather in the *types.Info.Implicits map.
-func typeSwitchVar(info *types.Info, path []ast.Node) []types.Object {
-	if len(path) < 3 {
-		return nil
-	}
-	// Check for [Ident AssignStmt TypeSwitchStmt...]
-	if _, ok := path[0].(*ast.Ident); !ok {
-		return nil
-	}
-	if _, ok := path[1].(*ast.AssignStmt); !ok {
-		return nil
-	}
-	sw, ok := path[2].(*ast.TypeSwitchStmt)
-	if !ok {
-		return nil
+// typeSwitchImplicits returns all the implicit type switch objects that
+// correspond to the leaf *ast.Ident. It also returns the original type
+// associated with the identifier (outside of a case clause).
+func typeSwitchImplicits(pkg Package, path []ast.Node) ([]types.Object, types.Type) {
+	ident, _ := path[0].(*ast.Ident)
+	if ident == nil {
+		return nil, nil
 	}
 
-	var res []types.Object
-	for _, stmt := range sw.Body.List {
-		obj := info.Implicits[stmt.(*ast.CaseClause)]
-		if obj != nil {
-			res = append(res, obj)
+	var (
+		ts     *ast.TypeSwitchStmt
+		assign *ast.AssignStmt
+		cc     *ast.CaseClause
+		obj    = pkg.GetTypesInfo().ObjectOf(ident)
+	)
+
+	// Walk our ancestors to determine if our leaf ident refers to a
+	// type switch variable, e.g. the "a" from "switch a := b.(type)".
+Outer:
+	for i := 1; i < len(path); i++ {
+		switch n := path[i].(type) {
+		case *ast.AssignStmt:
+			// Check if ident is the "a" in "a := foo.(type)". The "a" in
+			// this case has no types.Object, so check for ident equality.
+			if len(n.Lhs) == 1 && n.Lhs[0] == ident {
+				assign = n
+			}
+		case *ast.CaseClause:
+			// Check if ident is a use of "a" within a case clause. Each
+			// case clause implicitly maps "a" to a different types.Object,
+			// so check if ident's object is the case clause's implicit
+			// object.
+			if obj != nil && pkg.GetTypesInfo().Implicits[n] == obj {
+				cc = n
+			}
+		case *ast.TypeSwitchStmt:
+			// Look for the type switch that owns our previously found
+			// *ast.AssignStmt or *ast.CaseClause.
+			if n.Assign == assign {
+				ts = n
+				break Outer
+			}
+
+			for _, stmt := range n.Body.List {
+				if stmt == cc {
+					ts = n
+					break Outer
+				}
+			}
 		}
 	}
-	return res
+	if ts == nil {
+		return nil, nil
+	}
+	// Our leaf ident refers to a type switch variable. Fan out to the
+	// type switch's implicit case clause objects.
+	var objs []types.Object
+	for _, cc := range ts.Body.List {
+		if ccObj := pkg.GetTypesInfo().Implicits[cc]; ccObj != nil {
+			objs = append(objs, ccObj)
+		}
+	}
+	// The right-hand side of a type switch should only have one
+	// element, and we need to track its type in order to generate
+	// hover information for implicit type switch variables.
+	var typ types.Type
+	if assign, ok := ts.Assign.(*ast.AssignStmt); ok && len(assign.Rhs) == 1 {
+		if rhs := assign.Rhs[0].(*ast.TypeAssertExpr); ok {
+			typ = pkg.GetTypesInfo().TypeOf(rhs.X)
+		}
+	}
+	return objs, typ
 }

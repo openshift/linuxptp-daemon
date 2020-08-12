@@ -17,10 +17,22 @@ limitations under the License.
 package parser
 
 import (
+	"os"
 	"testing"
 )
 
 func TestImportBuildPackage(t *testing.T) {
+	// get our original dir to restore
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.Chdir(dir)
+	}()
+	// switch into the fake dependent module which knows where the fake module is
+	os.Chdir("../testdata/dependent")
+
 	b := New()
 	if _, err := b.importBuildPackage("fake/dep"); err != nil {
 		t.Fatal(err)
@@ -33,6 +45,13 @@ func TestImportBuildPackage(t *testing.T) {
 		// this would happen if the canonicalization failed to normalize the path
 		// you'd get a k8s.io/gengo/vendor/fake/dep key too
 		t.Errorf("missing one, but got %v", b.buildPackages)
+	}
+}
+
+func TestIsErrPackageNotFound(t *testing.T) {
+	b := New()
+	if _, err := b.importBuildPackage("fake/empty"); !isErrPackageNotFound(err) {
+		t.Errorf("expected error like %s, but got %v", regexErrPackageNotFound.String(), err)
 	}
 }
 

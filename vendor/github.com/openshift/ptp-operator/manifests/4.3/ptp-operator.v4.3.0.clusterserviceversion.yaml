@@ -5,20 +5,21 @@ metadata:
   namespace: openshift-ptp
   annotations:
     capabilities: Basic Install
-    categories: "Time"
+    categories: Networking
     provider: Red Hat
     support: Red Hat
-    containerImage: : quay.io/openshift/origin-ptp-operator:4.3
+    containerImage: quay.io/openshift/origin-ptp-operator:4.3
     createdAt: 2019-10-14
     certified: "false"
     repository: https://github.com/openshift/ptp-operator
+    olm.skipRange: ">=4.3.0-0 <4.3.0"
     alm-examples: |-
       [
         {
           "apiVersion": "ptp.openshift.io/v1",
           "kind": "PtpConfig",
           "metadata": {
-            "name": "ptpconfig-1"
+            "name": "ptpconfig-1",
             "namespace": "openshift-ptp"
           },
           "spec": {
@@ -43,13 +44,22 @@ metadata:
         },
         {
           "apiVersion": "ptp.openshift.io/v1",
+          "kind": "NodePtpDevice",
+          "metadata": {
+            "name": "node.example.com",
+            "namespace": "openshift-ptp"
+          },
+          "spec": {}
+        },
+        {
+          "apiVersion": "ptp.openshift.io/v1",
           "kind": "PtpOperatorConfig",
           "metadata": {
-            "name": "default"
+            "name": "default",
             "namespace": "openshift-ptp"
           },
           "spec": {
-            "daemonNodeSelector": make(map[string]string)
+            "daemonNodeSelector": {}
           }
         }
       ]
@@ -144,6 +154,14 @@ spec:
           verbs:
           - '*'
         serviceAccountName: ptp-operator
+      - rules:
+        - apiGroups:
+          - "ptp.openshift.io"
+          resources:
+          - '*'
+          verbs:
+          - '*'
+        serviceAccountName: linuxptp-daemon
       deployments:
       - name: ptp-operator
         spec:
@@ -162,10 +180,10 @@ spec:
               tolerations:
               - effect: NoSchedule
                 key: node-role.kubernetes.io/master
-                operator: Equal
+                operator: Exists
               containers:
               - name: ptp-operator
-                image: quay.io/openshift/origin-ptp-operator:latest
+                image: quay.io/openshift/origin-ptp-operator:4.3
                 imagePullPolicy: Always
                 command:
                 - ptp-operator
@@ -181,7 +199,7 @@ spec:
                 - name: OPERATOR_NAME
                   value: ptp-operator
                 - name: LINUXPTP_DAEMON_IMAGE
-                  value: quay.io/openshift/origin-linuxptp-daemon:latest
+                  value: quay.io/openshift/origin-ptp:4.3
     strategy: deployment
   installModes:
   - supported: true

@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"math/rand"
 
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -32,10 +30,80 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 var _ = Describe("Controllerutil", func() {
+	Describe("SetOwnerReference", func() {
+		It("should set ownerRef on an empty list", func() {
+			rs := &appsv1.ReplicaSet{}
+			dep := &extensionsv1beta1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", UID: "foo-uid"},
+			}
+			Expect(controllerutil.SetOwnerReference(dep, rs, scheme.Scheme)).ToNot(HaveOccurred())
+			Expect(rs.OwnerReferences).To(ConsistOf(metav1.OwnerReference{
+				Name:       "foo",
+				Kind:       "Deployment",
+				APIVersion: "extensions/v1beta1",
+				UID:        "foo-uid",
+			}))
+		})
+
+		It("should not duplicate owner references", func() {
+			rs := &appsv1.ReplicaSet{
+				ObjectMeta: metav1.ObjectMeta{
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							Name:       "foo",
+							Kind:       "Deployment",
+							APIVersion: "extensions/v1beta1",
+							UID:        "foo-uid",
+						},
+					},
+				},
+			}
+			dep := &extensionsv1beta1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", UID: "foo-uid"},
+			}
+
+			Expect(controllerutil.SetOwnerReference(dep, rs, scheme.Scheme)).ToNot(HaveOccurred())
+			Expect(rs.OwnerReferences).To(ConsistOf(metav1.OwnerReference{
+				Name:       "foo",
+				Kind:       "Deployment",
+				APIVersion: "extensions/v1beta1",
+				UID:        "foo-uid",
+			}))
+		})
+
+		It("should update the reference", func() {
+			rs := &appsv1.ReplicaSet{
+				ObjectMeta: metav1.ObjectMeta{
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							Name:       "foo",
+							Kind:       "Deployment",
+							APIVersion: "extensions/v1alpha1",
+							UID:        "foo-uid-1",
+						},
+					},
+				},
+			}
+			dep := &extensionsv1beta1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", UID: "foo-uid-2"},
+			}
+
+			Expect(controllerutil.SetOwnerReference(dep, rs, scheme.Scheme)).ToNot(HaveOccurred())
+			Expect(rs.OwnerReferences).To(ConsistOf(metav1.OwnerReference{
+				Name:       "foo",
+				Kind:       "Deployment",
+				APIVersion: "extensions/v1beta1",
+				UID:        "foo-uid-2",
+			}))
+
+		})
+	})
+
 	Describe("SetControllerReference", func() {
 		It("should set the OwnerReference if it can find the group version kind", func() {
 			rs := &appsv1.ReplicaSet{}
@@ -109,6 +177,78 @@ var _ = Describe("Controllerutil", func() {
 			Expect(rs.OwnerReferences).To(ConsistOf(metav1.OwnerReference{
 				Name:               "foo",
 				Kind:               "Deployment",
+				APIVersion:         "extensions/v1beta1",
+				UID:                "foo-uid",
+				Controller:         &t,
+				BlockOwnerDeletion: &t,
+			}))
+		})
+
+		It("should replace the owner reference if it's already present", func() {
+			t := true
+			rsOwners := []metav1.OwnerReference{
+				{
+					Name:               "foo",
+					Kind:               "Deployment",
+					APIVersion:         "extensions/v1alpha1",
+					UID:                "foo-uid",
+					Controller:         &t,
+					BlockOwnerDeletion: &t,
+				},
+			}
+			rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default", OwnerReferences: rsOwners}}
+			dep := &extensionsv1beta1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default", UID: "foo-uid"}}
+
+			Expect(controllerutil.SetControllerReference(dep, rs, scheme.Scheme)).NotTo(HaveOccurred())
+			Expect(rs.OwnerReferences).To(ConsistOf(metav1.OwnerReference{
+				Name:               "foo",
+				Kind:               "Deployment",
+				APIVersion:         "extensions/v1beta1",
+				UID:                "foo-uid",
+				Controller:         &t,
+				BlockOwnerDeletion: &t,
+			}))
+		})
+
+		It("should return an error if it's setting a cross-namespace owner reference", func() {
+			rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "namespace1"}}
+			dep := &extensionsv1beta1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "namespace2", UID: "foo-uid"}}
+
+			err := controllerutil.SetControllerReference(dep, rs, scheme.Scheme)
+
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should return an error if it's owner is namespaced resource but dependant is cluster-scoped resource", func() {
+			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "foo"}}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default", UID: "foo-uid"}}
+
+			err := controllerutil.SetControllerReference(pod, pv, scheme.Scheme)
+
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should not return any error if the existing owner has a different version", func() {
+			f := false
+			t := true
+			rsOwners := []metav1.OwnerReference{
+				{
+					Name:               "foo",
+					Kind:               "Deployment",
+					APIVersion:         "extensions/v1alpha1",
+					UID:                "foo-uid",
+					Controller:         &f,
+					BlockOwnerDeletion: &t,
+				},
+			}
+			rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default", OwnerReferences: rsOwners}}
+			dep := &extensionsv1beta1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default", UID: "foo-uid"}}
+
+			Expect(controllerutil.SetControllerReference(dep, rs, scheme.Scheme)).NotTo(HaveOccurred())
+			Expect(rs.OwnerReferences).To(ConsistOf(metav1.OwnerReference{
+				Name: "foo",
+				Kind: "Deployment",
+				// APIVersion is the new owner's one
 				APIVersion:         "extensions/v1beta1",
 				UID:                "foo-uid",
 				Controller:         &t,
@@ -304,6 +444,24 @@ var _ = Describe("Controllerutil", func() {
 			It("should remove finalizer if present", func() {
 				controllerutil.RemoveFinalizer(deploy, testFinalizer)
 				Expect(deploy.ObjectMeta.GetFinalizers()).To(Equal([]string{}))
+			})
+
+			It("should remove all equal finalizers if present", func() {
+				deploy.SetFinalizers(append(deploy.Finalizers, testFinalizer, testFinalizer))
+				controllerutil.RemoveFinalizer(deploy, testFinalizer)
+				Expect(deploy.ObjectMeta.GetFinalizers()).To(Equal([]string{}))
+			})
+		})
+
+		Describe("ContainsFinalizer", func() {
+			It("should check that finalizer is present", func() {
+				controllerutil.AddFinalizer(deploy, testFinalizer)
+				Expect(controllerutil.ContainsFinalizer(deploy, testFinalizer)).To(Equal(true))
+			})
+
+			It("should check that finalizer is not present after RemoveFinalizer call", func() {
+				controllerutil.RemoveFinalizer(deploy, testFinalizer)
+				Expect(controllerutil.ContainsFinalizer(deploy, testFinalizer)).To(Equal(false))
 			})
 		})
 	})

@@ -1,15 +1,17 @@
 package parser
 
 import (
-	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os/exec"
+	"os"
 	"strings"
 )
 
-const structComment = "easyjson:json"
+const (
+	structComment     = "easyjson:json"
+	structSkipComment = "easyjson:skip"
+)
 
 type Parser struct {
 	PkgPath     string
@@ -21,17 +23,19 @@ type Parser struct {
 type visitor struct {
 	*Parser
 
-	name     string
-	explicit bool
+	name string
 }
 
-func (p *Parser) needType(comments string) bool {
+func (p *Parser) needType(comments string) (skip, explicit bool) {
 	for _, v := range strings.Split(comments, "\n") {
+		if strings.HasPrefix(v, structSkipComment) {
+			return true, false
+		}
 		if strings.HasPrefix(v, structComment) {
-			return true
+			return false, true
 		}
 	}
-	return false
+	return false, false
 }
 
 func (v *visitor) Visit(n ast.Node) (w ast.Visitor) {
@@ -43,20 +47,35 @@ func (v *visitor) Visit(n ast.Node) (w ast.Visitor) {
 		return v
 
 	case *ast.GenDecl:
-		v.explicit = v.needType(n.Doc.Text())
+		skip, explicit := v.needType(n.Doc.Text())
 
-		if !v.explicit && !v.AllStructs {
-			return nil
+		if skip || explicit {
+			for _, nc := range n.Specs {
+				switch nct := nc.(type) {
+				case *ast.TypeSpec:
+					nct.Doc = n.Doc
+				}
+			}
 		}
+
 		return v
 	case *ast.TypeSpec:
+		skip, explicit := v.needType(n.Doc.Text())
+		if skip {
+			return nil
+		}
+		if !explicit && !v.AllStructs {
+			return nil
+		}
+
 		v.name = n.Name.String()
 
 		// Allow to specify non-structs explicitly independent of '-all' flag.
-		if v.explicit {
+		if explicit {
 			v.StructNames = append(v.StructNames, v.name)
 			return nil
 		}
+
 		return v
 	case *ast.StructType:
 		v.StructNames = append(v.StructNames, v.name)
@@ -73,7 +92,7 @@ func (p *Parser) Parse(fname string, isDir bool) error {
 
 	fset := token.NewFileSet()
 	if isDir {
-		packages, err := parser.ParseDir(fset, fname, nil, parser.ParseComments)
+		packages, err := parser.ParseDir(fset, fname, excludeTestFiles, parser.ParseComments)
 		if err != nil {
 			return err
 		}
@@ -92,7 +111,6 @@ func (p *Parser) Parse(fname string, isDir bool) error {
 	return nil
 }
 
-func getDefaultGoPath() (string, error) {
-	output, err := exec.Command("go", "env", "GOPATH").Output()
-	return string(bytes.TrimSpace(output)), err
+func excludeTestFiles(fi os.FileInfo) bool {
+	return !strings.HasSuffix(fi.Name(), "_test.go")
 }

@@ -14,15 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package runtime_test
+package runtime
 
 import (
-	"io"
 	"testing"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	runtimetesting "k8s.io/apimachinery/pkg/runtime/testing"
 )
 
 func gv(group, version string) schema.GroupVersion {
@@ -42,7 +39,6 @@ func TestCoercingMultiGroupVersioner(t *testing.T) {
 		preferredKinds []schema.GroupKind
 		kinds          []schema.GroupVersionKind
 		expectKind     schema.GroupVersionKind
-		expectedId     string
 	}{
 		{
 			name:           "matched preferred group/kind",
@@ -50,7 +46,6 @@ func TestCoercingMultiGroupVersioner(t *testing.T) {
 			preferredKinds: []schema.GroupKind{gk("mygroup", "Foo"), gk("anothergroup", "Bar")},
 			kinds:          []schema.GroupVersionKind{gvk("yetanother", "v1", "Baz"), gvk("anothergroup", "v1", "Bar")},
 			expectKind:     gvk("mygroup", "__internal", "Bar"),
-			expectedId:     "{\"accepted\":\"Foo.mygroup,Bar.anothergroup\",\"coerce\":\"true\",\"name\":\"multi\",\"target\":\"mygroup/__internal\"}",
 		},
 		{
 			name:           "matched preferred group",
@@ -58,7 +53,6 @@ func TestCoercingMultiGroupVersioner(t *testing.T) {
 			preferredKinds: []schema.GroupKind{gk("mygroup", ""), gk("anothergroup", "")},
 			kinds:          []schema.GroupVersionKind{gvk("yetanother", "v1", "Baz"), gvk("anothergroup", "v1", "Bar")},
 			expectKind:     gvk("mygroup", "__internal", "Bar"),
-			expectedId:     "{\"accepted\":\".mygroup,.anothergroup\",\"coerce\":\"true\",\"name\":\"multi\",\"target\":\"mygroup/__internal\"}",
 		},
 		{
 			name:           "no preferred group/kind match, uses first kind in list",
@@ -66,13 +60,12 @@ func TestCoercingMultiGroupVersioner(t *testing.T) {
 			preferredKinds: []schema.GroupKind{gk("mygroup", ""), gk("anothergroup", "")},
 			kinds:          []schema.GroupVersionKind{gvk("yetanother", "v1", "Baz"), gvk("yetanother", "v1", "Bar")},
 			expectKind:     gvk("mygroup", "__internal", "Baz"),
-			expectedId:     "{\"accepted\":\".mygroup,.anothergroup\",\"coerce\":\"true\",\"name\":\"multi\",\"target\":\"mygroup/__internal\"}",
 		},
 	}
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := runtime.NewCoercingMultiGroupVersioner(tc.target, tc.preferredKinds...)
+			v := NewCoercingMultiGroupVersioner(tc.target, tc.preferredKinds...)
 			kind, ok := v.KindForGroupVersionKinds(tc.kinds)
 			if !ok {
 				t.Error("got no kind")
@@ -80,25 +73,6 @@ func TestCoercingMultiGroupVersioner(t *testing.T) {
 			if kind != tc.expectKind {
 				t.Errorf("expected %#v, got %#v", tc.expectKind, kind)
 			}
-			if e, a := tc.expectedId, v.Identifier(); e != a {
-				t.Errorf("unexpected identifier: %s, expected: %s", a, e)
-			}
 		})
 	}
-}
-
-type mockEncoder struct{}
-
-func (m *mockEncoder) Encode(obj runtime.Object, w io.Writer) error {
-	_, err := w.Write([]byte("mock-result"))
-	return err
-}
-
-func (m *mockEncoder) Identifier() runtime.Identifier {
-	return runtime.Identifier("mock-identifier")
-}
-
-func TestCacheableObject(t *testing.T) {
-	serializer := runtime.NewBase64Serializer(&mockEncoder{}, nil)
-	runtimetesting.CacheableObjectTest(t, serializer)
 }

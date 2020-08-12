@@ -610,10 +610,6 @@ func (m testGroupVersioner) KindForGroupVersionKinds(kinds []schema.GroupVersion
 	return m.target, m.ok
 }
 
-func (m testGroupVersioner) Identifier() string {
-	return "testGroupVersioner"
-}
-
 func TestConvertToVersion(t *testing.T) {
 	testCases := []struct {
 		scheme *runtime.Scheme

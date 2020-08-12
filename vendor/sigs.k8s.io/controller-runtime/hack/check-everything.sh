@@ -14,74 +14,22 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-set -e
+set -o errexit
+set -o nounset
+set -o pipefail
 
 hack_dir=$(dirname ${BASH_SOURCE})
 source ${hack_dir}/common.sh
-
-k8s_version=1.14.1
-goarch=amd64
-goos="unknown"
-
-if [[ "$OSTYPE" == "linux-gnu" ]]; then
-  goos="linux"
-elif [[ "$OSTYPE" == "darwin"* ]]; then
-  goos="darwin"
-fi
-
-if [[ "$goos" == "unknown" ]]; then
-  echo "OS '$OSTYPE' not supported. Aborting." >&2
-  exit 1
-fi
+source ${hack_dir}/setup-envtest.sh
 
 tmp_root=/tmp
 kb_root_dir=$tmp_root/kubebuilder
 
-# Skip fetching and untaring the tools by setting the SKIP_FETCH_TOOLS variable
-# in your environment to any value:
-#
-# $ SKIP_FETCH_TOOLS=1 ./test.sh
-#
-# If you skip fetching tools, this script will use the tools already on your
-# machine, but rebuild the kubebuilder and kubebuilder-bin binaries.
-SKIP_FETCH_TOOLS=${SKIP_FETCH_TOOLS:-""}
+ENVTEST_K8S_VERSION=${ENVTEST_K8S_VERSION:-"1.16.4"}
 
-# fetch k8s API gen tools and make it available under kb_root_dir/bin.
-function fetch_kb_tools {
-  header_text "fetching tools"
-  kb_tools_archive_name="kubebuilder-tools-$k8s_version-$goos-$goarch.tar.gz"
-  kb_tools_download_url="https://storage.googleapis.com/kubebuilder-tools/$kb_tools_archive_name"
-
-  kb_tools_archive_path="$tmp_root/$kb_tools_archive_name"
-  if [ ! -f $kb_tools_archive_path ]; then
-    curl -sL ${kb_tools_download_url} -o "$kb_tools_archive_path"
-  fi
-  tar -zvxf "$kb_tools_archive_path" -C "$tmp_root/"
-}
-
-function is_installed {
-  if command -v "$1" &>/dev/null; then
-    return 0
-  fi
-  return 1
-}
-
-function fetch_go_tools {
-  header_text "Checking for gometalinter.v2"
-  if ! is_installed golangci-lint; then
-    header_text "Installing golangci-lint"
-    GO111MODULE=on go get github.com/golangci/golangci-lint/cmd/golangci-lint@v1.17.1
-  fi
-}
-
-header_text "using tools"
-
-if [ -z "$SKIP_FETCH_TOOLS" ]; then
-  fetch_go_tools
-  fetch_kb_tools
-fi
-
-setup_envs
+fetch_envtest_tools "$kb_root_dir"
+fetch_envtest_tools "${hack_dir}/../pkg/internal/testing/integration/assets"
+setup_envtest_env "$kb_root_dir"
 
 ${hack_dir}/verify.sh
 ${hack_dir}/test-all.sh

@@ -32,7 +32,7 @@ func TestMap(t *testing.T) {
 	}
 }
 
-func marshaled() []byte {
+func marshalled() []byte {
 	m := &ppb.IntMaps{}
 	for i := 0; i < 1000; i++ {
 		m.Maps = append(m.Maps, &ppb.IntMap{
@@ -47,7 +47,7 @@ func marshaled() []byte {
 }
 
 func BenchmarkConcurrentMapUnmarshal(b *testing.B) {
-	in := marshaled()
+	in := marshalled()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			var out ppb.IntMaps
@@ -59,7 +59,7 @@ func BenchmarkConcurrentMapUnmarshal(b *testing.B) {
 }
 
 func BenchmarkSequentialMapUnmarshal(b *testing.B) {
-	in := marshaled()
+	in := marshalled()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var out ppb.IntMaps

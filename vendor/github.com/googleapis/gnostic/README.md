@@ -44,64 +44,55 @@ and the [Google Protocol Buffer Compiler](https://github.com/google/protobuf).
 
 ## Installation
 
-The following instructions are for installing gnostic using
-[Go modules](https://blog.golang.org/using-go-modules),
-supported by Go 1.11 and later.
+1. Get this package by downloading it with `go get`.
 
-1. Get this package by downloading it with `git clone`.
-
-        git clone https://github.com/googleapis/gnostic
-        cd gnostic
+        go get github.com/googleapis/gnostic
   
-2. [Optional] Build and run the gnostic compiler generator. 
-This uses JSON schemas to generate Protocol Buffer language files
-that describes supported API specification formats and Go-language
-files of code that will read JSON or YAML API descriptions into
-the generated protocol buffer models. 
+2. [Optional] Build and run the compiler generator. 
+This uses the OpenAPI JSON schema to generate a Protocol Buffer language file 
+that describes the OpenAPI specification and a Go-language file of code that 
+will read a JSON or YAML OpenAPI representation into the generated protocol 
+buffers. Pre-generated versions of these files are in the OpenAPIv2 directory.
 
-Pre-generated versions of these files are checked into the directories
-named OpenAPIv2, OpenAPIv3, and discovery.
-
-        go install ./generate-gnostic
+        cd $GOPATH/src/github.com/googleapis/gnostic/generate-gnostic
+        go install
+        cd ..
         generate-gnostic --v2
-        generate-gnostic --v3
-        generate-gnostic --discovery
 
-3. Generate Protocol Buffer support code. 
-This step requires a local installation of protoc, the Protocol Buffer Compiler,
-and the Go protoc plugin.
+3. [Optional] Generate Protocol Buffer support code. 
+A pre-generated version of this file is checked into the OpenAPIv2 directory.
+This step requires a local installation of protoc, the Protocol Buffer Compiler.
 You can get protoc [here](https://github.com/google/protobuf).
-You can install the plugin with this command:
-
-        go get github.com/golang/protobuf/protoc-gen-go
-
-Then use the following to compile the gnostic Protocol Buffer models:
 
         ./COMPILE-PROTOS.sh
 
-4. Build **gnostic**. 
+4. [Optional] Rebuild **gnostic**. This is only necessary if you've performed steps
+2 or 3 above.
 
-        go install .
+        go install github.com/googleapis/gnostic
 
-5. Run **gnostic**. This sample invocation creates a file in the current directory named "petstore.pb" that contains a binary
+5. Run **gnostic**. This will create a file in the current directory named "petstore.pb" that contains a binary
 Protocol Buffer description of a sample API.
 
-        gnostic --pb-out=. examples/v2.0/json/petstore.json
+        gnostic --pb-out=. examples/petstore.json
 
 6. You can also compile files that you specify with a URL. Here's another way to compile the previous 
 example. This time we're creating "petstore.text", which contains a textual representation of the
 Protocol Buffer description. This is mainly for use in testing and debugging.
 
-        gnostic --text-out=petstore.text https://raw.githubusercontent.com/googleapis/gnostic/master/examples/v2.0/json/petstore.json
+        gnostic --text-out=petstore.text https://raw.githubusercontent.com/googleapis/gnostic/master/examples/petstore.json
 
 7. For a sample application, see apps/report.
 
-        go install ./apps/report
+        go install github.com/googleapis/gnostic/apps/report
         report petstore.pb
 
-8. **gnostic** supports plugins. Some are already implemented in the `plugins` directory.
-Others, like [gnostic-go-generator](https://github.com/googleapis/gnostic-go-generator),
-are separated into their own repositories.
+8. **gnostic** supports plugins. This builds and runs a sample plugin
+that reports some basic information about an API. The "-" causes the plugin to 
+write its output to stdout.
+
+        go install github.com/googleapis/gnostic/plugins/gnostic-go-sample
+        gnostic examples/petstore.json --go-sample-out=-
 
 ## Copyright
 

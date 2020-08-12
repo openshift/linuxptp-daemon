@@ -41,15 +41,10 @@ func TestSendfile(t *testing.T) {
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
-			t.Errorf("failed to accept: %v", err)
-			return
+			t.Fatal(err)
 		}
 		defer conn.Close()
 		b, err := ioutil.ReadAll(conn)
-		if err != nil {
-			t.Errorf("failed to read: %v", err)
-			return
-		}
 		if string(b) != contents {
 			t.Errorf("contents not transmitted: got %s (len=%d), want %s", string(b), len(b), contents)
 		}

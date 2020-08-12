@@ -12,10 +12,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -28,13 +26,6 @@ var genFiles = flag.Bool("gen", false, "generate output files instead of compari
 var setHelper = func(t *testing.T) {}
 
 func TestFullCycle(t *testing.T) {
-	if runtime.GOOS == "android" {
-		t.Skip("cannot load outside packages on android")
-	}
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skipf("skipping because 'go' command is unavailable: %v", err)
-	}
-
 	const path = "./testdata"
 	dirs, err := ioutil.ReadDir(path)
 	if err != nil {

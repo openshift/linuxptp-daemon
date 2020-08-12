@@ -14,7 +14,9 @@ metadata:
     "7": "8"
   managedFields:
   - apiVersion: "17"
-    fieldsType: "18"
+    fields:
+      "18":
+        "19": null
     manager: "16"
     operation: 鐊唊飙Ş-U圴÷a/ɔ}摁(湗Ć]
   name: "2"
@@ -26,22 +28,22 @@ metadata:
     kind: "12"
     name: "13"
     uid: Dz廔ȇ{sŊƏp
-  resourceVersion: "11042405498087606203"
+  resourceVersion: "16964250748386560239"
   selfLink: "5"
-  uid: "7"
+  uid: ą飋īqJ枊a8衍`Ĩɘ.蘯6ċV夸e
 spec:
   audiences:
-  - "20"
-  token: "19"
+  - "25"
+  token: "24"
 status:
   audiences:
-  - "26"
-  error: "27"
+  - "31"
+  error: "32"
   user:
     extra:
-      "24":
-      - "25"
+      "29":
+      - "30"
     groups:
-    - "23"
-    uid: "22"
-    username: "21"
+    - "28"
+    uid: "27"
+    username: "26"

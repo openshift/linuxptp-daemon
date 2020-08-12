@@ -284,6 +284,24 @@ func TestInt64Map(t *testing.T) {
 	}
 }
 
+var testCasesFloat32Slice = [][]float32{
+	{1, 2, 3, 4},
+}
+
+func TestFloat32Slice(t *testing.T) {
+	for idx, in := range testCasesFloat32Slice {
+		if in == nil {
+			continue
+		}
+
+		out := Float32Slice(in)
+		assertValues(t, in, out, true, idx)
+
+		out2 := Float32ValueSlice(out)
+		assertValues(t, in, out2, false, idx)
+	}
+}
+
 var testCasesFloat64Slice = [][]float64{
 	{1, 2, 3, 4},
 }
@@ -350,6 +368,58 @@ func TestUintMap(t *testing.T) {
 	}
 }
 
+var testCasesUint16Slice = [][]uint16{
+	{1, 2, 3, 4},
+}
+
+func TestUint16Slice(t *testing.T) {
+	for idx, in := range testCasesUint16Slice {
+		if in == nil {
+			continue
+		}
+
+		out := Uint16Slice(in)
+		assertValues(t, in, out, true, idx)
+
+		out2 := Uint16ValueSlice(out)
+		assertValues(t, in, out2, false, idx)
+	}
+}
+
+var testCasesUint16ValueSlice = [][]*uint16{}
+
+func TestUint16ValueSlice(t *testing.T) {
+	for idx, in := range testCasesUint16ValueSlice {
+		if in == nil {
+			continue
+		}
+
+		out := Uint16ValueSlice(in)
+		assertValues(t, in, out, true, idx)
+
+		out2 := Uint16Slice(out)
+		assertValues(t, in, out2, false, idx)
+	}
+}
+
+var testCasesUint16Map = []map[string]uint16{
+	{"a": 3, "b": 2, "c": 1},
+}
+
+func TestUint16Map(t *testing.T) {
+	for idx, in := range testCasesUint16Map {
+		if in == nil {
+			continue
+		}
+
+		out := Uint16Map(in)
+		assertValues(t, in, out, true, idx)
+
+		out2 := Uint16ValueMap(out)
+		assertValues(t, in, out2, false, idx)
+	}
+}
+
 var testCasesUint64Slice = [][]uint64{
 	{1, 2, 3, 4},
 }
@@ -395,6 +465,40 @@ func TestUint64Map(t *testing.T) {
 		assertValues(t, in, out, true, idx)
 
 		out2 := Uint64ValueMap(out)
+		assertValues(t, in, out2, false, idx)
+	}
+}
+
+var testCasesFloat32ValueSlice = [][]*float32{}
+
+func TestFloat32ValueSlice(t *testing.T) {
+	for idx, in := range testCasesFloat32ValueSlice {
+		if in == nil {
+			continue
+		}
+
+		out := Float32ValueSlice(in)
+		assertValues(t, in, out, true, idx)
+
+		out2 := Float32Slice(out)
+		assertValues(t, in, out2, false, idx)
+	}
+}
+
+var testCasesFloat32Map = []map[string]float32{
+	{"a": 3, "b": 2, "c": 1},
+}
+
+func TestFloat32Map(t *testing.T) {
+	for idx, in := range testCasesFloat32Map {
+		if in == nil {
+			continue
+		}
+
+		out := Float32Map(in)
+		assertValues(t, in, out, true, idx)
+
+		out2 := Float32ValueMap(out)
 		assertValues(t, in, out2, false, idx)
 	}
 }
@@ -686,6 +790,20 @@ func TestUint64Value(t *testing.T) {
 		assertValues(t, in, out2, false, idx)
 	}
 	assert.Zerof(t, Uint64Value(nil), "expected conversion from nil to return zero value")
+}
+
+var testCasesFloat32 = []float32{1, 2, 3, 0}
+
+func TestFloat32Value(t *testing.T) {
+	for idx, in := range testCasesFloat32 {
+		out := Float32(in)
+		assertValues(t, in, out, true, idx)
+
+		out2 := Float32Value(out)
+		assertValues(t, in, out2, false, idx)
+	}
+
+	assert.Zerof(t, Float32Value(nil), "expected conversion from nil to return zero value")
 }
 
 var testCasesFloat64 = []float64{1, 2, 3, 0}

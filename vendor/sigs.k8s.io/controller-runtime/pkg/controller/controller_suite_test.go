@@ -21,17 +21,24 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllertest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	crscheme "sigs.k8s.io/controller-runtime/pkg/scheme"
 )
 
 func TestSource(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecsWithDefaultAndCustomReporters(t, "Controller Integration Suite", []Reporter{envtest.NewlineReporter{}})
+	suiteName := "Controller Integration Suite"
+	RunSpecsWithDefaultAndCustomReporters(t, suiteName, []Reporter{printer.NewlineReporter{}, printer.NewProwReporter(suiteName)})
 }
 
 var testenv *envtest.Environment
@@ -41,9 +48,19 @@ var clientset *kubernetes.Clientset
 var _ = BeforeSuite(func(done Done) {
 	logf.SetLogger(zap.LoggerTo(GinkgoWriter, true))
 
-	testenv = &envtest.Environment{}
+	err := (&crscheme.Builder{
+		GroupVersion: schema.GroupVersion{Group: "chaosapps.metamagical.io", Version: "v1"},
+	}).
+		Register(
+			&controllertest.UnconventionalListType{},
+			&controllertest.UnconventionalListTypeList{},
+		).AddToScheme(scheme.Scheme)
+	Expect(err).To(BeNil())
 
-	var err error
+	testenv = &envtest.Environment{
+		CRDDirectoryPaths: []string{"testdata/crds"},
+	}
+
 	cfg, err = testenv.Start()
 	Expect(err).NotTo(HaveOccurred())
 

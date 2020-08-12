@@ -5,29 +5,27 @@
 package source
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"go/ast"
-	"go/printer"
 	"go/types"
 	"strings"
 
+	"golang.org/x/tools/internal/event"
+	"golang.org/x/tools/internal/imports"
+	"golang.org/x/tools/internal/lsp/debug/tag"
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/lsp/snippet"
 	"golang.org/x/tools/internal/span"
-	"golang.org/x/tools/internal/telemetry/log"
-	"golang.org/x/tools/internal/telemetry/tag"
-	errors "golang.org/x/xerrors"
 )
 
 // formatCompletion creates a completion item for a given candidate.
-func (c *completer) item(cand candidate) (CompletionItem, error) {
+func (c *completer) item(ctx context.Context, cand candidate) (CompletionItem, error) {
 	obj := cand.obj
 
 	// Handle builtin types separately.
 	if obj.Parent() == types.Universe {
-		return c.formatBuiltin(cand), nil
+		return c.formatBuiltin(ctx, cand)
 	}
 
 	var (
@@ -38,14 +36,25 @@ func (c *completer) item(cand candidate) (CompletionItem, error) {
 		snip          *snippet.Builder
 		protocolEdits []protocol.TextEdit
 	)
+	if obj.Type() == nil {
+		detail = ""
+	}
 
 	// expandFuncCall mutates the completion label, detail, and snippet
 	// to that of an invocation of sig.
-	expandFuncCall := func(sig *types.Signature) {
-		params := formatParams(sig.Params(), sig.Variadic(), c.qf)
-		snip = c.functionCallSnippet(label, params)
-		results, writeParens := formatResults(sig.Results(), c.qf)
-		detail = "func" + formatFunction(params, results, writeParens)
+	expandFuncCall := func(sig *types.Signature) error {
+		s, err := newSignature(ctx, c.snapshot, c.pkg, c.file, "", sig, nil, c.qf)
+		if err != nil {
+			return err
+		}
+		snip = c.functionCallSnippet(label, s.params)
+		detail = "func" + s.format()
+
+		// Add variadic "..." if we are using a function result to fill in a variadic parameter.
+		if sig.Results().Len() == 1 && c.inference.matchesVariadic(sig.Results().At(0).Type()) {
+			snip.WriteText("...")
+		}
+		return nil
 	}
 
 	switch obj := obj.(type) {
@@ -56,6 +65,8 @@ func (c *completer) item(cand candidate) (CompletionItem, error) {
 	case *types.Var:
 		if _, ok := obj.Type().(*types.Struct); ok {
 			detail = "struct{...}" // for anonymous structs
+		} else if obj.IsField() {
+			detail = formatVarType(ctx, c.snapshot, c.pkg, c.file, obj, c.qf)
 		}
 		if obj.IsField() {
 			kind = protocol.FieldCompletion
@@ -63,9 +74,20 @@ func (c *completer) item(cand candidate) (CompletionItem, error) {
 		} else {
 			kind = protocol.VariableCompletion
 		}
+		if obj.Type() == nil {
+			break
+		}
 
 		if sig, ok := obj.Type().Underlying().(*types.Signature); ok && cand.expandFuncCall {
-			expandFuncCall(sig)
+			if err := expandFuncCall(sig); err != nil {
+				return CompletionItem{}, err
+			}
+		}
+
+		// Add variadic "..." if we are using a variable to fill in a variadic parameter.
+		if c.inference.matchesVariadic(obj.Type()) {
+			snip = &snippet.Builder{}
+			snip.WriteText(insert + "...")
 		}
 	case *types.Func:
 		sig, ok := obj.Type().Underlying().(*types.Signature)
@@ -78,7 +100,9 @@ func (c *completer) item(cand candidate) (CompletionItem, error) {
 		}
 
 		if cand.expandFuncCall {
-			expandFuncCall(sig)
+			if err := expandFuncCall(sig); err != nil {
+				return CompletionItem{}, err
+			}
 		}
 	case *types.PkgName:
 		kind = protocol.ModuleCompletion
@@ -91,15 +115,44 @@ func (c *completer) item(cand candidate) (CompletionItem, error) {
 	// If this candidate needs an additional import statement,
 	// add the additional text edits needed.
 	if cand.imp != nil {
-		edit, err := addNamedImport(c.view.Session().Cache().FileSet(), c.file, cand.imp.Name, cand.imp.ImportPath)
+		addlEdits, err := c.importEdits(ctx, cand.imp)
 		if err != nil {
 			return CompletionItem{}, err
 		}
-		addlEdits, err := ToProtocolEdits(c.mapper, edit)
-		if err != nil {
-			return CompletionItem{}, err
-		}
+
 		protocolEdits = append(protocolEdits, addlEdits...)
+		if kind != protocol.ModuleCompletion {
+			if detail != "" {
+				detail += " "
+			}
+			detail += fmt.Sprintf("(from %q)", cand.imp.importPath)
+		}
+	}
+
+	// Prepend "&" or "*" operator as appropriate.
+	var prefixOp string
+	if cand.takeAddress {
+		prefixOp = "&"
+	} else if cand.makePointer {
+		prefixOp = "*"
+	} else if cand.dereference > 0 {
+		prefixOp = strings.Repeat("*", cand.dereference)
+	}
+
+	if prefixOp != "" {
+		// If we are in a selector, add an edit to place prefix before selector.
+		if sel := enclosingSelector(c.path, c.pos); sel != nil {
+			edits, err := prependEdit(c.snapshot.FileSet(), c.mapper, sel, prefixOp)
+			if err != nil {
+				return CompletionItem{}, err
+			}
+			protocolEdits = append(protocolEdits, edits...)
+		} else {
+			// If there is no selector, just stick the prefix at the start.
+			insert = prefixOp + insert
+		}
+
+		label = prefixOp + label
 	}
 
 	detail = strings.TrimPrefix(detail, "untyped ")
@@ -112,46 +165,76 @@ func (c *completer) item(cand candidate) (CompletionItem, error) {
 		Score:               cand.score,
 		Depth:               len(c.deepState.chain),
 		snippet:             snip,
+		obj:                 obj,
 	}
 	// If the user doesn't want documentation for completion items.
-	if !c.opts.Documentation {
+	if !c.opts.documentation {
 		return item, nil
 	}
-	pos := c.view.Session().Cache().FileSet().Position(obj.Pos())
+	pos := c.snapshot.FileSet().Position(obj.Pos())
 
 	// We ignore errors here, because some types, like "unsafe" or "error",
 	// may not have valid positions that we can use to get documentation.
 	if !pos.IsValid() {
 		return item, nil
 	}
-	uri := span.FileURI(pos.Filename)
-	ph, pkg, err := c.pkg.FindFile(c.ctx, uri)
+	uri := span.URIFromPath(pos.Filename)
+
+	// Find the source file of the candidate, starting from a package
+	// that should have it in its dependencies.
+	searchPkg := c.pkg
+	if cand.imp != nil && cand.imp.pkg != nil {
+		searchPkg = cand.imp.pkg
+	}
+
+	pgf, pkg, err := findPosInPackage(c.snapshot, searchPkg, obj.Pos())
+	if err != nil {
+		return item, nil
+	}
+
+	posToDecl, err := c.snapshot.PosToDecl(ctx, pgf)
 	if err != nil {
 		return CompletionItem{}, err
 	}
-	file, _, _, err := ph.Cached()
-	if err != nil {
-		return CompletionItem{}, err
+	decl := posToDecl[obj.Pos()]
+	if decl == nil {
+		return item, nil
 	}
-	if !(file.Pos() <= obj.Pos() && obj.Pos() <= file.End()) {
-		return CompletionItem{}, errors.Errorf("no file for %s", obj.Name())
-	}
-	ident, err := findIdentifier(c.ctx, c.snapshot, pkg, file, obj.Pos())
+
+	hover, err := hoverInfo(pkg, obj, decl)
 	if err != nil {
-		return CompletionItem{}, err
-	}
-	hover, err := ident.Hover(c.ctx)
-	if err != nil {
-		return CompletionItem{}, err
+		event.Error(ctx, "failed to find Hover", err, tag.URI.Of(uri))
+		return item, nil
 	}
 	item.Documentation = hover.Synopsis
-	if c.opts.FullDocumentation {
+	if c.opts.fullDocumentation {
 		item.Documentation = hover.FullDocumentation
 	}
 	return item, nil
 }
 
-func (c *completer) formatBuiltin(cand candidate) CompletionItem {
+// importEdits produces the text edits necessary to add the given import to the current file.
+func (c *completer) importEdits(ctx context.Context, imp *importInfo) ([]protocol.TextEdit, error) {
+	if imp == nil {
+		return nil, nil
+	}
+
+	pgf, err := c.pkg.File(span.URIFromPath(c.filename))
+	if err != nil {
+		return nil, err
+	}
+
+	return computeOneImportFixEdits(ctx, c.snapshot, pgf, &imports.ImportFix{
+		StmtInfo: imports.ImportInfo{
+			ImportPath: imp.importPath,
+			Name:       imp.name,
+		},
+		// IdentName is unused on this path and is difficult to get.
+		FixType: imports.AddImport,
+	})
+}
+
+func (c *completer) formatBuiltin(ctx context.Context, cand candidate) (CompletionItem, error) {
 	obj := cand.obj
 	item := CompletionItem{
 		Label:      obj.Name(),
@@ -163,19 +246,12 @@ func (c *completer) formatBuiltin(cand candidate) CompletionItem {
 		item.Kind = protocol.ConstantCompletion
 	case *types.Builtin:
 		item.Kind = protocol.FunctionCompletion
-		builtin := c.view.BuiltinPackage().Lookup(obj.Name())
-		if obj == nil {
-			break
+		sig, err := newBuiltinSignature(ctx, c.snapshot, obj.Name())
+		if err != nil {
+			return CompletionItem{}, err
 		}
-		decl, ok := builtin.Decl.(*ast.FuncDecl)
-		if !ok {
-			break
-		}
-		params, _ := formatFieldList(c.ctx, c.view, decl.Type.Params)
-		results, writeResultParens := formatFieldList(c.ctx, c.view, decl.Type.Results)
-		item.Label = obj.Name()
-		item.Detail = "func" + formatFunction(params, results, writeResultParens)
-		item.snippet = c.functionCallSnippet(obj.Name(), params)
+		item.Detail = "func" + sig.format()
+		item.snippet = c.functionCallSnippet(obj.Name(), sig.params)
 	case *types.TypeName:
 		if types.IsInterface(obj.Type()) {
 			item.Kind = protocol.InterfaceCompletion
@@ -185,48 +261,7 @@ func (c *completer) formatBuiltin(cand candidate) CompletionItem {
 	case *types.Nil:
 		item.Kind = protocol.VariableCompletion
 	}
-	return item
-}
-
-var replacer = strings.NewReplacer(
-	`ComplexType`, `complex128`,
-	`FloatType`, `float64`,
-	`IntegerType`, `int`,
-)
-
-func formatFieldList(ctx context.Context, v View, list *ast.FieldList) ([]string, bool) {
-	if list == nil {
-		return nil, false
-	}
-	var writeResultParens bool
-	var result []string
-	for i := 0; i < len(list.List); i++ {
-		if i >= 1 {
-			writeResultParens = true
-		}
-		p := list.List[i]
-		cfg := printer.Config{Mode: printer.UseSpaces | printer.TabIndent, Tabwidth: 4}
-		b := &bytes.Buffer{}
-		if err := cfg.Fprint(b, v.Session().Cache().FileSet(), p.Type); err != nil {
-			log.Error(ctx, "unable to print type", nil, tag.Of("Type", p.Type))
-			continue
-		}
-		typ := replacer.Replace(b.String())
-		if len(p.Names) == 0 {
-			result = append(result, typ)
-		}
-		for _, name := range p.Names {
-			if name.Name != "" {
-				if i == 0 {
-					writeResultParens = true
-				}
-				result = append(result, fmt.Sprintf("%s %s", name.Name, typ))
-			} else {
-				result = append(result, typ)
-			}
-		}
-	}
-	return result, writeResultParens
+	return item, nil
 }
 
 // qualifier returns a function that appropriately formats a types.PkgName
@@ -239,7 +274,6 @@ func qualifier(f *ast.File, pkg *types.Package, info *types.Info) types.Qualifie
 		if imp.Name != nil {
 			obj = info.Defs[imp.Name]
 		} else {
-
 			obj = info.Implicits[imp]
 		}
 		if pkgname, ok := obj.(*types.PkgName); ok {

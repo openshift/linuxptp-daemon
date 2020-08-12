@@ -477,85 +477,8 @@ func TestIsWildcardDNS1123Subdomain(t *testing.T) {
 	}
 }
 
-func TestIsFullyQualifiedDomainName(t *testing.T) {
-	goodValues := []string{
-		"a.com",
-		"k8s.io",
-		"dev.k8s.io",
-		"dev.k8s.io.",
-		"foo.example.com",
-		"this.is.a.really.long.fqdn",
-		"bbc.co.uk",
-		"10.0.0.1", // DNS labels can start with numbers and there is no requirement for letters.
-		"hyphens-are-good.k8s.io",
-		strings.Repeat("a", 246) + ".k8s.io",
-	}
-	for _, val := range goodValues {
-		if err := IsFullyQualifiedDomainName(field.NewPath(""), val).ToAggregate(); err != nil {
-			t.Errorf("expected no errors for %q: %v", val, err)
-		}
-	}
-
-	badValues := []string{
-		".",
-		"...",
-		".io",
-		"com",
-		".com",
-		"Dev.k8s.io",
-		".foo.example.com",
-		"*.example.com",
-		"*.bar.com",
-		"*.foo.bar.com",
-		"underscores_are_bad.k8s.io",
-		"foo@bar.example.com",
-		"http://foo.example.com",
-		strings.Repeat("a", 247) + ".k8s.io",
-	}
-	for _, val := range badValues {
-		if err := IsFullyQualifiedDomainName(field.NewPath(""), val).ToAggregate(); err == nil {
-			t.Errorf("expected errors for %q", val)
-		}
-	}
-}
-
 func TestIsFullyQualifiedName(t *testing.T) {
-	goodValues := []string{
-		"dev.k8s.io",
-		"foo.example.com",
-		"this.is.a.really.long.fqdn",
-		"bbc.co.uk",
-		"10.0.0.1", // DNS labels can start with numbers and there is no requirement for letters.
-		"hyphens-are-good.k8s.io",
-		strings.Repeat("a", 246) + ".k8s.io",
-	}
-	for _, val := range goodValues {
-		if err := IsFullyQualifiedName(field.NewPath(""), val).ToAggregate(); err != nil {
-			t.Errorf("expected no errors for %q: %v", val, err)
-		}
-	}
-
-	badValues := []string{
-		"...",
-		"dev.k8s.io.",
-		".io",
-		"Dev.k8s.io",
-		"k8s.io",
-		"*.example.com",
-		"*.bar.com",
-		"*.foo.bar.com",
-		"underscores_are_bad.k8s.io",
-		"foo@bar.example.com",
-		"http://foo.example.com",
-		strings.Repeat("a", 247) + ".k8s.io",
-	}
-	for _, val := range badValues {
-		if err := IsFullyQualifiedName(field.NewPath(""), val).ToAggregate(); err == nil {
-			t.Errorf("expected errors for %q", val)
-		}
-	}
-
-	messageTests := []struct {
+	tests := []struct {
 		name       string
 		targetName string
 		err        string
@@ -564,16 +487,6 @@ func TestIsFullyQualifiedName(t *testing.T) {
 			name:       "name needs to be fully qualified, i.e., contains at least 2 dots",
 			targetName: "k8s.io",
 			err:        "should be a domain with at least three segments separated by dots",
-		},
-		{
-			name:       "name should not include scheme",
-			targetName: "http://foo.k8s.io",
-			err:        "a DNS-1123 subdomain must consist of lower case alphanumeric characters",
-		},
-		{
-			name:       "email should be invalid",
-			targetName: "example@foo.k8s.io",
-			err:        "a DNS-1123 subdomain must consist of lower case alphanumeric characters",
 		},
 		{
 			name:       "name cannot be empty",
@@ -586,7 +499,7 @@ func TestIsFullyQualifiedName(t *testing.T) {
 			err:        "a DNS-1123 subdomain must consist of lower case alphanumeric characters",
 		},
 	}
-	for _, tc := range messageTests {
+	for _, tc := range tests {
 		err := IsFullyQualifiedName(field.NewPath(""), tc.targetName).ToAggregate()
 		switch {
 		case tc.err == "" && err != nil:

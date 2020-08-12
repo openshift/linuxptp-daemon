@@ -30,7 +30,7 @@ import (
 	"k8s.io/gengo/types"
 	openapi "k8s.io/kube-openapi/pkg/common"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // This is the comment tag that carries parameters for open API generation.
@@ -473,13 +473,13 @@ func (g openAPITypeWriter) emitExtensions(extensions []extension, unions []union
 	g.Do("VendorExtensible: spec.VendorExtensible{\nExtensions: spec.Extensions{\n", nil)
 	for _, extension := range extensions {
 		g.Do("\"$.$\": ", extension.xName)
-		if extension.hasMultipleValues() {
+		if extension.hasMultipleValues() || extension.isAlwaysArrayFormat() {
 			g.Do("[]interface{}{\n", nil)
 		}
 		for _, value := range extension.values {
 			g.Do("\"$.$\",\n", value)
 		}
-		if extension.hasMultipleValues() {
+		if extension.hasMultipleValues() || extension.isAlwaysArrayFormat() {
 			g.Do("},\n", nil)
 		}
 	}
@@ -534,7 +534,7 @@ func (g openAPITypeWriter) generateDescription(CommentLines []string) {
 		default:
 			if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
 				delPrevChar()
-				line = "\n" + line + "\n" // Replace it with newline. This is useful when we have a line with: "Example:\n\tJSON-someting..."
+				line = "\n" + line + "\n" // Replace it with newline. This is useful when we have a line with: "Example:\n\tJSON-something..."
 			} else {
 				line += " "
 			}

@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"k8s.io/kube-openapi/pkg/util/proto"
-	"sigs.k8s.io/structured-merge-diff/schema"
+	"sigs.k8s.io/structured-merge-diff/v3/schema"
 )
 
 // ToSchema converts openapi definitions into a schema suitable for structured
@@ -312,6 +312,18 @@ func (c *convert) VisitKind(k *proto.Kind) {
 			NamedType: &deducedName,
 		}
 	}
+
+	ext := k.GetExtensions()
+	if val, ok := ext["x-kubernetes-map-type"]; ok {
+		switch val {
+		case "atomic":
+			a.Map.ElementRelationship = schema.Atomic
+		case "granular":
+			a.Map.ElementRelationship = schema.Separable
+		default:
+			c.reportError("unknown map type %v", val)
+		}
+	}
 }
 
 func toStringSlice(o interface{}) (out []string, ok bool) {
@@ -384,8 +396,17 @@ func (c *convert) VisitMap(m *proto.Map) {
 	a.Map = &schema.Map{}
 	a.Map.ElementType = c.makeRef(m.SubType, c.preserveUnknownFields)
 
-	// TODO: Get element relationship when we start putting it into the
-	// spec.
+	ext := m.GetExtensions()
+	if val, ok := ext["x-kubernetes-map-type"]; ok {
+		switch val {
+		case "atomic":
+			a.Map.ElementRelationship = schema.Atomic
+		case "granular":
+			a.Map.ElementRelationship = schema.Separable
+		default:
+			c.reportError("unknown map type %v", val)
+		}
+	}
 }
 
 func ptr(s schema.Scalar) *schema.Scalar { return &s }

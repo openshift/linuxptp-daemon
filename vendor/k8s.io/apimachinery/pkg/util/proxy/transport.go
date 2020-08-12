@@ -101,14 +101,11 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := rt.RoundTrip(req)
 
 	if err != nil {
-		message := fmt.Sprintf("Error trying to reach service: '%v'", err.Error())
+		message := fmt.Sprintf("Error: '%s'\nTrying to reach: '%v'", err.Error(), req.URL.String())
 		resp = &http.Response{
-			Header:     http.Header{},
 			StatusCode: http.StatusServiceUnavailable,
 			Body:       ioutil.NopCloser(strings.NewReader(message)),
 		}
-		resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
-		resp.Header.Set("X-Content-Type-Options", "nosniff")
 		return resp, nil
 	}
 

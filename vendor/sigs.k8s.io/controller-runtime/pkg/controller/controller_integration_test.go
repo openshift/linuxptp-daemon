@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllertest"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
@@ -38,6 +39,7 @@ import (
 var _ = Describe("controller", func() {
 	var reconciled chan reconcile.Request
 	var stop chan struct{}
+	ctx := context.Background()
 
 	BeforeEach(func() {
 		stop = make(chan struct{})
@@ -100,6 +102,9 @@ var _ = Describe("controller", func() {
 								{
 									Name:  "nginx",
 									Image: "nginx",
+									SecurityContext: &corev1.SecurityContext{
+										Privileged: truePtr(),
+									},
 								},
 							},
 						},
@@ -112,14 +117,14 @@ var _ = Describe("controller", func() {
 			}}
 
 			By("Invoking Reconciling for Create")
-			deployment, err = clientset.AppsV1().Deployments("default").Create(deployment)
+			deployment, err = clientset.AppsV1().Deployments("default").Create(ctx, deployment, metav1.CreateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(<-reconciled).To(Equal(expectedReconcileRequest))
 
 			By("Invoking Reconciling for Update")
 			newDeployment := deployment.DeepCopy()
 			newDeployment.Labels = map[string]string{"foo": "bar"}
-			newDeployment, err = clientset.AppsV1().Deployments("default").Update(newDeployment)
+			_, err = clientset.AppsV1().Deployments("default").Update(ctx, newDeployment, metav1.UpdateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(<-reconciled).To(Equal(expectedReconcileRequest))
 
@@ -142,29 +147,39 @@ var _ = Describe("controller", func() {
 					Template: deployment.Spec.Template,
 				},
 			}
-			replicaset, err = clientset.AppsV1().ReplicaSets("default").Create(replicaset)
+			replicaset, err = clientset.AppsV1().ReplicaSets("default").Create(ctx, replicaset, metav1.CreateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(<-reconciled).To(Equal(expectedReconcileRequest))
 
 			By("Invoking Reconciling for an OwnedObject when it is updated")
 			newReplicaset := replicaset.DeepCopy()
 			newReplicaset.Labels = map[string]string{"foo": "bar"}
-			newReplicaset, err = clientset.AppsV1().ReplicaSets("default").Update(newReplicaset)
+			_, err = clientset.AppsV1().ReplicaSets("default").Update(ctx, newReplicaset, metav1.UpdateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(<-reconciled).To(Equal(expectedReconcileRequest))
 
 			By("Invoking Reconciling for an OwnedObject when it is deleted")
-			err = clientset.AppsV1().ReplicaSets("default").Delete(replicaset.Name, &metav1.DeleteOptions{})
+			err = clientset.AppsV1().ReplicaSets("default").Delete(ctx, replicaset.Name, metav1.DeleteOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(<-reconciled).To(Equal(expectedReconcileRequest))
 
 			By("Invoking Reconciling for Delete")
 			err = clientset.AppsV1().Deployments("default").
-				Delete("deployment-name", &metav1.DeleteOptions{})
+				Delete(ctx, "deployment-name", metav1.DeleteOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(<-reconciled).To(Equal(expectedReconcileRequest))
+
+			By("Listing a type with a slice of pointers as items field")
+			err = cm.GetClient().
+				List(context.Background(), &controllertest.UnconventionalListTypeList{})
+			Expect(err).NotTo(HaveOccurred())
 
 			close(done)
 		}, 5)
 	})
 })
+
+func truePtr() *bool {
+	t := true
+	return &t
+}

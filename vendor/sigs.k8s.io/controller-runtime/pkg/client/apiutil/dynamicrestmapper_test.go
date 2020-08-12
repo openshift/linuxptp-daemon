@@ -1,12 +1,12 @@
 package apiutil_test
 
 import (
+	"errors"
 	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"golang.org/x/time/rate"
-	"golang.org/x/xerrors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -82,8 +82,28 @@ var _ = Describe("Dynamic REST Mapper", func() {
 
 			By("calling another time that would need a requery and failing")
 			Eventually(func() bool {
-				return xerrors.As(callWithTarget(), &apiutil.ErrRateLimited{})
+				return errors.As(callWithTarget(), &apiutil.ErrRateLimited{})
 			}, "10s").Should(BeTrue())
+		})
+
+		It("should rate-limit then allow more at 1rps", func() {
+			By("setting a small limit")
+			*lim = *rate.NewLimiter(rate.Limit(1), 1)
+
+			By("forcing a reload after changing the mapper")
+			addToMapper = func(baseMapper *meta.DefaultRESTMapper) {
+				baseMapper.Add(secondGVK, meta.RESTScopeNamespace)
+			}
+
+			By("calling twice to trigger rate limiting")
+			Expect(callWithOther()).To(Succeed())
+			Expect(callWithTarget()).NotTo(Succeed())
+
+			// by 2nd call loop should succeed because we canceled our 1st rate-limited token, then waited a full second
+			By("calling until no longer rate-limited, 2nd call should succeed")
+			Eventually(func() bool {
+				return errors.As(callWithTarget(), &apiutil.ErrRateLimited{})
+			}, "2.5s", "1s").Should(BeFalse())
 		})
 
 		It("should avoid reloading twice if two requests for the same thing come in", func() {
