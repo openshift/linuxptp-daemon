@@ -15,6 +15,8 @@ import:
   - rest
   - tools/clientcmd
 - package: golang.org/x/tools
+- package: golang.org/x/crypto
+  version: 123391ffb6de907695e1066dc40c1ff09322aeb6
 - package: github.com/google/go-cmp
   version: ^0.3.1
   subpackages:
@@ -25,5 +27,7 @@ import:
   version: ^0.4.0
 - package: github.com/golang/glog
 - package: github.com/openshift/ptp-operator
+  version: release-4.3
 - package: github.com/fsnotify/fsnotify
   version: ^1.4.7
+- package: sigs.k8s.io/controller-runtime
