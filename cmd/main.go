@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"io/ioutil"
 	"os"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/daemon"
-	ptpv1 "github.com/openshift/ptp-operator/pkg/apis/ptp/v1"
 	ptpclient "github.com/openshift/ptp-operator/pkg/client/clientset/versioned"
 )
 
@@ -72,7 +70,12 @@ func main() {
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
-	ptpConfUpdate := &daemon.LinuxPTPConfUpdate{UpdateCh: make(chan bool)}
+	ptpConfUpdate, err := daemon.NewLinuxPTPConfUpdate()
+	if err != nil {
+		glog.Errorf("failed to create a ptp config update: %v", err)
+		return
+	}
+
 	go daemon.New(
 		nodeName,
 		daemon.PtpNamespace,
@@ -86,9 +89,6 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-
-	var appliedNodeProfileJson []byte
-	ptpConfig := &ptpv1.PtpProfile{}
 
 	daemon.StartMetricsServer("0.0.0.0:9091")
 
@@ -106,22 +106,16 @@ func main() {
 					continue
 				}
 			}
-			nodeProfileJson, err := ioutil.ReadFile(nodeProfile)
+			nodeProfilesJson, err := ioutil.ReadFile(nodeProfile)
 			if err != nil {
 				glog.Errorf("error reading node profile: %v", nodeProfile)
 				continue
 			}
-			if string(appliedNodeProfileJson) == string(nodeProfileJson) {
-				continue
-			}
-			err = json.Unmarshal(nodeProfileJson, ptpConfig)
+
+			err = ptpConfUpdate.UpdateConfig(nodeProfilesJson)
 			if err != nil {
-				glog.Errorf("failed to json.Unmarshal ptp profile: %v", err)
-				continue
+				glog.Errorf("error updating the node configuration using the profiles loaded: %v", err)
 			}
-			appliedNodeProfileJson = nodeProfileJson
-			ptpConfUpdate.NodeProfile = ptpConfig
-			ptpConfUpdate.UpdateCh <- true
 		case sig := <-sigCh:
 			glog.Info("signal received, shutting down", sig)
 			return
