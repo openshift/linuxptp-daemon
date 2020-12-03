@@ -96,10 +96,10 @@ func updatePTPMetrics(process string, offsetFromMaster, maxOffsetFromMaster, fre
 
 // extractMetrics ...
 func extractMetrics(processName, output string) {
-	if strings.Contains(output, "max") {
+	if strings.Contains(output, " max ") {
 		offsetFromMaster, maxOffsetFromMaster, frequencyAdjustment, delayFromMaster := extractSummaryMetrics(processName, output)
 		updatePTPMetrics(processName, offsetFromMaster, maxOffsetFromMaster, frequencyAdjustment, delayFromMaster)
-	} else if strings.Contains(output, "offset") {
+	} else if strings.Contains(output, " offset ") {
 		offsetFromMaster, maxOffsetFromMaster, frequencyAdjustment, delayFromMaster := extractRegularMetrics(processName, output)
 		updatePTPMetrics(processName, offsetFromMaster, maxOffsetFromMaster, frequencyAdjustment, delayFromMaster)
 	}
