@@ -4,8 +4,10 @@ import (
 	"flag"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,12 +24,59 @@ type cliParams struct {
 	profileDir     string
 }
 
+const ChronydSvcName = "chronyd"
+
 // Parse Command line flags
 func flagInit(cp *cliParams) {
 	flag.IntVar(&cp.updateInterval, "update-interval", config.DefaultUpdateInterval,
 		"Interval to update PTP status")
 	flag.StringVar(&cp.profileDir, "linuxptp-profile-path", config.DefaultProfilePath,
 		"profile to start linuxptp processes")
+}
+
+func isServiceActive(serviceName string) bool {
+	// this container need to have a local volume /host mounted on host /
+	cmd := exec.Command("chroot", "/host", "systemctl", "is-active", serviceName)
+	status, err := cmd.CombinedOutput()
+	if err != nil {
+		glog.Infof("service %s is-active check returned with: %v", serviceName, err)
+		return false
+	}
+	if strings.TrimSpace(string(status)) == "active" {
+		return true
+	}
+	return false
+}
+
+// start or stop a service. action: ["start", "stop"]
+func setService(action, serviceName string) {
+	glog.Infof("%s service %s", action, serviceName)
+	cmd := exec.Command("chroot", "/host", "systemctl", action, serviceName)
+	status, err := cmd.CombinedOutput()
+	if err != nil {
+		glog.Errorf("Failed to %s service %s: %v", action, serviceName, status)
+	}
+}
+
+// stopChronyCh: when ptp is started; recoverChronyCh: when main process exit; done: ack to main
+func manageChronyd(stopChronyCh, recoverChronyCh, done chan struct{}) {
+	initialState := isServiceActive(ChronydSvcName)
+	currentState := initialState
+	for {
+		select {
+		case <-stopChronyCh:
+			if currentState == true {
+				setService("stop", ChronydSvcName)
+				currentState = false
+			}
+		case <-recoverChronyCh:
+			if currentState == false && initialState == true {
+				setService("start", ChronydSvcName)
+				currentState = true
+			}
+			done <- struct{}{}
+		}
+	}
 }
 
 func main() {
@@ -70,6 +119,17 @@ func main() {
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
+	stopChronydCh := make(chan struct{})
+	defer close(stopChronydCh)
+
+	recoverChronydCh := make(chan struct{})
+	defer close(recoverChronydCh)
+
+	doneChronyCh := make(chan struct{})
+	defer close(doneChronyCh)
+
+	go manageChronyd(stopChronydCh, recoverChronydCh, doneChronyCh)
+
 	ptpConfUpdate, err := daemon.NewLinuxPTPConfUpdate()
 	if err != nil {
 		glog.Errorf("failed to create a ptp config update: %v", err)
@@ -82,6 +142,7 @@ func main() {
 		kubeClient,
 		ptpConfUpdate,
 		stopCh,
+		stopChronydCh,
 	).Run()
 
 	tickerPull := time.NewTicker(time.Second * time.Duration(cp.updateInterval))
@@ -118,6 +179,8 @@ func main() {
 			}
 		case sig := <-sigCh:
 			glog.Info("signal received, shutting down", sig)
+			recoverChronydCh <- struct{}{}
+			<-doneChronyCh
 			return
 		}
 	}
