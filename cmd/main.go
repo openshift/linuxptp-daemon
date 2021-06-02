@@ -90,7 +90,7 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
-	daemon.StartMetricsServer("0.0.0.0:9091")
+
 
 	for {
 		select {

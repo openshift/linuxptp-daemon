@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -66,8 +67,6 @@ func New(
 	ptpUpdate *LinuxPTPConfUpdate,
 	stopCh <-chan struct{},
 ) *Daemon {
-	RegisterMetrics(nodeName)
-
 	return &Daemon{
 		nodeName:       nodeName,
 		namespace:      namespace,
@@ -247,6 +246,13 @@ func cmdRun(p *ptpProcess) {
 	//
 	// don't discard process stderr output
 	//
+	c, err := net.Dial("unix", "/tmp/metrics.sock")
+	if err != nil {
+		glog.Errorf("Dial error", err)
+		return
+	}
+	defer c.Close()
+
 	p.cmd.Stderr = os.Stderr
 	cmdReader, err := p.cmd.StdoutPipe()
 	if err != nil {
@@ -261,7 +267,11 @@ func cmdRun(p *ptpProcess) {
 		for scanner.Scan() {
 			output := scanner.Text()
 			fmt.Printf("%s\n", output)
-			extractMetrics(p.name, p.iface, output)
+			out := fmt.Sprintf("{\"name\":\"%s\",\"iface\":\"%s\",\"output\":\"%s\"}", p.name, p.iface, output)
+			_, err := c.Write([]byte(out))
+			if err != nil {
+				glog.Errorf("Write error:", err)
+			}
 		}
 		done <- struct{}{}
 	}()
