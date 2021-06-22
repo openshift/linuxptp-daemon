@@ -46,6 +46,8 @@ type Daemon struct {
 	// node name where daemon is running
 	nodeName  string
 	namespace string
+	// write logs to socket, this will also send metrics to the socket
+	stdoutToSocket bool
 
 	// kubeClient allows interaction with Kubernetes, including the node we are running on.
 	kubeClient *kubernetes.Clientset
@@ -63,6 +65,7 @@ type Daemon struct {
 func New(
 	nodeName string,
 	namespace string,
+	stdoutToSocket bool,
 	kubeClient *kubernetes.Clientset,
 	ptpUpdate *LinuxPTPConfUpdate,
 	stopCh <-chan struct{},
@@ -70,6 +73,7 @@ func New(
 	return &Daemon{
 		nodeName:       nodeName,
 		namespace:      namespace,
+		stdoutToSocket: stdoutToSocket,
 		kubeClient:     kubeClient,
 		ptpUpdate:      ptpUpdate,
 		processManager: &ProcessManager{},
@@ -142,7 +146,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	for _, p := range dn.processManager.process {
 		if p != nil {
 			time.Sleep(1 * time.Second)
-			go cmdRun(p)
+			go cmdRun(p, dn.stdoutToSocket)
 		}
 	}
 	return nil
@@ -150,7 +154,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 
 func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) error {
 	// This add the flags needed for monitor
-	addFlagsForMonitor(nodeProfile)
+	addFlagsForMonitor(nodeProfile, dn.stdoutToSocket)
 
 	socketPath := fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
 	// This will create the configuration needed to run the ptp4l and phc2sys
@@ -235,7 +239,7 @@ func ptp4lCreateCmd(nodeProfile *ptpv1.PtpProfile, confFilePath string) *exec.Cm
 }
 
 // cmdRun runs given ptpProcess and wait for errors
-func cmdRun(p *ptpProcess) {
+func cmdRun(p *ptpProcess, stdoutToSocket bool) {
 	glog.Infof("Starting %s...", p.name)
 	glog.Infof("%s cmd: %+v", p.name, p.cmd)
 
@@ -267,10 +271,14 @@ func cmdRun(p *ptpProcess) {
 		for scanner.Scan() {
 			output := scanner.Text()
 			fmt.Printf("%s\n", output)
-			out := fmt.Sprintf("{\"name\":\"%s\",\"iface\":\"%s\",\"output\":\"%s\"}", p.name, p.iface, output)
-			_, err := c.Write([]byte(out))
-			if err != nil {
-				glog.Errorf("Write error:", err)
+			out := fmt.Sprintf("%s\n", output)
+			if stdoutToSocket {
+				_, err := c.Write([]byte(out))
+				if err != nil {
+					glog.Errorf("Write error:", err)
+				}
+			} else {
+				extractMetrics(p.name, p.iface, output)
 			}
 		}
 		done <- struct{}{}
