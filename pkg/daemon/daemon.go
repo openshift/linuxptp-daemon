@@ -56,6 +56,8 @@ type Daemon struct {
 	// channel ensure LinuxPTP.Run() exit when main function exits.
 	// stopCh is created by main function and passed by Daemon via NewLinuxPTP()
 	stopCh <-chan struct{}
+	// stopChronydCh is used to notify that chronyd should be stopped once ptp is started
+	stopChronydCh chan<- struct{}
 }
 
 // NewLinuxPTP is called by daemon to generate new linuxptp instance
@@ -65,6 +67,7 @@ func New(
 	kubeClient *kubernetes.Clientset,
 	ptpUpdate *LinuxPTPConfUpdate,
 	stopCh <-chan struct{},
+	stopChronydCh chan<- struct{},
 ) *Daemon {
 	RegisterMetrics(nodeName)
 
@@ -75,6 +78,7 @@ func New(
 		ptpUpdate:      ptpUpdate,
 		processManager: &ProcessManager{},
 		stopCh:         stopCh,
+		stopChronydCh:  stopChronydCh,
 	}
 }
 
@@ -144,6 +148,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 		if p != nil {
 			time.Sleep(1 * time.Second)
 			go cmdRun(p)
+			dn.stopChronydCh <- struct{}{}
 		}
 	}
 	return nil
