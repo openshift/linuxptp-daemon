@@ -226,9 +226,13 @@ func phc2sysCreateCmd(nodeProfile *ptpv1.PtpProfile) *exec.Cmd {
 
 // ptp4lCreateCmd generate ptp4l command
 func ptp4lCreateCmd(nodeProfile *ptpv1.PtpProfile, confFilePath string) *exec.Cmd {
-	cmdLine := fmt.Sprintf("/usr/sbin/ptp4l -f %s -i %s %s",
+	var ifaceString string;
+	if *nodeProfile.Interface != "" {
+		ifaceString = fmt.Sprintf("-i %s", *nodeProfile.Interface)
+	}
+	cmdLine := fmt.Sprintf("/usr/sbin/ptp4l -f %s %s %s",
 		confFilePath,
-		*nodeProfile.Interface,
+		ifaceString,
 		*nodeProfile.Ptp4lOpts)
 
 	args := strings.Split(cmdLine, " ")
