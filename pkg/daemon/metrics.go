@@ -26,6 +26,9 @@ const (
 	phc2sysProcessName = "phc2sys"
 	clockRealTime      = "CLOCK_REALTIME"
 	master             = "master"
+
+	offset = "offset"
+	rms    = "rms"
 )
 
 const (
@@ -222,7 +225,7 @@ func extractSummaryMetrics(configName, processName, output string) (iface string
 	// phc2sys[3560354.300]: [ptp4l.0.config] CLOCK_REALTIME rms    4 max    4 freq -76829 +/-   0 delay  1085 +/-   0
 	// ptp4l[74737.942]: [ptp4l.0.config] rms   53 max   74 freq -16642 +/-  40 delay  1089 +/-  20
 
-	indx := strings.Index(output, "rms")
+	indx := strings.Index(output, rms)
 	if indx < 0 {
 		return
 	}
@@ -245,7 +248,7 @@ func extractSummaryMetrics(configName, processName, output string) (iface string
 	}
 
 	// when ptp4l log is missing interface name
-	if fields[1] == "rms" {
+	if fields[1] == rms {
 		fields = append(fields, "") // Making space for the new element
 		//  0             1     2
 		//ptp4l.0.config rms   53 max   74 freq -16642 +/-  40 delay  1089 +/-  20
@@ -285,13 +288,13 @@ func extractSummaryMetrics(configName, processName, output string) (iface string
 }
 
 func extractRegularMetrics(configName, processName, output string) (iface, clockState string, offsetFromMaster, maxOffsetFromMaster, frequencyAdjustment, delayFromMaster float64) {
-	indx := strings.Index(output, "offset")
+	indx := strings.Index(output, offset)
 	if indx < 0 {
 		return
 	}
 
 	output = strings.Replace(output, "path", "", 1)
-	replacer := strings.NewReplacer("[", " ", "]", " ", ":", " ", "phc", "")
+	replacer := strings.NewReplacer("[", " ", "]", " ", ":", " ", "phc", "", "sys", "")
 	output = replacer.Replace(output)
 
 	index := strings.Index(output, configName)
@@ -306,6 +309,11 @@ func extractRegularMetrics(configName, processName, output string) (iface, clock
 	//ptp4l.0.config master offset   -2162130 s2 freq +22451884  delay 374976
 	if len(fields) < 7 {
 		glog.Errorf("%s failed to parse output %s: unexpected number of fields", processName, output)
+		return
+	}
+
+	if fields[2] != offset {
+		glog.Errorf("%s failed to parse offset from master output %s error %s", processName, fields[1], "offset is not in right order")
 		return
 	}
 
