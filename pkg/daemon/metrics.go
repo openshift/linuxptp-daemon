@@ -478,6 +478,15 @@ func addFlagsForMonitor(nodeProfile *ptpv1.PtpProfile, conf *ptp4lConf, stdoutTo
 			}
 		}
 	}
+
+	// If output doesn't exist we add it for the prometheus exporter
+	// If output doesn't exist we add it for the prometheus exporter
+	if nodeProfile.Ts2PhcOpts != nil {
+		if !strings.Contains(*nodeProfile.Ts2PhcOpts, "-m") {
+			glog.Info("adding -m to print messages to stdout for Ts2PhcOpts to use prometheus exporter")
+			*nodeProfile.Ptp4lOpts = fmt.Sprintf("%s -m", *nodeProfile.Ts2PhcOpts)
+		}
+	}
 }
 
 // StartMetricsServer runs the prometheus listner so that metrics can be collected
