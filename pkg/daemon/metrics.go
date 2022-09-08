@@ -34,8 +34,9 @@ const (
 	rms    = "rms"
 
 	// offset source
-	phc = "phc"
-	sys = "sys"
+	phc    = "phc"
+	sys    = "sys"
+	ts2phc = "ts2phc"
 )
 
 const (
@@ -226,6 +227,7 @@ func extractSummaryMetrics(configName, processName, output string) (iface string
 	// ptp4l[74737.942]: [ptp4l.0.config] rms  53 max   74 freq -16642 +/-  40 delay  1089 +/-  20
 	// or
 	// ptp4l[365195.391]: [ptp4l.0.config] master offset         -1 s2 freq   -3972 path delay        89
+	// ts2phc[106515.214]: [ts2phc.0.cfg] ens2f1 master offset          0 s2 freq      +0 // consider this as master offset
 
 	rmsIndex := strings.Index(output, rms)
 	if rmsIndex < 0 {
@@ -295,14 +297,23 @@ func extractSummaryMetrics(configName, processName, output string) (iface string
 
 func extractRegularMetrics(configName, processName, output string) (err error, iface, clockState string, ptpOffset, maxPtpOffset, frequencyAdjustment, delay float64) {
 	indx := strings.Index(output, offset)
+	isTs2Phc := false
+	ts2PhcIface := ""
 	if indx < 0 {
 		return
 	}
 
+	if strings.Contains(output, ts2phc) {
+		isTs2Phc = true
+	}
 	output = strings.Replace(output, "path", "", 1)
-	replacer := strings.NewReplacer("[", " ", "]", " ", ":", " ", "phc", "", "sys", "")
+	var replacer *strings.Replacer
+	if isTs2Phc {
+		replacer = strings.NewReplacer("[", " ", "]", " ", ":", " ")
+	} else {
+		replacer = strings.NewReplacer("[", " ", "]", " ", ":", " ", "phc", "", "sys", "")
+	}
 	output = replacer.Replace(output)
-
 	index := strings.Index(output, configName)
 	if index == -1 {
 		return
@@ -310,12 +321,20 @@ func extractRegularMetrics(configName, processName, output string) (err error, i
 
 	output = output[index:]
 	fields := strings.Fields(output)
-
 	//       0         1      2          3    4   5    6          7     8
 	//ptp4l.0.config master offset          4 s2 freq   -3964 path delay        91
+	// 0                1      2      3         4  5 6         7
+	//ts2phc.0.config ens2f0 master offset      1 s2 freq      +1
 	if len(fields) < 7 {
-		err = fmt.Errorf("%s failed to parse output %s: unexpected number of fields", processName, output)
 		return
+	}
+
+	// for ts2phc fix
+	if strings.Contains(fields[0], ts2phc) && fields[2] != offset {
+		// sanitize 2nd field
+		// Remove the element at index 1 from fields.
+		ts2PhcIface = fields[1]
+		copy(fields[1:], fields[2:]) // Shift fields[2:] left one index.
 	}
 
 	if fields[2] != offset {
@@ -324,8 +343,10 @@ func extractRegularMetrics(configName, processName, output string) (err error, i
 	}
 
 	iface = fields[1]
-	if iface != clockRealTime && iface != master {
+	if iface != clockRealTime && iface != master { // if ts2phc is set to GM then we ignore master offset , need to introduce new offset metrics
 		return // ignore master port offsets
+	} else if isTs2Phc {
+		iface = ts2PhcIface
 	}
 
 	// replace master offset from master to slaveInterface - index + x ens01== ens0X
@@ -367,7 +388,7 @@ func extractRegularMetrics(configName, processName, output string) (err error, i
 		if err != nil {
 			err = fmt.Errorf("%s failed to parse delay from the output %s error %v", processName, fields[8], err)
 		}
-	} else {
+	} else if !isTs2Phc {
 		// If there is no delay this mean we are out of sync
 		glog.Warningf("no delay from the process %s out of sync", processName)
 	}
@@ -481,6 +502,14 @@ func addFlagsForMonitor(nodeProfile *ptpv1.PtpProfile, conf *ptp4lConf, stdoutTo
 					conf.sections[index] = section
 				}
 			}
+		}
+
+	}
+	// If output doesn't exist we add it for the prometheus exporter
+	if nodeProfile.Ts2PhcOpts != nil {
+		if !strings.Contains(*nodeProfile.Ts2PhcOpts, "-m") {
+			glog.Info("adding -m to print messages to stdout for Ts2PhcOpts to use prometheus exporter")
+			*nodeProfile.Ptp4lOpts = fmt.Sprintf("%s -m", *nodeProfile.Ts2PhcOpts)
 		}
 	}
 }

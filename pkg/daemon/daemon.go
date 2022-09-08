@@ -39,15 +39,16 @@ type ProcessManager struct {
 }
 
 type ptpProcess struct {
-	name            string
-	ifaces          []string
-	ptp4lSocketPath string
-	ptp4lConfigPath string
-	configName      string
-	exitCh          chan bool
-	execMutex       sync.Mutex
-	stopped         bool
-	cmd             *exec.Cmd
+	name             string
+	ifaces           []string
+	ptp4lSocketPath  string
+	ptp4lConfigPath  string
+	ts2PhcConfigPath string
+	configName       string
+	exitCh           chan bool
+	execMutex        sync.Mutex
+	stopped          bool
+	cmd              *exec.Cmd
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -190,6 +191,29 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) error {
 	socketPath := fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
 	configFile := fmt.Sprintf("ptp4l.%d.config", runID)
+	if nodeProfile.Ts2PhcOpts != nil {
+		ts2PhcConfigFile := fmt.Sprintf("ts2phc.%d.cfg", runID)
+		err := dn.addTs2PhcProfileConfig(ts2PhcConfigFile, nodeProfile)
+		if err != nil {
+			return fmt.Errorf("failed to add ts2phc config %s: %v", ts2PhcConfigFile, err)
+		}
+		configPath := fmt.Sprintf("/var/run/%s", ts2PhcConfigFile)
+		err = ioutil.WriteFile(configPath, []byte(*nodeProfile.Ts2PhcConf), 0644)
+		if err != nil {
+			return fmt.Errorf("failed to write the configuration file named %s: %v", configPath, err)
+		}
+		dn.processManager.process = append(dn.processManager.process, &ptpProcess{
+			name:             "ts2phc",
+			ifaces:           []string{},
+			configName:       ts2PhcConfigFile,
+			ts2PhcConfigPath: configPath,
+			exitCh:           make(chan bool),
+			stopped:          false,
+			cmd:              ts2phcCreateCmd(nodeProfile, configPath)})
+	} else {
+		glog.Infof("applyNodePtpProfile: not starting ts2phc, ts2phcOpts is empty")
+	}
+
 	// This will create the configuration needed to run the ptp4l and phc2sys
 	err := dn.addProfileConfig(socketPath, configFile, nodeProfile)
 	if err != nil {
@@ -202,21 +226,11 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	printWhenNotNil(nodeProfile.Ptp4lOpts, "Ptp4lOpts")
 	printWhenNotNil(nodeProfile.Ptp4lConf, "Ptp4lConf")
 	printWhenNotNil(nodeProfile.Phc2sysOpts, "Phc2sysOpts")
+	printWhenNotNil(nodeProfile.Ts2PhcOpts, "Ts2PhcOpts")
+	printWhenNotNil(nodeProfile.Ts2PhcConf, "Ts2PhcConf")
 	printWhenNotNil(nodeProfile.PtpSchedulingPolicy, "PtpSchedulingPolicy")
 	printWhenNotNil(nodeProfile.PtpSchedulingPriority, "PtpSchedulingPriority")
 	glog.Infof("------------------------------------")
-
-	if nodeProfile.Phc2sysOpts != nil {
-		dn.processManager.process = append(dn.processManager.process, &ptpProcess{
-			name:       "phc2sys",
-			ifaces:     strings.Split(*nodeProfile.Interface, ","),
-			configName: configFile,
-			exitCh:     make(chan bool),
-			stopped:    false,
-			cmd:        phc2sysCreateCmd(nodeProfile)})
-	} else {
-		glog.Infof("applyNodePtpProfile: not starting phc2sys, phc2sysOpts is empty")
-	}
 
 	configPath := fmt.Sprintf("/var/run/%s", configFile)
 	err = ioutil.WriteFile(configPath, []byte(*nodeProfile.Ptp4lConf), 0644)
@@ -234,6 +248,17 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		stopped:         false,
 		cmd:             ptp4lCreateCmd(nodeProfile, configPath)})
 
+	if nodeProfile.Phc2sysOpts != nil {
+		dn.processManager.process = append(dn.processManager.process, &ptpProcess{
+			name:       "phc2sys",
+			ifaces:     strings.Split(*nodeProfile.Interface, ","),
+			configName: configFile,
+			exitCh:     make(chan bool),
+			stopped:    false,
+			cmd:        phc2sysCreateCmd(nodeProfile)})
+	} else {
+		glog.Infof("applyNodePtpProfile: not starting phc2sys, phc2sysOpts is empty")
+	}
 	return nil
 }
 
@@ -274,7 +299,7 @@ func (dn *Daemon) addProfileConfig(socketPath string, configFile string, nodePro
 		}
 	}
 
-	// This add the flags needed for monitor
+	// This adds the flags needed for monitor
 	addFlagsForMonitor(nodeProfile, output, dn.stdoutToSocket)
 
 	*nodeProfile.Ptp4lConf, *nodeProfile.Interface = output.renderPtp4lConf()
@@ -288,6 +313,69 @@ func (dn *Daemon) addProfileConfig(socketPath string, configFile string, nodePro
 	}
 
 	return nil
+}
+
+/*
+# export ETH=enp1s0f0
+# export TS2PHC_CONFIG=/home/<user>/linuxptp-3.1/configs/ts2phc-generic.cfg
+# ts2phc -f $TS2PHC_CONFIG -s generic -m -c $ETH
+# cat $TS2PHC_CONFIG
+[global]
+use_syslog 0
+verbose 1
+logging_level 7
+ts2phc.pulsewidth 100000000
+#For GNSS module
+#ts2phc.nmea_serialport /dev/ttyGNSS_BBDD_0 #BB bus number DD device number /dev/
+ttyGNSS_1800_0
+#leapfile /../<path to .list leap second file>
+[<network interface>]
+ts2phc.extts_polarity rising
+*/
+func (dn *Daemon) addTs2PhcProfileConfig(configFile string, nodeProfile *ptpv1.PtpProfile) error {
+
+	output := &ts2phcConf{}
+	err := output.populateTs2PhcConf(nodeProfile.Ts2PhcConf)
+	if err != nil {
+		return err
+	}
+
+	output.profileName = *nodeProfile.Name
+
+	for index, section := range output.sections {
+		if section.sectionName == "[global]" {
+			section.options["message_tag"] = fmt.Sprintf("[%s]", configFile)
+			output.sections[index] = section
+		}
+	}
+	// This adds the flags needed for monitor
+	if nodeProfile.Ts2PhcOpts != nil {
+		if !strings.Contains(*nodeProfile.Ts2PhcOpts, "-m") {
+			glog.Info("adding -m to print messages to stdout for ts2phc to use prometheus exporter")
+			*nodeProfile.Ts2PhcOpts = fmt.Sprintf("%s -m", *nodeProfile.Ts2PhcOpts)
+		}
+	}
+
+	*nodeProfile.Ts2PhcConf = output.renderTs2PhcConf()
+
+	if nodeProfile.Ts2PhcOpts != nil {
+		commandLine := fmt.Sprintf("%s",
+			*nodeProfile.Ts2PhcOpts)
+		nodeProfile.Ts2PhcOpts = &commandLine
+	}
+
+	return nil
+}
+
+// ts2phcCreateCmd generate ts2phc command
+func ts2phcCreateCmd(nodeProfile *ptpv1.PtpProfile, confFilePath string) *exec.Cmd {
+	cmdLine := fmt.Sprintf("/usr/sbin/ts2phc -f %s %s",
+		confFilePath,
+		*nodeProfile.Ts2PhcOpts)
+	cmdLine = addScheduling(nodeProfile, cmdLine)
+
+	args := strings.Split(cmdLine, " ")
+	return exec.Command(args[0], args[1:]...)
 }
 
 // Add fifo scheduling if specified in nodeProfile
@@ -502,7 +590,12 @@ func cmdStop(p *ptpProcess) {
 			glog.Errorf("failed to remove ptp4l config path %s: %v", p.ptp4lConfigPath, err)
 		}
 	}
-
+	if p.ts2PhcConfigPath != "" {
+		err := os.Remove(p.ts2PhcConfigPath)
+		if err != nil {
+			glog.Errorf("failed to remove ts2phc config path %s: %v", p.ts2PhcConfigPath, err)
+		}
+	}
 	<-p.exitCh
 	glog.Infof("Process %d terminated", p.cmd.Process.Pid)
 }
