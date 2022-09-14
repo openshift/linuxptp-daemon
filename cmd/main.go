@@ -53,6 +53,7 @@ func main() {
 	}
 
 	ptpClient, err := ptpclient.NewForConfig(cfg)
+
 	if err != nil {
 		glog.Errorf("cannot create new config for ptpClient: %v", err)
 		return
