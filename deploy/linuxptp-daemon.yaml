@@ -26,11 +26,15 @@ spec:
       - name: linuxptp-daemon-container
         securityContext:
           privileged: true
-        image: openshift.io/linuxptp-daemon
+        image: quay.io/vgrinber/linuxptp-daemon:2
         command: [ "/bin/bash", "-c", "--" ]
         args: [ "/usr/local/bin/ptp --alsologtostderr" ]
-        imagePullPolicy: IfNotPresent
+        # command: [ "/bin/sleep" ]
+        # args: [ "inf" ]
+        imagePullPolicy: Always
         env:
+        # - name: LOGS_TO_SOCKET
+        #   value: "true"
         - name: NODE_NAME
           valueFrom:
             fieldRef:

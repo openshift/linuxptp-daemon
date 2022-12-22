@@ -1,3 +1,3 @@
 #!/bin/bash
 
-docker build -t openshift.io/linuxptp-daemon -f ./Dockerfile .
+docker build -t quay.io/vgrinber/linuxptp-daemon:2 -f ./Dockerfile .

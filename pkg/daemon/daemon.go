@@ -166,7 +166,9 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// TODO:
 	// compare nodeProfile with previous config,
 	// only apply when nodeProfile changes
-
+	if dn.isHighAvailability() {
+		glog.Info("operate in high availability mode")
+	}
 	glog.Infof("updating NodePTPProfiles to:")
 	runID := 0
 	for _, profile := range dn.ptpUpdate.NodeProfiles {
