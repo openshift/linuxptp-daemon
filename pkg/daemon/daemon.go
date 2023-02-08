@@ -223,9 +223,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	glog.Infof("------------------------------------")
 
 	ptp_processes := []string{
+		"ts2phc",
 		"ptp4l",
 		"phc2sys",
-		"ts2phc",
 	}
 
 	var err error
