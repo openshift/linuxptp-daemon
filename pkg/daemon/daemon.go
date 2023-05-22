@@ -3,7 +3,6 @@ package daemon
 import (
 	"bufio"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -13,6 +12,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/openshift/linuxptp-daemon/pkg/event"
 
 	"github.com/openshift/linuxptp-daemon/pkg/pmc"
 
@@ -31,12 +32,18 @@ const (
 	ClockClassChangeIndicator = "selected best master clock"
 )
 
+var (
+	clockType event.ClockType
+)
+
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
 // Processes in ProcessManager will be started
 // or stopped simultaneously.
 type ProcessManager struct {
-	process []*ptpProcess
+	process         []*ptpProcess
+	eventChannel    chan event.EventChannel
+	ptpEventHandler *event.EventHandler
 }
 
 type ptpProcess struct {
@@ -51,6 +58,7 @@ type ptpProcess struct {
 	stopped         bool
 	logFilterRegex  string
 	cmd             *exec.Cmd
+	depProcess      []process // this could gpsd and other process which needs to be stopped if the parent process is stopped
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -102,26 +110,36 @@ func New(
 	stopCh <-chan struct{},
 	plugins []string,
 	hwconfigs *[]ptpv1.HwConfig,
+	closeManager chan bool,
 ) *Daemon {
 	if !stdoutToSocket {
 		RegisterMetrics(nodeName)
 	}
 	pluginManager := registerPlugins(plugins)
+	eventChannel := make(chan event.EventChannel, 10)
 	return &Daemon{
 		nodeName:       nodeName,
 		namespace:      namespace,
 		stdoutToSocket: stdoutToSocket,
 		kubeClient:     kubeClient,
 		ptpUpdate:      ptpUpdate,
-		processManager: &ProcessManager{},
-		stopCh:         stopCh,
 		pluginManager:  pluginManager,
 		hwconfigs:      hwconfigs,
+		processManager: &ProcessManager{
+			process:         nil,
+			eventChannel:    eventChannel,
+			ptpEventHandler: event.Init(stdoutToSocket, eventSocket, eventChannel, closeManager),
+		},
+		stopCh: stopCh,
 	}
 }
 
 // Run in a for loop to listen for any LinuxPTPConfUpdate changes
 func (dn *Daemon) Run() {
+	//TODO: identify clock type from ptpconfig
+	clockType = event.GM
+	go dn.processManager.ptpEventHandler.ProcessEvents()
+
 	for {
 		select {
 		case <-dn.ptpUpdate.UpdateCh:
@@ -132,7 +150,13 @@ func (dn *Daemon) Run() {
 		case <-dn.stopCh:
 			for _, p := range dn.processManager.process {
 				if p != nil {
-					cmdStop(p)
+					for _, d := range p.depProcess {
+						if d != nil {
+							d.cmdStop()
+							d = nil
+						}
+					}
+					p.cmdStop()
 					p = nil
 				}
 			}
@@ -163,7 +187,15 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	for _, p := range dn.processManager.process {
 		if p != nil {
 			glog.Infof("stopping process.... %+v", p)
-			cmdStop(p)
+			if p.depProcess != nil {
+				for _, d := range p.depProcess {
+					if d != nil {
+						d.cmdStop()
+						d = nil
+					}
+				}
+			}
+			p.cmdStop()
 			p = nil
 		}
 	}
@@ -196,8 +228,18 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// Start all the process
 	for _, p := range dn.processManager.process {
 		if p != nil {
+			if p.depProcess != nil {
+				for _, d := range p.depProcess {
+					if d != nil {
+						time.Sleep(3 * time.Second)
+						go d.cmdRun(false)
+						time.Sleep(2 * time.Second)
+						d.monitorEvent(clockType, p.configName, p.exitCh, dn.processManager.eventChannel)
+					}
+				}
+			}
 			time.Sleep(1 * time.Second)
-			go cmdRun(p, dn.stdoutToSocket)
+			go p.cmdRun(dn.stdoutToSocket)
 		}
 	}
 	return nil
@@ -240,9 +282,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	dn.pluginManager.OnPTPConfigChange(nodeProfile)
 
 	ptp_processes := []string{
-		"ts2phc",
-		"ptp4l",
-		"phc2sys",
+		ts2phcProcessName,
+		ptp4lProcessName,
+		phcProcessName,
 	}
 
 	var err error
@@ -256,12 +298,12 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	var messageTag string
 	var cmd *exec.Cmd
 	var ifaces string
-	var process string
+	var pProcess string
 
 	for _, p := range ptp_processes {
-		process = p
-		switch process {
-		case "ptp4l":
+		pProcess = p
+		switch pProcess {
+		case ptp4lProcessName:
 			configInput = nodeProfile.Ptp4lConf
 			configOpts = nodeProfile.Ptp4lOpts
 			if configOpts == nil {
@@ -272,14 +314,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configFile = fmt.Sprintf("ptp4l.%d.config", runID)
 			configPath = fmt.Sprintf("/var/run/%s", configFile)
 			messageTag = fmt.Sprintf("[ptp4l.%d.config]", runID)
-		case "phc2sys":
+		case phcProcessName:
 			configInput = nodeProfile.Phc2sysConf
 			configOpts = nodeProfile.Phc2sysOpts
 			socketPath = fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
 			configFile = fmt.Sprintf("phc2sys.%d.config", runID)
 			configPath = fmt.Sprintf("/var/run/%s", configFile)
 			messageTag = fmt.Sprintf("[ptp4l.%d.config]", runID)
-		case "ts2phc":
+		case ts2phcProcessName:
+			clockType = event.GM
 			configInput = nodeProfile.Ts2PhcConf
 			configOpts = nodeProfile.Ts2PhcOpts
 			socketPath = fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
@@ -289,7 +332,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 
 		if configOpts == nil || *configOpts == "" {
-			glog.Infof("configOpts empty, skipping: %s", process)
+			glog.Infof("configOpts empty, skipping: %s", pProcess)
 			continue
 		}
 
@@ -335,7 +378,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		ifacesList := strings.Split(ifaces, ",")
 
-		process := ptpProcess{
+		dprocess := ptpProcess{
 			name:            p,
 			ifaces:          ifacesList,
 			ptp4lConfigPath: configPath,
@@ -346,15 +389,42 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			stopped:         false,
 			logFilterRegex:  getLogFilterRegex(nodeProfile),
 			cmd:             cmd,
+			depProcess:      []process{},
 		}
+		//TODO HARDWARE PLUGIN for e810
+		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
+			if e := mkFifo(); e != nil {
+				glog.Errorf("Error creating named pipe, GNSS monitoring will not work as expected %s", e.Error())
+			}
+			gpsDaemon := &gpsd{
+				name:       GPSD_PROCESSNAME,
+				execMutex:  sync.Mutex{},
+				cmd:        nil,
+				serialPort: GPSD_SERIALPORT,
+				exitCh:     make(chan bool),
+				stopped:    false,
+			}
+			gpsDaemon.cmdInit()
+			dprocess.depProcess = append(dprocess.depProcess, gpsDaemon)
 
-		err = ioutil.WriteFile(configPath, []byte(configOutput), 0644)
+			// init gpspipe
+			gpsPipeDaemon := &gpspipe{
+				name:       GPSPIPE_PROCESSNAME,
+				execMutex:  sync.Mutex{},
+				cmd:        nil,
+				serialPort: GPSPIPE_SERIALPORT,
+				exitCh:     make(chan bool),
+				stopped:    false,
+			}
+			gpsPipeDaemon.cmdInit()
+			dprocess.depProcess = append(dprocess.depProcess, gpsPipeDaemon)
+		}
+		err = os.WriteFile(configPath, []byte(configOutput), 0644)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return fmt.Errorf("failed to write the configuration file named %s: %v", configPath, err)
 		}
-
-		dn.processManager.process = append(dn.processManager.process, &process)
+		dn.processManager.process = append(dn.processManager.process, &dprocess)
 	}
 
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
@@ -397,7 +467,7 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
-func cmdRun(p *ptpProcess, stdoutToSocket bool) {
+func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 	var c net.Conn
 	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
 	defer func() {
@@ -539,7 +609,7 @@ func cmdRun(p *ptpProcess, stdoutToSocket bool) {
 }
 
 // cmdStop stops ptpProcess launched by cmdRun
-func cmdStop(p *ptpProcess) {
+func (p *ptpProcess) cmdStop() {
 	glog.Infof("Stopping %s...", p.name)
 	if p.cmd == nil {
 		return
