@@ -47,19 +47,21 @@ type ProcessManager struct {
 }
 
 type ptpProcess struct {
-	name            string
-	ifaces          []string
-	ptp4lSocketPath string
-	ptp4lConfigPath string
-	configName      string
-	messageTag      string
-	exitCh          chan bool
-	execMutex       sync.Mutex
-	stopped         bool
-	logFilterRegex  string
-	cmd             *exec.Cmd
-	depProcess      []process // this could gpsd and other process which needs to be stopped if the parent process is stopped
-	nodeProfile     *ptpv1.PtpProfile
+	name             string
+	ifaces           []string
+	ptp4lSocketPath  string
+	ptp4lConfigPath  string
+	configName       string
+	messageTag       string
+	exitCh           chan bool
+	execMutex        sync.Mutex
+	stopped          bool
+	logFilterRegex   string
+	cmd              *exec.Cmd
+	depProcess       []process // this could gpsd and other process which needs to be stopped if the parent process is stopped
+	nodeProfile      *ptpv1.PtpProfile
+	parentClockClass float64
+	pmcCheck         bool
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -97,6 +99,8 @@ type Daemon struct {
 	// stopCh is created by main function and passed by Daemon via NewLinuxPTP()
 	stopCh <-chan struct{}
 
+	pmcPollInterval int
+
 	// Allow vendors to include plugins
 	pluginManager PluginManager
 }
@@ -112,6 +116,7 @@ func New(
 	plugins []string,
 	hwconfigs *[]ptpv1.HwConfig,
 	closeManager chan bool,
+	pmcPollInterval int,
 ) *Daemon {
 	if !stdoutToSocket {
 		RegisterMetrics(nodeName)
@@ -119,13 +124,14 @@ func New(
 	pluginManager := registerPlugins(plugins)
 	eventChannel := make(chan event.EventChannel, 10)
 	return &Daemon{
-		nodeName:       nodeName,
-		namespace:      namespace,
-		stdoutToSocket: stdoutToSocket,
-		kubeClient:     kubeClient,
-		ptpUpdate:      ptpUpdate,
-		pluginManager:  pluginManager,
-		hwconfigs:      hwconfigs,
+		nodeName:        nodeName,
+		namespace:       namespace,
+		stdoutToSocket:  stdoutToSocket,
+		kubeClient:      kubeClient,
+		ptpUpdate:       ptpUpdate,
+		pluginManager:   pluginManager,
+		hwconfigs:       hwconfigs,
+		pmcPollInterval: pmcPollInterval,
 		processManager: &ProcessManager{
 			process:         nil,
 			eventChannel:    eventChannel,
@@ -140,7 +146,8 @@ func (dn *Daemon) Run() {
 	//TODO: identify clock type from ptpconfig
 	clockType = event.GM
 	go dn.processManager.ptpEventHandler.ProcessEvents()
-
+	tickerPmc := time.NewTicker(time.Second * time.Duration(dn.pmcPollInterval))
+	defer tickerPmc.Stop()
 	for {
 		select {
 		case <-dn.ptpUpdate.UpdateCh:
@@ -148,6 +155,9 @@ func (dn *Daemon) Run() {
 			if err != nil {
 				glog.Errorf("linuxPTP apply node profile failed: %v", err)
 			}
+		case <-tickerPmc.C:
+			dn.HandlePmcTicker()
+
 		case <-dn.stopCh:
 			for _, p := range dn.processManager.process {
 				if p != nil {
@@ -435,6 +445,14 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	return nil
 }
 
+func (dn *Daemon) HandlePmcTicker() {
+	for _, process := range dn.processManager.process {
+		if process.name == ptp4lProcessName {
+			process.pmcCheck = true
+		}
+	}
+}
+
 // Add fifo scheduling if specified in nodeProfile
 func addScheduling(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
 	if nodeProfile.PtpSchedulingPolicy != nil && *nodeProfile.PtpSchedulingPolicy == "SCHED_FIFO" {
@@ -466,6 +484,38 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 	_, err := (*c).Write([]byte(deadProcessMsg))
 	if err != nil {
 		glog.Errorf("Write error sending ptp4l/phc2sys process healths status%s:", err)
+	}
+}
+
+func (p *ptpProcess) updateClockClass(c *net.Conn) {
+	if _, matches, e := pmc.RunPMCExp(p.configName, pmc.CmdParentDataSet, pmc.ClockClassChangeRegEx); e == nil {
+		//regex: 'gm.ClockClass[[:space:]]+(\d+)'
+		//match  1: 'gm.ClockClass                         135'
+		//match  2: '135'
+		if len(matches) > 1 {
+			var parseError error
+			var clockClass float64
+			if clockClass, parseError = strconv.ParseFloat(matches[1], 64); parseError == nil {
+				if clockClass != p.parentClockClass {
+					p.parentClockClass = clockClass
+					glog.Infof("clock change event identified")
+					//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
+					clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, clockClass)
+					fmt.Printf("%s", clockClassOut)
+
+					_, err := (*c).Write([]byte(clockClassOut))
+					if err != nil {
+						glog.Errorf("failed to write class change event %s", err.Error())
+					}
+				}
+			} else {
+				glog.Errorf("parse error in clock class value %s", parseError)
+			}
+		} else {
+			glog.Infof("clock class change value not found via PMC")
+		}
+	} else {
+		glog.Error("error parsing PMC util for clock class change event")
 	}
 }
 
@@ -531,39 +581,18 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 				processStatus(&c, p.name, p.messageTag, PtpProcessUp)
 				for scanner.Scan() {
 					output := scanner.Text()
+					if p.pmcCheck {
+						p.pmcCheck = false
+						go p.updateClockClass(&c)
+					}
+
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
 						fmt.Printf("%s\n", output)
 					}
 					out := fmt.Sprintf("%s\n", output)
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
-							go func(c *net.Conn, cfgName string) {
-								if _, matches, e := pmc.RunPMCExp(cfgName, pmc.CmdParentDataSet, pmc.ClockClassChangeRegEx); e == nil {
-									//regex: 'gm.ClockClass[[:space:]]+(\d+)'
-									//match  1: 'gm.ClockClass                         135'
-									//match  2: '135'
-									if len(matches) > 1 {
-										var parseError error
-										var clockClass float64
-										if clockClass, parseError = strconv.ParseFloat(matches[1], 64); parseError == nil {
-											glog.Infof("clock change event identified")
-											//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
-											clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, clockClass)
-											fmt.Printf("%s", clockClassOut)
-											_, err := (*c).Write([]byte(clockClassOut))
-											if err != nil {
-												glog.Errorf("failed to write class change event %s", err.Error())
-											}
-										} else {
-											glog.Errorf("parse error in clock class value %s", parseError)
-										}
-									} else {
-										glog.Infof("clock class change value not found via PMC")
-									}
-								} else {
-									glog.Error("error parsing PMC util for clock class change event")
-								}
-							}(&c, p.configName)
+							go p.updateClockClass(&c)
 						}
 					}
 					_, err := c.Write([]byte(out))
