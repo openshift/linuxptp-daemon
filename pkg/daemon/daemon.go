@@ -149,8 +149,6 @@ func New(
 
 // Run in a for loop to listen for any LinuxPTPConfUpdate changes
 func (dn *Daemon) Run() {
-	//TODO: identify clock type from ptpconfig
-	clockType = event.GM
 	go dn.processManager.ptpEventHandler.ProcessEvents()
 	tickerPmc := time.NewTicker(time.Second * time.Duration(dn.pmcPollInterval))
 	defer tickerPmc.Stop()
@@ -355,7 +353,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configPath = fmt.Sprintf("/var/run/%s", configFile)
 			messageTag = fmt.Sprintf("[ptp4l.%d.config]", runID)
 		case ts2phcProcessName:
-			clockType = event.GM
 			configInput = nodeProfile.Ts2PhcConf
 			configOpts = nodeProfile.Ts2PhcOpts
 			socketPath = fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
@@ -376,6 +373,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			return err
 		}
 
+		clockType = output.clock_type
 		output.profile_name = *nodeProfile.Name
 
 		if nodeProfile.Interface != nil && *nodeProfile.Interface != "" {
@@ -606,7 +604,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 							Values: map[event.ValueType]int64{
 								event.OFFSET: int64(ts2phcsOffset),
 							},
-							ClockType:  "GM", //TODO: add actual defined
+							ClockType:  clockType,
 							Time:       time.Now().Unix(),
 							WriteToLog: true,
 							Reset:      false,
