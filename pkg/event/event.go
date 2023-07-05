@@ -1,19 +1,18 @@
 package event
 
 import (
+	"fmt"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/prometheus/client_golang/prometheus"
-
-	"github.com/openshift/linuxptp-daemon/pkg/pmc"
-
-	"fmt"
 	"time"
 
+	"github.com/openshift/linuxptp-daemon/pkg/pmc"
+	"github.com/openshift/linuxptp-daemon/pkg/protocol"
+
+	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type ValueType string
@@ -257,18 +256,8 @@ func (e *EventHandler) ProcessEvents() {
 				}
 				writeEventToLog = true
 				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, e.getGMState(event.CfgName)))
-				switch gmState {
-				case PTP_FREERUN:
-					clockClass := 248
-					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
-				case PTP_LOCKED:
-					clockClass := 6
-					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
-				case PTP_HOLDOVER:
-					clockClass := 7
-					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
-				default:
-				}
+				clockClass := e.updateCLockClass(event.CfgName, gmState, event.ClockType)
+				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
 
 				if writeEventToLog {
 					if e.stdoutToSocket {
@@ -293,68 +282,74 @@ func (e *EventHandler) ProcessEvents() {
 	}()
 }
 
-func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clockType ClockType) {
+func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clockType ClockType) (clockClass fbprotocol.ClockClass) {
+	g, err := runGetGMSettings(cfgName)
+	if err != nil {
+		glog.Errorf("failed to get current GRANDMASTER_SETTINGS_NP: %s", err)
+		return clockClass
+	}
+	glog.Infof("current GRANDMASTER_SETTINGS_NP:\n%s", g.String())
 	switch ptpState {
 	case PTP_LOCKED:
 		switch clockType {
 		case GM:
-			changeClockType(cfgName, pmc.CmdUpdateGMClass_LOCKED, 6)
+			// update only when ClockClass is changed
+			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 {
+				g.ClockQuality.ClockClass = fbprotocol.ClockClass6
+				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+				// T-REC-G.8275.1-202211-I section 6.3.5
+				g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
+				runUpdateGMSettings(cfgName, g)
+			}
 		case OC:
 		case BC:
 		}
 	case PTP_FREERUN:
 		switch clockType {
 		case GM:
-			changeClockType(cfgName, pmc.CmdUpdateGMClass_FREERUN, 7)
+			// update only when ClockClass is changed
+			if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
+				g.ClockQuality.ClockClass = protocol.ClockClassFreerun
+				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
+				// T-REC-G.8275.1-202211-I section 6.3.5
+				g.ClockQuality.OffsetScaledLogVariance = 0xffff
+				runUpdateGMSettings(cfgName, g)
+			}
 		case OC:
 		case BC:
 		}
 	case PTP_HOLDOVER:
 		switch clockType {
 		case GM:
-			changeClockType(cfgName, pmc.CmdUpdateGMClass_LOCKED, 248)
+			// update only when ClockClass is changed
+			if g.ClockQuality.ClockClass != fbprotocol.ClockClass7 {
+				g.ClockQuality.ClockClass = fbprotocol.ClockClass7
+				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
+				// T-REC-G.8275.1-202211-I section 6.3.5
+				g.ClockQuality.OffsetScaledLogVariance = 0xffff
+				runUpdateGMSettings(cfgName, g)
+			}
 		case OC:
 		case BC:
 		}
 	default:
 	}
+	return g.ClockQuality.ClockClass
 }
 
-func changeClockType(cfgName, cmd string, value int64) {
-	if mockTest {
-		return
-	}
+func runGetGMSettings(cfgName string) (protocol.GrandmasterSettings, error) {
 	cfgName = strings.Replace(cfgName, TS2PHCProcessName, PTP4lProcessName, 1)
-	currentClockClass := getCurrentClockClass(cfgName)
-	if currentClockClass != value {
-		if _, _, e := pmc.RunPMCExp(cfgName, fmt.Sprintf(cmd, value), pmc.ClockClassUpdateRegEx); e != nil {
-			glog.Infof("updating clock class based on antenna status failed %s", e)
-		} else {
-			glog.Errorf("updating clock class based on antenna status to %d", value)
-		}
-	} else {
-		glog.Infof("current clock class is set to %d", currentClockClass)
-	}
+
+	return pmc.RunPMCExpGetGMSettings(cfgName)
 }
 
-func getCurrentClockClass(cfgName string) int64 {
-	if mockTest {
-		return 248
-	}
+func runUpdateGMSettings(cfgName string, g protocol.GrandmasterSettings) {
 	cfgName = strings.Replace(cfgName, TS2PHCProcessName, PTP4lProcessName, 1)
-	if _, matches, e := pmc.RunPMCExp(cfgName, pmc.CmdParentDataSet, pmc.ClockClassChangeRegEx); e == nil {
-		//regex: 'gm.ClockClass[[:space:]]+(\d+)'
-		//match  1: 'gm.ClockClass                         135'
-		//match  2: '135'
-		if len(matches) > 1 {
-			var parseError error
-			var clockClass int64
-			if clockClass, parseError = strconv.ParseInt(matches[1], 10, 32); parseError == nil {
-				return clockClass
-			}
-		}
+
+	err := pmc.RunPMCExpSetGMSettings(cfgName, g)
+	if err != nil {
+		glog.Errorf("failed to update GRANDMASTER_SETTINGS_NP: %s", err)
 	}
-	return 0
 }
 
 // GetPTPState ...
