@@ -517,7 +517,7 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 }
 
 func (p *ptpProcess) updateClockClass(c *net.Conn) {
-	if _, matches, e := pmc.RunPMCExp(p.configName, pmc.CmdParentDataSet, pmc.ClockClassChangeRegEx); e == nil {
+	if _, matches, e := pmc.RunPMCExp(p.configName, pmc.CmdGetParentDataSet, pmc.ClockClassChangeRegEx); e == nil {
 		//regex: 'gm.ClockClass[[:space:]]+(\d+)'
 		//match  1: 'gm.ClockClass                         135'
 		//match  2: '135'
