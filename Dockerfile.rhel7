@@ -1,11 +1,11 @@
-FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.20-openshift-4.14 AS builder
+FROM registry.ci.openshift.org/ocp/4.14:base AS builder
 WORKDIR /go/src/github.com/openshift/linuxptp-daemon
 COPY . .
 RUN make clean && make
 
 
 
-FROM registry.ci.openshift.org/ocp/4.14:base as buildgps
+FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.20-openshift-4.14 AS buildgps
 
 RUN yum -y install git python3-pip gcc ncurses-devel
 
