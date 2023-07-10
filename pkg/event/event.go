@@ -109,7 +109,7 @@ type EventChannel struct {
 	State       PTPState            // PTP locked etc
 	IFace       string              // Interface that is causing the event
 	CfgName     string              // ptp config profile name
-	Values      map[ValueType]int64 // either offset or status   , 3 information  offset , phase state and frequency state
+	Values      map[ValueType]int64 // either offset or status , 3 information  offset , phase state and frequency state
 	logString   string              // if logstring sent here then log is not printed by the process and it is managed here
 	ClockType   ClockType           // oc bc gm
 	Time        int64               // time.Unix.Now()
@@ -186,26 +186,30 @@ func (e *EventHandler) ProcessEvents() {
 			}
 		}
 		glog.Info("Starting event monitoring...")
-		writeEventToLog := false
-
 		// listen To any requests
 		go e.listenToStateRequest()
-
+		lastGmState := PTP_UNKNOWN
+		gmStateInitalized := false
 		for {
 			select {
 			case event := <-e.processChannel:
 				// ts2phc[123455]:[ts2phc.0.config] 12345 s0 offset/gps
 				// replace ts2phc logs here
 				var logOut []string
-				for k, v := range event.Values {
-					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s %d %s\n", event.ProcessName,
-						time.Now().Unix(), event.CfgName, k, v, event.State))
+				if event.WriteToLog {
+					var logData []string
+					for k, v := range event.Values {
+						logData = append(logData, fmt.Sprintf("%s %d", k, v))
+					}
+					logDataValues := strings.Join(logData, " ")
+					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s %s\n", event.ProcessName,
+						time.Now().Unix(), event.CfgName, logDataValues, event.State))
 				}
-
 				if event.Reset { // clean up
 					if event.ProcessName == TS2PHC {
 						e.unregisterMetrics(event.CfgName, "")
 						delete(e.data, event.CfgName)
+						gmStateInitalized = false
 					} else {
 						// Check if the index is within the slice bounds
 						for indexToRemove, d := range e.data[event.CfgName] {
@@ -234,6 +238,7 @@ func (e *EventHandler) ProcessEvents() {
 					for i, d := range e.data[event.CfgName] {
 						if d.ProcessName == event.ProcessName {
 							e.data[event.CfgName][i].State = event.State
+							e.data[event.CfgName][i].IFace = event.IFace
 							found = true
 						}
 					}
@@ -243,23 +248,27 @@ func (e *EventHandler) ProcessEvents() {
 							State:       event.State,
 							ClockType:   event.ClockType,
 							Metrics:     map[ValueType]DataMetrics{},
+							IFace:       event.IFace,
 						})
 					}
 				}
 
 				/// get Current GM state computing from DPLL, GNSS & ts2phc state
 				gmState := e.getGMState(event.CfgName)
-				if !e.stdoutToSocket { // if event s not enabled
-					e.updateMetrics(event.CfgName, event.ProcessName, event.Values)
-					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
-					e.UpdateClockStateMetrics(gmState, "GM", event.IFace)
+				if !e.stdoutToSocket { // if events not enabled
+					if event.ProcessName != TS2PHCProcessName {
+						e.updateMetrics(event.CfgName, event.ProcessName, event.Values)
+						e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
+					}
+					e.UpdateClockStateMetrics(gmState, string(GM), event.IFace)
 				}
-				writeEventToLog = true
 				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, e.getGMState(event.CfgName)))
-				clockClass := e.updateCLockClass(event.CfgName, gmState, event.ClockType)
-				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
-
-				if writeEventToLog {
+				if lastGmState != gmState || !gmStateInitalized {
+					gmStateInitalized = true
+					clockClass := e.updateCLockClass(event.CfgName, gmState, event.ClockType)
+					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
+				}
+				if event.WriteToLog {
 					if e.stdoutToSocket {
 						for _, l := range logOut {
 							_, err := c.Write([]byte(l))
@@ -382,18 +391,17 @@ func (e *EventHandler) listenToStateRequest() {
 
 // UpdateClockStateMetrics ...
 func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace string) {
+	labels := prometheus.Labels{}
+	labels = prometheus.Labels{
+		"process": process, "node": e.nodeName, "iface": iFace}
 	if state == PTP_LOCKED {
-		e.clockMetric.With(prometheus.Labels{
-			"process": process, "node": e.nodeName, "iface": iFace}).Set(1)
+		e.clockMetric.With(labels).Set(1)
 	} else if state == PTP_FREERUN {
-		e.clockMetric.With(prometheus.Labels{
-			"process": process, "node": e.nodeName, "iface": iFace}).Set(0)
+		e.clockMetric.With(labels).Set(0)
 	} else if state == PTP_HOLDOVER {
-		e.clockMetric.With(prometheus.Labels{
-			"process": process, "node": e.nodeName, "iface": iFace}).Set(2)
+		e.clockMetric.With(labels).Set(2)
 	} else {
-		e.clockMetric.With(prometheus.Labels{
-			"process": process, "node": e.nodeName, "iface": iFace}).Set(3)
+		e.clockMetric.With(labels).Set(3)
 	}
 }
 func (e *EventHandler) updateMetrics(cfgName string, process EventSource, processData map[ValueType]int64) {
@@ -426,7 +434,7 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 								Name:          string(dataType),
 								ValueType:     prometheus.GaugeValue,
 								Labels: map[string]string{"from": string(d.ProcessName), "node": e.nodeName,
-									"process": string(d.ProcessName), "iface": ""},
+									"process": string(d.ProcessName), "iface": d.IFace},
 								Value: float64(value),
 							}
 							registerMetrics(metrics.GaugeMetric)
