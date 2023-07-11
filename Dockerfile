@@ -8,15 +8,13 @@ RUN make clean && make
 FROM registry.ci.openshift.org/ocp/4.14:base as buildgps
 
 RUN yum -y install git python3-pip gcc ncurses-devel
-
-RUN pip3 install scons \
-	&& git clone https://gitlab.com/gpsd/gpsd.git
+RUN git clone https://gitlab.com/gpsd/gpsd.git
+COPY requirements.txt requirements.txt
+RUN pip3 install -r requirements.txt
 
 WORKDIR /gpsd
-
 RUN scons -c \
-	&& scons install
-	#&& scons udev-install
+       && scons install
 
 FROM registry.ci.openshift.org/ocp/4.14:base
 
@@ -24,13 +22,9 @@ RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_i
 
 COPY --from=builder /go/src/github.com/openshift/linuxptp-daemon/bin/ptp /usr/local/bin/
 COPY ./extra/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
-
 RUN yum -y install python3-pip
-
-COPY --from=buildgps /usr/local/lib/python3.6/site-packages /usr/local/lib/python3.6/site-packages
-
-#add ubxtool dependency when gpsd is not used
-RUN pip3 install pyserial
+COPY requirements.txt requirements.txt
+RUN pip3 install -r requirements.txt
 
 #add gpsmon
 COPY --from=buildgps /usr/local/bin/gpsmon /usr/local/bin/gpsmon
