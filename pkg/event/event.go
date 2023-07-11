@@ -185,11 +185,11 @@ func (e *EventHandler) ProcessEvents() {
 				}
 			}
 		}
-		glog.Info("Starting event monitoring...")
+		glog.Info("starting grandmaster state monitoring...")
 		// listen To any requests
 		go e.listenToStateRequest()
 		lastGmState := PTP_UNKNOWN
-		gmStateInitalized := false
+		gmStateInitialized := false
 		for {
 			select {
 			case event := <-e.processChannel:
@@ -209,7 +209,7 @@ func (e *EventHandler) ProcessEvents() {
 					if event.ProcessName == TS2PHC {
 						e.unregisterMetrics(event.CfgName, "")
 						delete(e.data, event.CfgName)
-						gmStateInitalized = false
+						gmStateInitialized = false
 					} else {
 						// Check if the index is within the slice bounds
 						for indexToRemove, d := range e.data[event.CfgName] {
@@ -263,8 +263,9 @@ func (e *EventHandler) ProcessEvents() {
 					e.UpdateClockStateMetrics(gmState, string(GM), event.IFace)
 				}
 				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, e.getGMState(event.CfgName)))
-				if lastGmState != gmState || !gmStateInitalized {
-					gmStateInitalized = true
+				if lastGmState != gmState || !gmStateInitialized {
+					lastGmState = gmState
+					gmStateInitialized = true
 					clockClass := e.updateCLockClass(event.CfgName, gmState, event.ClockType)
 					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
 				}
