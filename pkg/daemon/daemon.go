@@ -466,6 +466,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			printNodeProfile(nodeProfile)
 			return fmt.Errorf("failed to write the configuration file named %s: %v", configPath, err)
 		}
+		printNodeProfile(nodeProfile)
 		dn.processManager.process = append(dn.processManager.process, &dprocess)
 	}
 
