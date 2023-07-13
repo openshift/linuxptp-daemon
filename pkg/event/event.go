@@ -110,7 +110,6 @@ type EventChannel struct {
 	IFace       string              // Interface that is causing the event
 	CfgName     string              // ptp config profile name
 	Values      map[ValueType]int64 // either offset or status , 3 information  offset , phase state and frequency state
-	logString   string              // if logstring sent here then log is not printed by the process and it is managed here
 	ClockType   ClockType           // oc bc gm
 	Time        int64               // time.Unix.Now()
 	WriteToLog  bool                // send to log in predefined format %s[%d]:[%s] %s %d
@@ -202,8 +201,8 @@ func (e *EventHandler) ProcessEvents() {
 						logData = append(logData, fmt.Sprintf("%s %d", k, v))
 					}
 					logDataValues := strings.Join(logData, " ")
-					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s %s\n", event.ProcessName,
-						time.Now().Unix(), event.CfgName, logDataValues, event.State))
+					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", event.ProcessName,
+						time.Now().Unix(), event.CfgName, event.IFace, logDataValues, event.State))
 				}
 				if event.Reset { // clean up
 					if event.ProcessName == TS2PHC {
@@ -262,7 +261,7 @@ func (e *EventHandler) ProcessEvents() {
 					}
 					e.UpdateClockStateMetrics(gmState, string(GM), event.IFace)
 				}
-				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, e.getGMState(event.CfgName)))
+				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, event.IFace, e.getGMState(event.CfgName)))
 				if lastGmState != gmState || !gmStateInitialized {
 					lastGmState = gmState
 					gmStateInitialized = true
