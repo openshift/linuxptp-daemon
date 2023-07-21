@@ -12,3 +12,6 @@ scons==4.5.2
 # The following packages are considered to be unsafe in a requirements file:
 setuptools==68.0.0
     # via scons
+
+gpsd @ git+https://gitlab.com/gpsd/gpsd@4ffd909e3270347af68fd61242f023729a27b50a
+

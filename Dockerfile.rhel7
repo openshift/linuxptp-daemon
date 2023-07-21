@@ -15,8 +15,7 @@ WORKDIR $REMOTE_SOURCES_DIR/app
 RUN yum -y install git python3-pip gcc ncurses-devel
 
 RUN source cachito.env && \
-    python -m pip install --no-cache-dir -r . && \
-	git clone https://gitlab.com/gpsd/gpsd.git
+    python -m pip install --no-cache-dir -r .
 
 WORKDIR /gpsd
 
