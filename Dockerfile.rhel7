@@ -14,7 +14,7 @@ WORKDIR $REMOTE_SOURCES_DIR/app
 
 RUN yum -y install git python3-pip gcc ncurses-devel
 
-RUN source cachito.env && \
+RUN source ${REMOTE_SOURCES_DIR}/cachito-gomod-with-deps/cachito.env && \
     python -m pip install --no-cache-dir -r .
 
 WORKDIR /gpsd
@@ -43,7 +43,7 @@ RUN yum -y install python3-pip
 COPY --from=buildgps /usr/local/lib/python3.6/site-packages /usr/local/lib/python3.6/site-packages
 
 #add ubxtool dependency when gpsd is not used
-RUN source cachito.env && \
+RUN source ${REMOTE_SOURCES_DIR}/cachito-gomod-with-deps/cachito.env && \
     python -m pip install --no-cache-dir -r .
 
 #add gpsmon
