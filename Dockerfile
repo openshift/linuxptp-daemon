@@ -3,8 +3,6 @@ WORKDIR /go/src/github.com/openshift/linuxptp-daemon
 COPY . .
 RUN make clean && make
 
-
-
 FROM registry.ci.openshift.org/ocp/4.14:base as buildgps
 
 RUN yum -y install git python3-pip gcc ncurses-devel
@@ -28,9 +26,6 @@ COPY ./extra/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
 RUN yum -y install python3-pip
 
 COPY --from=buildgps /usr/local/lib/python3.6/site-packages /usr/local/lib/python3.6/site-packages
-
-#add ubxtool dependency when gpsd is not used
-RUN pip3 install pyserial
 
 #add gpsmon
 COPY --from=buildgps /usr/local/bin/gpsmon /usr/local/bin/gpsmon
