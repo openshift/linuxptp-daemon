@@ -271,6 +271,7 @@ func (e *EventHandler) ProcessEvents() {
 				if event.WriteToLog {
 					if e.stdoutToSocket {
 						for _, l := range logOut {
+							fmt.Printf("%s", l)
 							_, err := c.Write([]byte(l))
 							if err != nil {
 								glog.Errorf("Write error %s:", err)
@@ -375,16 +376,25 @@ func (e *EventHandler) GetPTPState(source EventSource, cfgName string) PTPState 
 
 func (e *EventHandler) listenToStateRequest() {
 	for {
+	checkStatus:
 		select {
 		case request := <-e.statusRequestChannel:
 			if m, ok := e.data[request.CfgName]; ok {
 				for _, v := range m {
 					if v.ProcessName == request.Source {
 						request.ResponseChannel <- v.State
+						goto checkStatus
 					}
 				}
+			} else {
+				select {
+				case request.ResponseChannel <- PTP_UNKNOWN:
+					glog.Errorf("failed to find process %s in %s sending UNKNOW", request.Source, request.CfgName)
+				case <-time.After(250 * time.Millisecond): // timeout
+					glog.Errorf("failed to send response to %s", request.Source)
+				}
 			}
-			request.ResponseChannel <- PTP_UNKNOWN
+
 		}
 	}
 }
@@ -489,11 +499,13 @@ func (e *EventHandler) unregisterMetrics(configName string, processName string) 
 func GetPTPStateRequest(request StatusRequest) {
 	// Send a status request
 	//responseChannel := make(chan string)
-	statusRequestChannel <- request
-
+	select {
+	case statusRequestChannel <- request:
+	case <-time.After(200 * time.Millisecond): //TODO:move this to non blocking call
+		glog.Info("timeout waiting for GM status request")
+	}
 	// Wait for and receive the response
 	//response := <-responseChannel
-
 }
 func getMetricName(valueType ValueType) string {
 	if strings.HasSuffix(string(valueType), string(OFFSET)) {
