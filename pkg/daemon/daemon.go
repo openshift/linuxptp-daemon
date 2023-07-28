@@ -97,6 +97,8 @@ type Daemon struct {
 
 	hwconfigs *[]ptpv1.HwConfig
 
+	refreshNodePtpDevice *bool
+
 	// channel ensure LinuxPTP.Run() exit when main function exits.
 	// stopCh is created by main function and passed by Daemon via NewLinuxPTP()
 	stopCh <-chan struct{}
@@ -117,6 +119,7 @@ func New(
 	stopCh <-chan struct{},
 	plugins []string,
 	hwconfigs *[]ptpv1.HwConfig,
+	refreshNodePtpDevice *bool,
 	closeManager chan bool,
 	pmcPollInterval int,
 ) *Daemon {
@@ -126,14 +129,15 @@ func New(
 	pluginManager := registerPlugins(plugins)
 	eventChannel := make(chan event.EventChannel, 10)
 	return &Daemon{
-		nodeName:        nodeName,
-		namespace:       namespace,
-		stdoutToSocket:  stdoutToSocket,
-		kubeClient:      kubeClient,
-		ptpUpdate:       ptpUpdate,
-		pluginManager:   pluginManager,
-		hwconfigs:       hwconfigs,
-		pmcPollInterval: pmcPollInterval,
+		nodeName:             nodeName,
+		namespace:            namespace,
+		stdoutToSocket:       stdoutToSocket,
+		kubeClient:           kubeClient,
+		ptpUpdate:            ptpUpdate,
+		pluginManager:        pluginManager,
+		hwconfigs:            hwconfigs,
+		refreshNodePtpDevice: refreshNodePtpDevice,
+		pmcPollInterval:      pmcPollInterval,
 		//TODO:Enable only for GM
 		processManager: &ProcessManager{
 			process:         nil,
@@ -268,6 +272,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 		}
 	}
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
+	*dn.refreshNodePtpDevice = true
 	return nil
 }
 
