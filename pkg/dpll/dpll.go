@@ -24,6 +24,10 @@ const (
 	LocalHoldoverTimeout   = 14400 //secs
 	MaxInSpecOffset        = 100   //ns
 	monitoringInterval     = 1 * time.Second
+
+	LocalMaxHoldoverOffSetStr = "LocalMaxHoldoverOffSet"
+	LocalHoldoverTimeoutStr   = "LocalHoldoverTimeout"
+	MaxInSpecOffsetStr        = "MaxInSpecOffset"
 )
 
 type DpllConfig struct {
@@ -79,6 +83,7 @@ func (d *DpllConfig) CmdRun(stdToSocket bool) {
 
 func NewDpll(localMaxHoldoverOffSet, localHoldoverTimeout, maxInSpecOffset int64,
 	iface string, dependingState []event.EventSource) *DpllConfig {
+	glog.Infof("Calling NewDpll with localMaxHoldoverOffSet=%d, localHoldoverTimeout=%d, maxInSpecOffset=%d, iface=%s", localMaxHoldoverOffSet, localHoldoverTimeout, maxInSpecOffset, iface)
 	d := &DpllConfig{
 		LocalMaxHoldoverOffSet: localMaxHoldoverOffSet,
 		LocalHoldoverTimeout:   localHoldoverTimeout,
