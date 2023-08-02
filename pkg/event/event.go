@@ -375,27 +375,33 @@ func (e *EventHandler) GetPTPState(source EventSource, cfgName string) PTPState 
 }
 
 func (e *EventHandler) listenToStateRequest() {
+	var request StatusRequest
 	for {
-	checkStatus:
-		select {
-		case request := <-e.statusRequestChannel:
-			if m, ok := e.data[request.CfgName]; ok {
-				for _, v := range m {
-					if v.ProcessName == request.Source {
-						request.ResponseChannel <- v.State
-						goto checkStatus
+		request = <-e.statusRequestChannel
+		if m, ok := e.data[request.CfgName]; ok {
+			for _, v := range m {
+				if v.ProcessName == request.Source {
+					// Attempt to respond to the channel, or
+					// timeout if nobody listening
+					select {
+					case request.ResponseChannel <- v.State:
+						goto cont
+					case <-time.After(250 * time.Millisecond):
+						glog.Errorf("failed to send response to %s", request.Source)
+						goto cont
 					}
 				}
-			} else {
-				select {
-				case request.ResponseChannel <- PTP_UNKNOWN:
-					glog.Errorf("failed to find process %s in %s sending UNKNOW", request.Source, request.CfgName)
-				case <-time.After(250 * time.Millisecond): // timeout
-					glog.Errorf("failed to send response to %s", request.Source)
-				}
 			}
-
+		} else {
+			select {
+			case request.ResponseChannel <- PTP_UNKNOWN:
+				glog.Errorf("failed to find process %s in %s sending UNKNOWN", request.Source, request.CfgName)
+			case <-time.After(250 * time.Millisecond): // timeout
+				glog.Errorf("failed to send response to %s", request.Source)
+			}
 		}
+
+	cont:
 	}
 }
 
@@ -488,7 +494,7 @@ func (e *EventHandler) unregisterMetrics(configName string, processName string) 
 }
 
 // GetPTPStateRequest ...
-// GetPTPStateRequestChannel if Plugin requires to know the status of other compoenent they could use this  channel
+// GetPTPStateRequestChannel if Plugin requires to know the status of other component they could use this channel
 // Send a status request
 //
 //	 responseChannel := make(chan string)
@@ -497,15 +503,11 @@ func (e *EventHandler) unregisterMetrics(configName string, processName string) 
 //		Wait for and receive the response
 //		response := <-responseChannel
 func GetPTPStateRequest(request StatusRequest) {
-	// Send a status request
-	//responseChannel := make(chan string)
 	select {
 	case statusRequestChannel <- request:
-	case <-time.After(200 * time.Millisecond): //TODO:move this to non blocking call
-		glog.Info("timeout waiting for GM status request")
+	case <-time.After(200 * time.Millisecond):
+		glog.Warning("event: failed to send request to statusRequestChannel")
 	}
-	// Wait for and receive the response
-	//response := <-responseChannel
 }
 func getMetricName(valueType ValueType) string {
 	if strings.HasSuffix(string(valueType), string(OFFSET)) {

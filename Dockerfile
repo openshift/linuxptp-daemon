@@ -5,6 +5,8 @@ RUN make clean && make
 
 FROM registry.ci.openshift.org/ocp/4.14:base as buildgps
 
+COPY ./extra/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
+
 RUN yum -y install git python3-pip gcc ncurses-devel
 
 RUN pip3 install scons \
@@ -19,9 +21,6 @@ RUN scons -c \
 FROM registry.ci.openshift.org/ocp/4.14:base
 
 RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata  && yum clean all
-
-COPY --from=builder /go/src/github.com/openshift/linuxptp-daemon/bin/ptp /usr/local/bin/
-COPY ./extra/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
 
 RUN yum -y install python3-pip
 
@@ -38,6 +37,8 @@ COPY --from=buildgps /usr/local/bin/gpspipe /usr/local/bin/gpspipe
 
 #add gpsd
 COPY --from=buildgps /usr/local/sbin/gpsd /usr/local/sbin/gpsd
+
+COPY --from=builder /go/src/github.com/openshift/linuxptp-daemon/bin/ptp /usr/local/bin/
 
 ENV PYTHONPATH=/usr/local/lib/python3.6/site-packages
 
