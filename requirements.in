@@ -1,2 +1,2 @@
-pyserial
-scons
+scons==4.2.0
+
