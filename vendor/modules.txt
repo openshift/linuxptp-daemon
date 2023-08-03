@@ -7,6 +7,9 @@ github.com/PuerkitoBio/urlesc
 # github.com/StackExchange/wmi v1.2.1
 ## explicit; go 1.13
 github.com/StackExchange/wmi
+# github.com/aneeshkp/go-gpsd v0.0.0-20230804165302-4a2d069c566a
+## explicit; go 1.20
+github.com/aneeshkp/go-gpsd
 # github.com/beorn7/perks v1.0.1
 ## explicit; go 1.11
 github.com/beorn7/perks/quantile
