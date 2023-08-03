@@ -3,18 +3,6 @@ WORKDIR /go/src/github.com/openshift/linuxptp-daemon
 COPY . .
 RUN make clean && make
 
-FROM registry.ci.openshift.org/ocp/4.14:base as buildgps
-RUN yum -y install git python3-pip gcc ncurses-devel
-
-RUN pip3 install scons \
-	&& git clone https://gitlab.com/gpsd/gpsd.git
-
-WORKDIR /gpsd
-
-RUN scons -c \
-	&& scons install
-	#&& scons udev-install
-
 FROM registry.ci.openshift.org/ocp/4.14:base
 RUN yum -y update && yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata && yum clean all
 COPY --from=builder /go/src/github.com/openshift/linuxptp-daemon/bin/ptp /usr/local/bin/
