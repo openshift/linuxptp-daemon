@@ -3,6 +3,7 @@ package event
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -196,10 +197,11 @@ func (e *EventHandler) ProcessEvents() {
 				// replace ts2phc logs here
 				var logOut []string
 				if event.WriteToLog {
-					var logData []string
+					logData := make([]string, 0, len(event.Values))
 					for k, v := range event.Values {
 						logData = append(logData, fmt.Sprintf("%s %d", k, v))
 					}
+					sort.Strings(logData)
 					logDataValues := strings.Join(logData, " ")
 					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", event.ProcessName,
 						time.Now().Unix(), event.CfgName, event.IFace, logDataValues, event.State))
