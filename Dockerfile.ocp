@@ -4,6 +4,13 @@ COPY . .
 RUN make clean && make
 
 FROM registry.ci.openshift.org/ocp/4.14:base as buildgps
+ARG GITLAB_COMMIT_SHA="4ffd909e3270347af68fd61242f023729a27b50a"
+ARG REMOTE_SOURCES
+ARG REMOTE_SOURCES_DIR
+
+# get artifacts from cachito
+COPY $REMOTE_SOURCES $REMOTE_SOURCES_DIR
+WORKDIR $REMOTE_SOURCES_DIR/cachito-gomod-with-deps/app
 
 RUN yum -y install git python3-devel python3-setuptools python3-wheel python3-pip gcc ncurses-devel
 
