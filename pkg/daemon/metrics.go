@@ -61,9 +61,9 @@ const (
 )
 
 var (
-	masterOffsetIfaceName     map[string]string // by slave iface with masked index
-	slaveIfaceName            map[string]string // current slave iface name
-	masterOffsetSourceProfile map[string]string // which profile and source is used for master offset
+	masterOffsetIfaceName     sync.Map // by slave iface with masked index
+	slaveIfaceName            sync.Map // current slave iface name
+	masterOffsetSourceProfile sync.Map // which profile and source is used for master offset
 	NodeName                  = ""
 
 	Offset = prometheus.NewGaugeVec(
@@ -152,10 +152,6 @@ func RegisterMetrics(nodeName string) {
 
 		NodeName = nodeName
 	})
-
-	masterOffsetIfaceName = map[string]string{}
-	slaveIfaceName = map[string]string{}
-	masterOffsetSourceProfile = map[string]string{}
 }
 
 // updatePTPMetrics ...
@@ -183,7 +179,7 @@ func extractMetrics(messageTag string, processName string, ifaces []string, outp
 				updatePTPMetrics(phc, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
 			} else {
 				updatePTPMetrics(master, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
-				masterOffsetSourceProfile[configName] = processName
+				masterOffsetSourceProfile.Store(configName, processName)
 			}
 		}
 	} else if strings.Contains(output, " offset ") {
@@ -199,7 +195,7 @@ func extractMetrics(messageTag string, processName string, ifaces []string, outp
 				offsetSource = phc
 			}
 			if offsetSource == master {
-				masterOffsetSourceProfile[configName] = processName
+				masterOffsetSourceProfile.Store(configName, processName)
 			}
 			updatePTPMetrics(offsetSource, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
 			updateClockStateMetrics(processName, ifaceName, clockstate)
@@ -215,15 +211,15 @@ func extractMetrics(messageTag string, processName string, ifaces []string, outp
 				UpdateInterfaceRoleMetrics(processName, ifaces[portId-1], role)
 				if role == SLAVE {
 					r := []rune(ifaces[portId-1])
-					masterOffsetIfaceName[configName] = string(r[:len(r)-1]) + "x"
-					slaveIfaceName[configName] = ifaces[portId-1]
+					masterOffsetIfaceName.Store(configName, string(r[:len(r)-1])+"x")
+					slaveIfaceName.Store(configName, ifaces[portId-1])
 				} else if role == FAULTY { // only if ptp4l is processing offset, ts2phc offset won't affect by port faulty
 					if isSlaveFaulty(configName, ifaces[portId-1]) &&
 						getMasterSourceProcess(configName) == ptp4lProcessName {
 						updatePTPMetrics(master, processName, getMasterOffsetIfaceName(configName), faultyOffset, faultyOffset, 0, 0)
 						updatePTPMetrics(phc, phcProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
-						masterOffsetIfaceName[configName] = ""
-						slaveIfaceName[configName] = ""
+						masterOffsetIfaceName.Store(configName, "")
+						slaveIfaceName.Store(configName, "")
 					}
 				}
 			}
@@ -335,8 +331,8 @@ func extractRegularMetrics(configName, processName, output string) (err error, i
 	if fields[3] == offset && processName == ts2phcProcessName {
 		// Remove the element at index 1 from fields.
 		r := []rune(fields[1])
-		masterOffsetIfaceName[configName] = string(r[:len(r)-1]) + "x"
-		slaveIfaceName[configName] = fields[1]
+		masterOffsetIfaceName.Store(configName, string(r[:len(r)-1])+"x")
+		slaveIfaceName.Store(configName, fields[1])
 		copy(fields[1:], fields[2:])
 		// ts2phc.0.cfg  master    offset          0 s2 freq      -0
 		fields = fields[:len(fields)-1] // Truncate slice.
@@ -540,14 +536,14 @@ func StartMetricsServer(bindAddress string) {
 }
 
 func getMasterOffsetIfaceName(configName string) string {
-	if s, found := masterOffsetIfaceName[configName]; found {
-		return s
+	if s, found := masterOffsetIfaceName.Load(configName); found {
+		return s.(string)
 	}
 	return ""
 }
 
 func isSlaveFaulty(configName string, iface string) bool {
-	if s, found := slaveIfaceName[configName]; found {
+	if s, found := slaveIfaceName.Load(configName); found {
 		if s == iface {
 			return true
 		}
@@ -555,8 +551,8 @@ func isSlaveFaulty(configName string, iface string) bool {
 	return false
 }
 func getMasterSourceProcess(configName string) string {
-	if s, found := masterOffsetSourceProfile[configName]; found {
-		return s
+	if s, found := masterOffsetSourceProfile.Load(configName); found {
+		return s.(string)
 	}
 	return ptp4lProcessName // default is ptp4l
 }
