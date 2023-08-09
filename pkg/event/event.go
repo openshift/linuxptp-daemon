@@ -268,12 +268,17 @@ func (e *EventHandler) ProcessEvents() {
 					}
 					e.UpdateClockStateMetrics(gmState, string(GM), event.IFace)
 				}
-				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, event.IFace, e.getGMState(event.CfgName)))
+				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, event.IFace, gmState))
 				if lastGmState != gmState || !gmStateInitialized {
-					lastGmState = gmState
 					gmStateInitialized = true
-					clockClass := e.updateCLockClass(event.CfgName, gmState, event.ClockType)
-					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
+					err, clockClass := e.updateCLockClass(event.CfgName, gmState, event.ClockType)
+					if err == nil {
+						// in case an error do not update lastGmState so that updateCLockClass can be tried again
+						lastGmState = gmState
+						logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
+					} else {
+						glog.Errorf("failed to updateClockClass: %v", err)
+					}
 				}
 				if event.WriteToLog {
 					if e.stdoutToSocket {
@@ -299,11 +304,11 @@ func (e *EventHandler) ProcessEvents() {
 	}()
 }
 
-func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clockType ClockType) (clockClass fbprotocol.ClockClass) {
+func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clockType ClockType) (err error, clockClass fbprotocol.ClockClass) {
 	g, err := runGetGMSettings(cfgName)
 	if err != nil {
 		glog.Errorf("failed to get current GRANDMASTER_SETTINGS_NP: %s", err)
-		return clockClass
+		return err, clockClass
 	}
 	glog.Infof("current GRANDMASTER_SETTINGS_NP:\n%s", g.String())
 	switch ptpState {
@@ -316,7 +321,7 @@ func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clock
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
-				runUpdateGMSettings(cfgName, g)
+				err = runUpdateGMSettings(cfgName, g)
 			}
 		case OC:
 		case BC:
@@ -330,7 +335,7 @@ func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clock
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
-				runUpdateGMSettings(cfgName, g)
+				err = runUpdateGMSettings(cfgName, g)
 			}
 		case OC:
 		case BC:
@@ -344,14 +349,14 @@ func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clock
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
-				runUpdateGMSettings(cfgName, g)
+				err = runUpdateGMSettings(cfgName, g)
 			}
 		case OC:
 		case BC:
 		}
 	default:
 	}
-	return g.ClockQuality.ClockClass
+	return err, g.ClockQuality.ClockClass
 }
 
 func runGetGMSettings(cfgName string) (protocol.GrandmasterSettings, error) {
@@ -360,13 +365,14 @@ func runGetGMSettings(cfgName string) (protocol.GrandmasterSettings, error) {
 	return pmc.RunPMCExpGetGMSettings(cfgName)
 }
 
-func runUpdateGMSettings(cfgName string, g protocol.GrandmasterSettings) {
+func runUpdateGMSettings(cfgName string, g protocol.GrandmasterSettings) error {
 	cfgName = strings.Replace(cfgName, TS2PHCProcessName, PTP4lProcessName, 1)
 
 	err := pmc.RunPMCExpSetGMSettings(cfgName, g)
 	if err != nil {
-		glog.Errorf("failed to update GRANDMASTER_SETTINGS_NP: %s", err)
+		return fmt.Errorf("failed to update GRANDMASTER_SETTINGS_NP: %s", err)
 	}
+	return nil
 }
 
 // GetPTPState ...
