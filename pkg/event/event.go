@@ -84,25 +84,15 @@ const connectionRetryInterval = 1 * time.Second
 // EventHandler ... event handler to process events
 type EventHandler struct {
 	sync.Mutex
-	nodeName             string
-	stdoutSocket         string
-	stdoutToSocket       bool
-	processChannel       <-chan EventChannel
-	closeCh              chan bool
-	data                 map[string][]Data
-	statusRequestChannel chan StatusRequest
-	offsetMetric         *prometheus.GaugeVec
-	clockMetric          *prometheus.GaugeVec
+	nodeName       string
+	stdoutSocket   string
+	stdoutToSocket bool
+	processChannel <-chan EventChannel
+	closeCh        chan bool
+	data           map[string][]Data
+	offsetMetric   *prometheus.GaugeVec
+	clockMetric    *prometheus.GaugeVec
 }
-type StatusRequest struct {
-	Source          EventSource
-	CfgName         string
-	ResponseChannel chan<- PTPState
-}
-
-var (
-	statusRequestChannel chan StatusRequest
-)
 
 // EventChannel .. event channel to subscriber to events
 type EventChannel struct {
@@ -130,17 +120,15 @@ func (e *EventHandler) MockEnable() {
 // Init ... initialize event manager
 func Init(nodeName string, stdOutToSocket bool, socketName string, processChannel chan EventChannel, closeCh chan bool,
 	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec) *EventHandler {
-	statusRequestChannel = make(chan StatusRequest)
 	ptpEvent := &EventHandler{
-		nodeName:             nodeName,
-		stdoutSocket:         socketName,
-		stdoutToSocket:       stdOutToSocket,
-		closeCh:              closeCh,
-		processChannel:       processChannel,
-		data:                 map[string][]Data{},
-		statusRequestChannel: statusRequestChannel,
-		clockMetric:          clockMetric,
-		offsetMetric:         offsetMetric,
+		nodeName:       nodeName,
+		stdoutSocket:   socketName,
+		stdoutToSocket: stdOutToSocket,
+		closeCh:        closeCh,
+		processChannel: processChannel,
+		data:           map[string][]Data{},
+		clockMetric:    clockMetric,
+		offsetMetric:   offsetMetric,
 	}
 
 	EventStateRegisterer = NewStateNotifier()
@@ -174,134 +162,141 @@ func (e *EventHandler) ProcessEvents() {
 			}
 		}
 	}()
-	go func() {
-	connect:
-		select {
-		case <-e.closeCh:
-			return
-		default:
-			if e.stdoutToSocket {
-				c, err = net.Dial("unix", e.stdoutSocket)
-				if err != nil {
-					glog.Errorf("event process error trying to connect to event socket %s", err)
-					time.Sleep(connectionRetryInterval)
-					goto connect
-				}
+connect:
+	select {
+	case <-e.closeCh:
+		return
+	default:
+		if e.stdoutToSocket {
+			c, err = net.Dial("unix", e.stdoutSocket)
+			if err != nil {
+				glog.Errorf("event process error trying to connect to event socket %s", err)
+				time.Sleep(connectionRetryInterval)
+				goto connect
 			}
 		}
-		glog.Info("starting grandmaster state monitoring...")
-		lastGmState := PTP_UNKNOWN
-		gmStateInitialized := false
-		for {
-			select {
-			case event := <-e.processChannel:
-				// ts2phc[123455]:[ts2phc.0.config] 12345 s0 offset/gps
-				// replace ts2phc logs here
-				var logOut []string
-				if event.WriteToLog {
-					logData := make([]string, 0, len(event.Values))
-					for k, v := range event.Values {
-						logData = append(logData, fmt.Sprintf("%s %d", k, v))
-					}
-					sort.Strings(logData)
-					logDataValues := strings.Join(logData, " ")
-					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", event.ProcessName,
-						time.Now().Unix(), event.CfgName, event.IFace, logDataValues, event.State))
+	}
+	glog.Info("starting grandmaster state monitoring...")
+	lastGmState := PTP_UNKNOWN
+	gmStateInitialized := false
+	for {
+		select {
+		case event := <-e.processChannel:
+			// ts2phc[123455]:[ts2phc.0.config] 12345 s0 offset/gps
+			// replace ts2phc logs here
+			var logOut []string
+			if event.WriteToLog {
+				logData := make([]string, 0, len(event.Values))
+				for k, v := range event.Values {
+					logData = append(logData, fmt.Sprintf("%s %d", k, v))
 				}
-				if event.Reset { // clean up
-					if event.ProcessName == TS2PHC {
-						e.unregisterMetrics(event.CfgName, "")
-						delete(e.data, event.CfgName)
-						gmStateInitialized = false
-					} else {
-						// Check if the index is within the slice bounds
-						for indexToRemove, d := range e.data[event.CfgName] {
-							if d.ProcessName == event.ProcessName {
-								e.unregisterMetrics(event.CfgName, string(event.ProcessName))
-								if indexToRemove < len(e.data[event.CfgName]) {
-									e.data[event.CfgName] = append(e.data[event.CfgName][:indexToRemove], e.data[event.CfgName][indexToRemove+1:]...)
-								}
+				sort.Strings(logData)
+				logDataValues := strings.Join(logData, " ")
+				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", event.ProcessName,
+					time.Now().Unix(), event.CfgName, event.IFace, logDataValues, event.State))
+			}
+			if event.Reset { // clean up
+				if event.ProcessName == TS2PHC {
+					e.unregisterMetrics(event.CfgName, "")
+					delete(e.data, event.CfgName)
+					gmStateInitialized = false
+				} else {
+					// Check if the index is within the slice bounds
+					for indexToRemove, d := range e.data[event.CfgName] {
+						if d.ProcessName == event.ProcessName {
+							e.unregisterMetrics(event.CfgName, string(event.ProcessName))
+							if indexToRemove < len(e.data[event.CfgName]) {
+								e.data[event.CfgName] = append(e.data[event.CfgName][:indexToRemove], e.data[event.CfgName][indexToRemove+1:]...)
 							}
 						}
 					}
-					continue
 				}
+				continue
+			}
 
-				// Update the in MemData
-				if _, ok := e.data[event.CfgName]; !ok {
-					e.data[event.CfgName] = []Data{{
+			// Update the in MemData
+			if _, ok := e.data[event.CfgName]; !ok {
+				e.data[event.CfgName] = []Data{{
+					ProcessName: event.ProcessName,
+					State:       event.State,
+					ClockType:   event.ClockType,
+					IFace:       event.IFace,
+					Metrics:     map[ValueType]DataMetrics{},
+				}}
+				go EventStateRegisterer.notify(event.ProcessName, event.State)
+			} else {
+				found := false
+				for i, d := range e.data[event.CfgName] {
+					if d.ProcessName == event.ProcessName {
+						if d.State != event.State { // state changed
+							go EventStateRegisterer.notify(event.ProcessName, event.State)
+						}
+						e.data[event.CfgName][i].State = event.State
+						e.data[event.CfgName][i].IFace = event.IFace
+						found = true
+					}
+				}
+				if !found {
+					e.data[event.CfgName] = append(e.data[event.CfgName], Data{
 						ProcessName: event.ProcessName,
 						State:       event.State,
 						ClockType:   event.ClockType,
-						IFace:       event.IFace,
 						Metrics:     map[ValueType]DataMetrics{},
-					}}
-				} else {
-					found := false
-					for i, d := range e.data[event.CfgName] {
-						if d.ProcessName == event.ProcessName {
-							e.data[event.CfgName][i].State = event.State
-							e.data[event.CfgName][i].IFace = event.IFace
-							found = true
-						}
-					}
-					if !found {
-						e.data[event.CfgName] = append(e.data[event.CfgName], Data{
-							ProcessName: event.ProcessName,
-							State:       event.State,
-							ClockType:   event.ClockType,
-							Metrics:     map[ValueType]DataMetrics{},
-							IFace:       event.IFace,
-						})
-					}
+						IFace:       event.IFace,
+					})
 				}
-				EventStateRegisterer.notify(event.ProcessName, event.State)
-
-				/// get Current GM state computing from DPLL, GNSS & ts2phc state
-				gmState := e.getGMState(event.CfgName)
-
-				// Update the metrics
-				if !e.stdoutToSocket { // if events not enabled
-					if event.ProcessName != TS2PHCProcessName {
-						e.updateMetrics(event.CfgName, event.ProcessName, event.Values)
-						e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
-					}
-					e.UpdateClockStateMetrics(gmState, string(GM), event.IFace)
-				}
-				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, event.IFace, gmState))
-				if lastGmState != gmState || !gmStateInitialized {
-					gmStateInitialized = true
-					err, clockClass := e.updateCLockClass(event.CfgName, gmState, event.ClockType)
-					if err == nil {
-						// in case an error do not update lastGmState so that updateCLockClass can be tried again
-						lastGmState = gmState
-						logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
-					} else {
-						glog.Errorf("failed to updateClockClass: %v", err)
-					}
-				}
-				if event.WriteToLog {
-					if e.stdoutToSocket {
-						for _, l := range logOut {
-							fmt.Printf("%s", l)
-							_, err := c.Write([]byte(l))
-							if err != nil {
-								glog.Errorf("Write error %s:", err)
-								goto connect
-							}
-						}
-					} else {
-						for _, l := range logOut {
-							fmt.Printf("%s", l)
-						}
-					}
-				}
-			case <-e.closeCh:
-				return
 			}
+
+			/// get Current GM state computing from DPLL, GNSS & ts2phc state
+			gmState := e.getGMState(event.CfgName)
+
+			// Update the metrics
+			if !e.stdoutToSocket { // if events not enabled
+				if event.ProcessName != TS2PHCProcessName {
+					e.updateMetrics(event.CfgName, event.ProcessName, event.Values)
+					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
+				}
+				e.UpdateClockStateMetrics(gmState, string(GM), event.IFace)
+			}
+			logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, event.IFace, gmState))
+			if lastGmState != gmState || !gmStateInitialized {
+				gmStateInitialized = true
+				glog.Infof("GM state changed from %s to %s updating clock class ", lastGmState, gmState)
+				//TODO: update clock class is going to be called for every event, this is not efficient
+				// This is going to choke the system if there are too many events
+				// since pmc call takes time, have seen 5 seconds timeout error in logs
+				err, clockClass := e.updateCLockClass(event.CfgName, gmState, event.ClockType)
+				if err == nil {
+					// in case an error do not update lastGmState so that updateCLockClass can be tried again
+					lastGmState = gmState
+					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
+				} else {
+					glog.Errorf("failed to updateClockClass: %v", err)
+				}
+			}
+			if event.WriteToLog {
+				if e.stdoutToSocket {
+					for _, l := range logOut {
+						fmt.Printf("%s", l)
+						_, err := c.Write([]byte(l))
+						if err != nil {
+							glog.Errorf("Write error %s:", err)
+							goto connect
+						}
+					}
+				} else {
+					for _, l := range logOut {
+						fmt.Printf("%s", l)
+					}
+				}
+			}
+		case <-e.closeCh:
+			return
+		default:
+			time.Sleep(50 * time.Millisecond) // cpu saver
+			continue
 		}
-		return
-	}()
+	}
 }
 
 func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clockType ClockType) (err error, clockClass fbprotocol.ClockClass) {

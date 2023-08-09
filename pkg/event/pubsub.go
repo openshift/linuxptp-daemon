@@ -1,5 +1,7 @@
 package event
 
+import "sync"
+
 type Subscriber interface {
 	Notify(source EventSource, state PTPState)
 	Topic() EventSource
@@ -12,6 +14,7 @@ type Notifier interface {
 }
 
 type StateNotifier struct {
+	sync.Mutex
 	Subscribers map[Subscriber]struct {
 	}
 }
@@ -23,9 +26,11 @@ func (n *StateNotifier) Unregister(s Subscriber) {
 	delete(n.Subscribers, s)
 }
 func (n *StateNotifier) notify(source EventSource, state PTPState) {
+	n.Lock()
+	defer n.Unlock()
 	for o := range n.Subscribers {
 		if o.Topic() == source {
-			o.Notify(source, state)
+			go o.Notify(source, state)
 		}
 	}
 }
