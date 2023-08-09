@@ -21,7 +21,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	closeChn := make(chan bool)
 	go listenToEvents(closeChn)
 	time.Sleep(2 * time.Second)
-	eventMananger := event.Init("node", true, "/tmp/go.sock", eChannel, closeChn)
+	eventMananger := event.Init("node", true, "/tmp/go.sock", eChannel, closeChn, nil, nil)
 	eventMananger.MockEnable()
 	go eventMananger.ProcessEvents()
 	sendGnssEvent(eChannel)
@@ -107,10 +107,8 @@ func sendGnssEvent(eventChannel chan<- event.EventChannel) {
 	glog.Info("sending Nav status event to event handler Process")
 	eventChannel <- event.EventChannel{
 		ProcessName: "GNSS",
-		Type:        event.PTP_FREERUN,
 		CfgName:     "ts2phc.0.config",
-		Value:       0,
+		Values:      map[event.ValueType]int64{"satellites": 10},
 		ClockType:   "GM",
-		Update:      true,
 	}
 }

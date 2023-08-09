@@ -118,7 +118,8 @@ type EventChannel struct {
 }
 
 var (
-	mockTest bool = false
+	mockTest             bool = false
+	EventStateRegisterer *StateNotifier
 )
 
 // MockEnable ...
@@ -127,7 +128,8 @@ func (e *EventHandler) MockEnable() {
 }
 
 // Init ... initialize event manager
-func Init(nodeName string, stdOutToSocket bool, socketName string, processChannel chan EventChannel, closeCh chan bool, offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec) *EventHandler {
+func Init(nodeName string, stdOutToSocket bool, socketName string, processChannel chan EventChannel, closeCh chan bool,
+	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec) *EventHandler {
 	statusRequestChannel = make(chan StatusRequest)
 	ptpEvent := &EventHandler{
 		nodeName:             nodeName,
@@ -140,6 +142,8 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		clockMetric:          clockMetric,
 		offsetMetric:         offsetMetric,
 	}
+
+	EventStateRegisterer = NewStateNotifier()
 	return ptpEvent
 
 }
@@ -186,8 +190,6 @@ func (e *EventHandler) ProcessEvents() {
 			}
 		}
 		glog.Info("starting grandmaster state monitoring...")
-		// listen To any requests
-		go e.listenToStateRequest()
 		lastGmState := PTP_UNKNOWN
 		gmStateInitialized := false
 		for {
@@ -253,9 +255,12 @@ func (e *EventHandler) ProcessEvents() {
 						})
 					}
 				}
+				EventStateRegisterer.notify(event.ProcessName, event.State)
 
 				/// get Current GM state computing from DPLL, GNSS & ts2phc state
 				gmState := e.getGMState(event.CfgName)
+
+				// Update the metrics
 				if !e.stdoutToSocket { // if events not enabled
 					if event.ProcessName != TS2PHCProcessName {
 						e.updateMetrics(event.CfgName, event.ProcessName, event.Values)
@@ -376,37 +381,6 @@ func (e *EventHandler) GetPTPState(source EventSource, cfgName string) PTPState 
 	return PTP_UNKNOWN
 }
 
-func (e *EventHandler) listenToStateRequest() {
-	var request StatusRequest
-	for {
-		request = <-e.statusRequestChannel
-		if m, ok := e.data[request.CfgName]; ok {
-			for _, v := range m {
-				if v.ProcessName == request.Source {
-					// Attempt to respond to the channel, or
-					// timeout if nobody listening
-					select {
-					case request.ResponseChannel <- v.State:
-						goto cont
-					case <-time.After(250 * time.Millisecond):
-						glog.Errorf("failed to send response to %s", request.Source)
-						goto cont
-					}
-				}
-			}
-		} else {
-			select {
-			case request.ResponseChannel <- PTP_UNKNOWN:
-				glog.Errorf("failed to find process %s in %s sending UNKNOWN", request.Source, request.CfgName)
-			case <-time.After(250 * time.Millisecond): // timeout
-				glog.Errorf("failed to send response to %s", request.Source)
-			}
-		}
-
-	cont:
-	}
-}
-
 // UpdateClockStateMetrics ...
 func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace string) {
 	labels := prometheus.Labels{}
@@ -495,22 +469,6 @@ func (e *EventHandler) unregisterMetrics(configName string, processName string) 
 	}
 }
 
-// GetPTPStateRequest ...
-// GetPTPStateRequestChannel if Plugin requires to know the status of other component they could use this channel
-// Send a status request
-//
-//	 responseChannel := make(chan string)
-//	 statusRequestChannel <- StatusRequest{ResponseChannel: responseChannel}
-//
-//		Wait for and receive the response
-//		response := <-responseChannel
-func GetPTPStateRequest(request StatusRequest) {
-	select {
-	case statusRequestChannel <- request:
-	case <-time.After(200 * time.Millisecond):
-		glog.Warning("event: failed to send request to statusRequestChannel")
-	}
-}
 func getMetricName(valueType ValueType) string {
 	if strings.HasSuffix(string(valueType), string(OFFSET)) {
 		return fmt.Sprintf("%s_%s", valueType, "ns")
