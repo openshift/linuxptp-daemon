@@ -15,4 +15,4 @@ wheel==0.41.0
 setuptools==57.4.0
     # via scons
 
-gpsd @ git+https://gitlab.com/gpsd/gpsd@4ffd909e3270347af68fd61242f023729a27b50a
+gpsd @ git+https://gitlab.com/gpsd/gpsd.git@8501f01b257b226b9ad34190628e23838babadff
