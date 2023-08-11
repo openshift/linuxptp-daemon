@@ -2,12 +2,12 @@ package pmc
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/golang/glog"
-	expect "github.com/google/goexpect"
 	"github.com/openshift/linuxptp-daemon/pkg/protocol"
 )
 
@@ -18,79 +18,79 @@ var (
 	CmdGetParentDataSet   = "GET PARENT_DATA_SET"
 	CmdGetGMSettings      = "GET GRANDMASTER_SETTINGS_NP"
 	CmdSetGMSettings      = "SET GRANDMASTER_SETTINGS_NP"
-	cmdTimeout            = 2000 * time.Millisecond
-	numRetry              = 6
 )
 
 // RunPMCExp ... go expect to run PMC util cmd
 func RunPMCExp(configFileName, cmdStr string, promptRE *regexp.Regexp) (result string, matches []string, err error) {
-	glog.Infof("pmc read config from /var/run/%s", configFileName)
-	glog.Infof("pmc run command: %s", cmdStr)
-	e, _, err := expect.Spawn(fmt.Sprintf("pmc -u -b 1 -f /var/run/%s", configFileName), -1)
+
+	configFile := fmt.Sprintf("/var/run/%s", configFileName)
+	args := []string{"-u", "-f", configFile, cmdStr}
+
+	glog.Infof("run command: pmc %s", strings.Join(args, " "))
+	output, err := exec.Command("pmc", args...).Output()
 	if err != nil {
 		return "", []string{}, err
 	}
-	defer e.Close()
-	if err = e.Send(cmdStr + "\n"); err == nil {
-		result, matches, err = e.Expect(promptRE, cmdTimeout)
-		if err != nil {
-			glog.Errorf("pmc result match error %s", err)
-			return
-		}
-		glog.Infof("pmc result: %s", result)
-		err = e.Send("\x03")
+
+	matches = promptRE.FindStringSubmatch(string(output))
+	if matches == nil {
+		return "", []string{}, fmt.Errorf("pmc result does not match expectations")
 	}
+	glog.Infof("pmc result: %s", output)
 	return
 }
 
 // RunPMCExpGetGMSettings ... get current GRANDMASTER_SETTINGS_NP
 func RunPMCExpGetGMSettings(configFileName string) (g protocol.GrandmasterSettings, err error) {
+	configFile := fmt.Sprintf("/var/run/%s", configFileName)
+	if _, err := os.Stat(configFile); err != nil {
+		return g, fmt.Errorf("failed to read config file %s", configFile)
+	}
+
 	cmdStr := CmdGetGMSettings
-	glog.Infof("pmc read config from /var/run/%s", configFileName)
-	glog.Infof("pmc run command: %s", cmdStr)
-	e, _, err := expect.Spawn(fmt.Sprintf("pmc -u -b 1 -f /var/run/%s", configFileName), -1)
+	args := []string{"-u", "-f", configFile, cmdStr}
+
+	glog.Infof("run command: pmc %s", strings.Join(args, " "))
+	output, err := exec.Command("pmc", args...).Output()
 	if err != nil {
 		return g, err
 	}
-	defer e.Close()
-	for i := 0; i < numRetry; i++ {
-		if err = e.Send(cmdStr + "\n"); err == nil {
-			result, matches, err := e.Expect(regexp.MustCompile(g.RegEx()), cmdTimeout)
-			if err != nil {
-				if _, ok := err.(expect.TimeoutError); ok {
-					continue
-				}
-				fmt.Printf("pmc result match error %s\n", err)
-				return g, err
-			}
-			glog.Infof("pmc result: %s", result)
-			for i, m := range matches[1:] {
-				g.Update(g.Keys()[i], m)
-			}
-			err = e.Send("\x03")
-			break
-		}
+
+	r := regexp.MustCompile(g.RegEx())
+	matches := r.FindStringSubmatch(string(output))
+	if matches == nil {
+		return g, fmt.Errorf("pmc result does not match expectations")
+	}
+	glog.Infof("pmc result: %s", output)
+	for i, m := range matches[1:] {
+		g.Update(g.Keys()[i], m)
 	}
 	return
 }
 
 // RunPMCExpSetGMSettings ... set GRANDMASTER_SETTINGS_NP
 func RunPMCExpSetGMSettings(configFileName string, g protocol.GrandmasterSettings) (err error) {
+	configFile := fmt.Sprintf("/var/run/%s", configFileName)
+	if _, err := os.Stat(configFile); err != nil {
+		return fmt.Errorf("failed to read file %s", configFile)
+	}
+
 	cmdStr := CmdSetGMSettings
 	cmdStr += strings.Replace(g.String(), "\n", " ", -1)
-	e, _, err := expect.Spawn(fmt.Sprintf("pmc -u -b 1 -f /var/run/%s", configFileName), -1)
+	args := []string{"-u", "-f", configFile, cmdStr}
+
+	glog.Infof("run command: pmc %s", strings.Join(args, " "))
+	output, err := exec.Command("pmc", args...).Output()
 	if err != nil {
 		return err
 	}
-	defer e.Close()
-	if err = e.Send(cmdStr + "\n"); err == nil {
-		result, _, err := e.Expect(regexp.MustCompile(g.RegEx()), cmdTimeout)
-		if err != nil {
-			fmt.Printf("pmc result match error %s\n", err)
-			return err
-		}
-		glog.Infof("pmc result: %s", result)
-		err = e.Send("\x03")
+
+	// make sure the result is in expected format
+	r := regexp.MustCompile(g.RegEx())
+	matches := r.FindStringSubmatch(string(output))
+	if matches == nil {
+		return fmt.Errorf("pmc result does not match expectations")
 	}
-	return
+	glog.Infof("pmc result: %s", output)
+	return nil
 }

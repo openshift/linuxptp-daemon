@@ -356,42 +356,33 @@ func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clock
 	case PTP_LOCKED:
 		switch clockType {
 		case GM:
-			// update only when ClockClass is changed
-			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 {
-				g.ClockQuality.ClockClass = fbprotocol.ClockClass6
-				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
-				// T-REC-G.8275.1-202211-I section 6.3.5
-				g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
-				err = runUpdateGMSettings(cfgName, g)
-			}
+			g.ClockQuality.ClockClass = fbprotocol.ClockClass6
+			g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+			// T-REC-G.8275.1-202211-I section 6.3.5
+			g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
+			err = runUpdateGMSettings(cfgName, g)
 		case OC:
 		case BC:
 		}
 	case PTP_FREERUN:
 		switch clockType {
 		case GM:
-			// update only when ClockClass is changed
-			if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
-				g.ClockQuality.ClockClass = protocol.ClockClassFreerun
-				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
-				// T-REC-G.8275.1-202211-I section 6.3.5
-				g.ClockQuality.OffsetScaledLogVariance = 0xffff
-				err = runUpdateGMSettings(cfgName, g)
-			}
+			g.ClockQuality.ClockClass = protocol.ClockClassFreerun
+			g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
+			// T-REC-G.8275.1-202211-I section 6.3.5
+			g.ClockQuality.OffsetScaledLogVariance = 0xffff
+			err = runUpdateGMSettings(cfgName, g)
 		case OC:
 		case BC:
 		}
 	case PTP_HOLDOVER:
 		switch clockType {
 		case GM:
-			// update only when ClockClass is changed
-			if g.ClockQuality.ClockClass != fbprotocol.ClockClass7 {
-				g.ClockQuality.ClockClass = fbprotocol.ClockClass7
-				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
-				// T-REC-G.8275.1-202211-I section 6.3.5
-				g.ClockQuality.OffsetScaledLogVariance = 0xffff
-				err = runUpdateGMSettings(cfgName, g)
-			}
+			g.ClockQuality.ClockClass = fbprotocol.ClockClass7
+			g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
+			// T-REC-G.8275.1-202211-I section 6.3.5
+			g.ClockQuality.OffsetScaledLogVariance = 0xffff
+			err = runUpdateGMSettings(cfgName, g)
 		case OC:
 		case BC:
 		}
