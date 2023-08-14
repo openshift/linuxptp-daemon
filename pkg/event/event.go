@@ -204,12 +204,25 @@ connect:
 			for {
 				select {
 				case clk := <-clockClassRequestCh:
-					classErr, clockClass := e.updateCLockClass(eConn, clk.cfgName, clk.gmState, clk.clockType)
-					if classErr != nil {
-						glog.Errorf("error updating clock class %s", classErr)
-					} else {
-						e.clockClass = clockClass
-						e.lastGmState = clk.gmState
+					if e.lastGmState != clk.gmState || e.clockClass == protocol.ClockClassUninitialized {
+						glog.Infof("updating clock class for last clock class %#v and gmsState %s ", e.clockClass, clk.gmState)
+						classErr, clockClass := e.updateCLockClass(clk.cfgName, clk.gmState, clk.clockType)
+						if classErr != nil {
+							glog.Errorf("error updating clock class %s", classErr)
+						} else {
+							e.clockClass = clockClass
+							e.lastGmState = clk.gmState
+							clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
+							fmt.Printf("%s", clockClassOut)
+							if e.stdoutToSocket {
+								if c != nil {
+									_, err = c.Write([]byte(clockClassOut))
+									if err != nil {
+										glog.Errorf("failed to write class change event %s", err.Error())
+									}
+								}
+							}
+						}
 					}
 				case <-e.closeCh:
 					return
@@ -304,12 +317,8 @@ connect:
 			}
 			logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, event.IFace, gmState))
 
-			if e.lastGmState != gmState || e.clockClass == protocol.ClockClassUninitialized {
-				// update clock class
-				glog.Infof("updating clock class for last clock class %#v and gmsState %s ", e.clockClass, gmState)
-				clockClassRequestCh <- ClockClassRequest{cfgName: event.CfgName, gmState: gmState, clockType: event.ClockType}
-				// in case an error do not update lastGmState so that updateCLockClass can be tried again
-			}
+			// update clock class
+			clockClassRequestCh <- ClockClassRequest{cfgName: event.CfgName, gmState: gmState, clockType: event.ClockType}
 
 			if event.WriteToLog {
 				if e.stdoutToSocket {
@@ -336,7 +345,7 @@ connect:
 	}
 }
 
-func (e *EventHandler) updateCLockClass(c *net.Conn, cfgName string, ptpState PTPState, clockType ClockType) (err error, clockClass fbprotocol.ClockClass) {
+func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clockType ClockType) (err error, clockClass fbprotocol.ClockClass) {
 	g, err := runGetGMSettings(cfgName)
 	if err != nil {
 		glog.Errorf("failed to get current GRANDMASTER_SETTINGS_NP: %s", err)
@@ -388,18 +397,6 @@ func (e *EventHandler) updateCLockClass(c *net.Conn, cfgName string, ptpState PT
 		}
 	default:
 	}
-
-	if err == nil {
-		clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), cfgName, g.ClockQuality.ClockClass)
-		fmt.Printf("%s", clockClassOut)
-		if c != nil {
-			_, err = (*c).Write([]byte(clockClassOut))
-			if err != nil {
-				glog.Errorf("failed to write class change event %s", err.Error())
-			}
-		}
-	}
-
 	return err, g.ClockQuality.ClockClass
 }
 
