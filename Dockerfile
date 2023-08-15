@@ -5,8 +5,6 @@ RUN make clean && make
 
 FROM registry.ci.openshift.org/ocp/4.14:base as buildgps
 
-COPY ./extra/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
-
 RUN yum -y install git python3-pip gcc ncurses-devel
 
 RUN pip3 install scons \
@@ -19,6 +17,8 @@ RUN scons -c \
 	#&& scons udev-install
 
 FROM registry.ci.openshift.org/ocp/4.14:base
+
+COPY ./extra/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
 
 RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata  && yum clean all
 
