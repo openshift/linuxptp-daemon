@@ -12,6 +12,9 @@ RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_i
 COPY vendor/gpsd-minimal-3.25-1.el9_2.3.x86_64.rpm .
 RUN yum install -y gpsd-minimal-3.25-1.el9_2.3.x86_64.rpm
 
+COPY vendor/gpsd-minimal-clients-3.25-1.el9_2.3.x86_64.rpm .
+RUN yum install -y gpsd-minimal-clients-3.25-1.el9_2.3.x86_64.rpm
+
 COPY --from=builder /go/src/github.com/openshift/linuxptp-daemon/bin/ptp /usr/local/bin/
 
 CMD ["/usr/local/bin/ptp"]
