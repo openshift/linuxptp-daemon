@@ -34,6 +34,18 @@ const (
 // ClockType ...
 type ClockType string
 
+// ClockClassRequest ...
+type ClockClassRequest struct {
+	class     int8
+	cfgName   string
+	gmState   PTPState
+	clockType ClockType
+}
+
+var (
+	clockClassRequestCh = make(chan ClockClassRequest, 5)
+)
+
 const (
 	// GM ..
 	GM ClockType = "GM"
@@ -76,9 +88,6 @@ const (
 	PTP_UNKNOWN PTPState = "-1"
 )
 
-// CLOCK_CLASS_CHANGE ...
-const CLOCK_CLASS_CHANGE = "CLOCK_CLASS_CHANGE"
-
 const connectionRetryInterval = 1 * time.Second
 
 // EventHandler ... event handler to process events
@@ -92,6 +101,8 @@ type EventHandler struct {
 	data           map[string][]Data
 	offsetMetric   *prometheus.GaugeVec
 	clockMetric    *prometheus.GaugeVec
+	clockClass     fbprotocol.ClockClass
+	lastGmState    PTPState
 }
 
 // EventChannel .. event channel to subscriber to events
@@ -129,6 +140,8 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		data:           map[string][]Data{},
 		clockMetric:    clockMetric,
 		offsetMetric:   offsetMetric,
+		clockClass:     protocol.ClockClassUninitialized,
+		lastGmState:    PTP_UNKNOWN,
 	}
 
 	EventStateRegisterer = NewStateNotifier()
@@ -155,6 +168,8 @@ func (e *EventHandler) getGMState(cfgName string) PTPState {
 func (e *EventHandler) ProcessEvents() {
 	var c net.Conn
 	var err error
+	redialClockClass := true
+	retryCount := 0
 	defer func() {
 		if e.stdoutToSocket && c != nil {
 			if err = c.Close(); err != nil {
@@ -162,6 +177,7 @@ func (e *EventHandler) ProcessEvents() {
 			}
 		}
 	}()
+
 connect:
 	select {
 	case <-e.closeCh:
@@ -170,15 +186,42 @@ connect:
 		if e.stdoutToSocket {
 			c, err = net.Dial("unix", e.stdoutSocket)
 			if err != nil {
-				glog.Errorf("event process error trying to connect to event socket %s", err)
+				// reduce log spam
+				if retryCount == 0 || retryCount%5 == 0 {
+					glog.Errorf("event process error trying to connect to event socket %s", err)
+				}
+				retryCount = (retryCount + 1) % 6
+
 				time.Sleep(connectionRetryInterval)
 				goto connect
 			}
+			retryCount = 0
 		}
 	}
+
+	if redialClockClass {
+		go func(eConn *net.Conn) {
+			for {
+				select {
+				case clk := <-clockClassRequestCh:
+					classErr, clockClass := e.updateCLockClass(eConn, clk.cfgName, clk.gmState, clk.clockType)
+					if classErr != nil {
+						glog.Errorf("error updating clock class %s", classErr)
+					} else {
+						e.clockClass = clockClass
+						e.lastGmState = clk.gmState
+					}
+				case <-e.closeCh:
+					return
+				default:
+					time.Sleep(200 * time.Millisecond)
+				}
+			}
+		}(&c)
+		redialClockClass = false
+	}
+
 	glog.Info("starting grandmaster state monitoring...")
-	lastGmState := PTP_UNKNOWN
-	gmStateInitialized := false
 	for {
 		select {
 		case event := <-e.processChannel:
@@ -199,7 +242,8 @@ connect:
 				if event.ProcessName == TS2PHC {
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName)
-					gmStateInitialized = false
+					e.clockClass = protocol.ClockClassUninitialized
+					e.lastGmState = PTP_UNKNOWN
 				} else {
 					// Check if the index is within the slice bounds
 					for indexToRemove, d := range e.data[event.CfgName] {
@@ -259,28 +303,21 @@ connect:
 				e.UpdateClockStateMetrics(gmState, string(GM), event.IFace)
 			}
 			logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, event.IFace, gmState))
-			if lastGmState != gmState || !gmStateInitialized {
-				gmStateInitialized = true
-				glog.Infof("GM state changed from %s to %s updating clock class ", lastGmState, gmState)
-				//TODO: update clock class is going to be called for every event, this is not efficient
-				// This is going to choke the system if there are too many events
-				// since pmc call takes time, have seen 5 seconds timeout error in logs
-				err, clockClass := e.updateCLockClass(event.CfgName, gmState, event.ClockType)
-				if err == nil {
-					// in case an error do not update lastGmState so that updateCLockClass can be tried again
-					lastGmState = gmState
-					logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), event.CfgName, clockClass))
-				} else {
-					glog.Errorf("failed to updateClockClass: %v", err)
-				}
+
+			if e.lastGmState != gmState || e.clockClass == protocol.ClockClassUninitialized {
+				// update clock class
+				glog.Infof("updating clock class for last clock class %#v and gmsState %s ", e.clockClass, gmState)
+				clockClassRequestCh <- ClockClassRequest{cfgName: event.CfgName, gmState: gmState, clockType: event.ClockType}
+				// in case an error do not update lastGmState so that updateCLockClass can be tried again
 			}
+
 			if event.WriteToLog {
 				if e.stdoutToSocket {
 					for _, l := range logOut {
 						fmt.Printf("%s", l)
-						_, err := c.Write([]byte(l))
+						_, err = c.Write([]byte(l))
 						if err != nil {
-							glog.Errorf("Write error %s:", err)
+							glog.Errorf("Write %s error %s:", l, err)
 							goto connect
 						}
 					}
@@ -299,7 +336,7 @@ connect:
 	}
 }
 
-func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clockType ClockType) (err error, clockClass fbprotocol.ClockClass) {
+func (e *EventHandler) updateCLockClass(c *net.Conn, cfgName string, ptpState PTPState, clockType ClockType) (err error, clockClass fbprotocol.ClockClass) {
 	g, err := runGetGMSettings(cfgName)
 	if err != nil {
 		glog.Errorf("failed to get current GRANDMASTER_SETTINGS_NP: %s", err)
@@ -351,6 +388,18 @@ func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clock
 		}
 	default:
 	}
+
+	if err == nil {
+		clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), cfgName, g.ClockQuality.ClockClass)
+		fmt.Printf("%s", clockClassOut)
+		if c != nil {
+			_, err = (*c).Write([]byte(clockClassOut))
+			if err != nil {
+				glog.Errorf("failed to write class change event %s", err.Error())
+			}
+		}
+	}
+
 	return err, g.ClockQuality.ClockClass
 }
 

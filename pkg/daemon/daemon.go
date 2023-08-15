@@ -691,7 +691,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 					}
 					_, err2 := c.Write([]byte(out))
 					if err2 != nil {
-						glog.Errorf("Write error %s:", err2)
+						glog.Errorf("Write %s error %s:", out, err2)
 						goto connect
 					}
 				}
