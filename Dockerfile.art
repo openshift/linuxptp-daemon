@@ -4,7 +4,7 @@ COPY . .
 RUN make clean && make
 
 FROM registry.ci.openshift.org/ocp/4.14:base as buildgps
-ARG GITLAB_COMMIT_SHA="4ffd909e3270347af68fd61242f023729a27b50a"
+ARG GITLAB_COMMIT_SHA="8501f01b257b226b9ad34190628e23838babadff"
 ARG REMOTE_SOURCES
 ARG REMOTE_SOURCES_DIR
 
