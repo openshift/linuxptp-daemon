@@ -127,6 +127,7 @@ func New(
 	if !stdoutToSocket {
 		RegisterMetrics(nodeName)
 	}
+	InitializeOffsetMaps()
 	pluginManager := registerPlugins(plugins)
 	eventChannel := make(chan event.EventChannel, 10)
 	return &Daemon{
@@ -630,33 +631,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 					}
 					source, ptpOffset, _, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
 					if iface != "" {
-						var ptpState event.PTPState
-						ptpState = event.PTP_FREERUN
-						if int64(ptpOffset) < p.ptpClockThreshold.MaxOffsetThreshold &&
-							int64(ptpOffset) > p.ptpClockThreshold.MinOffsetThreshold {
-							ptpState = event.PTP_LOCKED
-							updateClockStateMetrics(p.name, iface, LOCKED)
-						} else {
-							updateClockStateMetrics(p.name, iface, FREERUN)
-						}
-						if source == ts2phcProcessName && p.clockType == event.GM {
-							if len(p.ifaces) > 0 {
-								iface = p.ifaces[0]
-							}
-							p.eventCh <- event.EventChannel{
-								ProcessName: event.TS2PHC,
-								State:       ptpState,
-								CfgName:     p.configName,
-								IFace:       iface,
-								Values: map[event.ValueType]int64{
-									event.OFFSET: int64(ptpOffset),
-								},
-								ClockType:  p.clockType,
-								Time:       time.Now().Unix(),
-								WriteToLog: false,
-								Reset:      false,
-							}
-						}
+						p.ProcessTs2PhcEvents(ptpOffset, source, iface)
 					}
 				}
 				done <- struct{}{}
@@ -688,11 +663,21 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 						fmt.Printf("%s\n", output)
 					}
 					out := fmt.Sprintf("%s\n", output)
+
+					// for ts2phc, we need to extract metrics to identify GM state
+					if p.name == ts2phcProcessName {
+						source, ptpOffset, _, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
+						if iface != "" {
+							p.ProcessTs2PhcEvents(ptpOffset, source, iface)
+						}
+					}
+
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(&c)
 						}
 					}
+
 					_, err2 := c.Write([]byte(out))
 					if err2 != nil {
 						glog.Errorf("Write %s error %s:", out, err2)
@@ -782,4 +767,35 @@ func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
 
 func (p *ptpProcess) MonitorEvent(offset float64, clockState string) {
 	// not implemented
+}
+
+func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string) {
+	var ptpState event.PTPState
+	ptpState = event.PTP_FREERUN
+	ptpOffsetInt64 := int64(ptpOffset)
+	if ptpOffsetInt64 <= p.ptpClockThreshold.MaxOffsetThreshold &&
+		ptpOffsetInt64 >= p.ptpClockThreshold.MinOffsetThreshold {
+		ptpState = event.PTP_LOCKED
+		updateClockStateMetrics(p.name, iface, LOCKED)
+	} else {
+		updateClockStateMetrics(p.name, iface, FREERUN)
+	}
+	if source == ts2phcProcessName && p.clockType == event.GM {
+		if len(p.ifaces) > 0 {
+			iface = p.ifaces[0]
+		}
+		p.eventCh <- event.EventChannel{
+			ProcessName: event.TS2PHC,
+			State:       ptpState,
+			CfgName:     p.configName,
+			IFace:       iface,
+			Values: map[event.ValueType]int64{
+				event.OFFSET: ptpOffsetInt64,
+			},
+			ClockType:  p.clockType,
+			Time:       time.Now().Unix(),
+			WriteToLog: false,
+			Reset:      false,
+		}
+	}
 }

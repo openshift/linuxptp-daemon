@@ -188,7 +188,7 @@ connect:
 			if err != nil {
 				// reduce log spam
 				if retryCount == 0 || retryCount%5 == 0 {
-					glog.Errorf("event process error trying to connect to event socket %s", err)
+					glog.Errorf("waiting for event socket, retrying %s", err)
 				}
 				retryCount = (retryCount + 1) % 6
 
