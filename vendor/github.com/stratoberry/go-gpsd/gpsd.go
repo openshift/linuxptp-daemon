@@ -3,6 +3,7 @@ package gpsd
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -216,7 +217,7 @@ func dialCommon(c net.Conn, err error) (session *Session, e error) {
 
 // Watch starts watching GPSD reports in a new goroutine.
 //
-// Example
+// Example:
 //
 //	gps := gpsd.Dial(gpsd.DEFAULT_ADDRESS)
 //	done := gpsd.Watch()
@@ -258,13 +259,17 @@ func (s *Session) deliverReport(class string, report interface{}) {
 }
 
 // Close closes the connection to GPSD
-func (s *Session) Close() {
-	if s.socket != nil {
-		if err := s.socket.Close(); err != nil {
-			return
-		}
+func (s *Session) Close() error {
+	if s.socket == nil {
+		return errors.New("gpsd socket is alerady closed")
 	}
+
+	if err := s.socket.Close(); err != nil {
+		return err
+	}
+
 	s.socket = nil
+	return nil
 }
 
 func watch(done chan bool, s *Session) {
@@ -288,18 +293,15 @@ func watch(done chan bool, s *Session) {
 				fmt.Println("JSON parsing error:", err)
 			}
 		} else {
-			fmt.Println("Stream reader error (is gpsd running?):", err)
-			if err == io.EOF {
+			if !errors.Is(err, net.ErrClosed) {
+				fmt.Println("Stream reader error (is gpsd running?):", err)
+			}
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				break
 			}
 		}
 	}
-	select {
-	case done <- true:
-		fmt.Println("Done gpsd monitoring")
-	case <-time.After(100 * time.Millisecond):
-		fmt.Println("Timed out waiting on gpsd monitor, exiting anyway")
-	}
+	done <- true
 }
 
 func unmarshalReport(class string, bytes []byte) (interface{}, error) {

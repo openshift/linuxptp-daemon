@@ -7,9 +7,6 @@ github.com/PuerkitoBio/urlesc
 # github.com/StackExchange/wmi v1.2.1
 ## explicit; go 1.13
 github.com/StackExchange/wmi
-# github.com/aneeshkp/go-gpsd v0.0.0-20230804165302-4a2d069c566a
-## explicit; go 1.20
-github.com/aneeshkp/go-gpsd
 # github.com/beorn7/perks v1.0.1
 ## explicit; go 1.11
 github.com/beorn7/perks/quantile
@@ -200,6 +197,9 @@ github.com/sirupsen/logrus
 # github.com/spf13/pflag v1.0.5
 ## explicit; go 1.12
 github.com/spf13/pflag
+# github.com/stratoberry/go-gpsd v1.1.0
+## explicit; go 1.18
+github.com/stratoberry/go-gpsd
 # github.com/stretchr/testify v1.8.0
 ## explicit; go 1.13
 github.com/stretchr/testify/assert
