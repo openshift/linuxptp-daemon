@@ -5,7 +5,6 @@ go 1.19
 require github.com/openshift/ptp-operator v0.0.0-20230207052655-ede9197d99ca
 
 require (
-	github.com/aneeshkp/go-gpsd v0.0.0-20230804165302-4a2d069c566a
 	github.com/facebook/time v0.0.0-20230529151911-512b3b30ab23
 	github.com/golang/glog v1.0.0
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
@@ -13,6 +12,7 @@ require (
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
 	github.com/prometheus/client_golang v1.12.2
+	github.com/stratoberry/go-gpsd v1.1.0
 	github.com/stretchr/testify v1.8.0
 	golang.org/x/sync v0.1.0
 	k8s.io/apimachinery v0.25.4
