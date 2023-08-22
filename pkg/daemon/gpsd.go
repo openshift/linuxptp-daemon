@@ -99,7 +99,7 @@ func (g *gpsd) CmdInit() {
 	if g.name == "" {
 		g.name = GPSD_PROCESSNAME
 	}
-	g.cmdLine = fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -G -N %s", g.Name(), g.SerialPort())
+	g.cmdLine = fmt.Sprintf("/usr/sbin/%s -p -n -S 2947 -G -N %s", g.Name(), g.SerialPort())
 }
 
 // CmdRun ... run gpsd
