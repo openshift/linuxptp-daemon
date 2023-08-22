@@ -9,6 +9,7 @@ type Data struct {
 	State       PTPState
 	ClockType   ClockType
 	Metrics     map[ValueType]DataMetrics
+	time        int64
 }
 
 // DataMetrics ...
