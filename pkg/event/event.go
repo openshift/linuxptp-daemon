@@ -43,7 +43,8 @@ type ClockClassRequest struct {
 }
 
 var (
-	clockClassRequestCh = make(chan ClockClassRequest, 5)
+	// increased buffer due to slow reading
+	clockClassRequestCh = make(chan ClockClassRequest, 25)
 )
 
 const (
@@ -71,6 +72,7 @@ const (
 	PTP4l   EventSource = "ptp4l"
 	PHC2SYS EventSource = "phc2sys"
 	SYNCE   EventSource = "syncE"
+	NIL     EventSource = "nil"
 )
 
 // PTPState ...
@@ -98,7 +100,7 @@ type EventHandler struct {
 	stdoutToSocket bool
 	processChannel <-chan EventChannel
 	closeCh        chan bool
-	data           map[string][]Data
+	data           map[string][]*Data
 	offsetMetric   *prometheus.GaugeVec
 	clockMetric    *prometheus.GaugeVec
 	clockClass     fbprotocol.ClockClass
@@ -119,8 +121,8 @@ type EventChannel struct {
 }
 
 var (
-	mockTest             bool = false
-	EventStateRegisterer *StateNotifier
+	mockTest        bool = false
+	StateRegisterer *StateNotifier
 )
 
 // MockEnable ...
@@ -137,14 +139,14 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		stdoutToSocket: stdOutToSocket,
 		closeCh:        closeCh,
 		processChannel: processChannel,
-		data:           map[string][]Data{},
+		data:           map[string][]*Data{},
 		clockMetric:    clockMetric,
 		offsetMetric:   offsetMetric,
 		clockClass:     protocol.ClockClassUninitialized,
 		lastGmState:    PTP_UNKNOWN,
 	}
 
-	EventStateRegisterer = NewStateNotifier()
+	StateRegisterer = NewStateNotifier()
 	return ptpEvent
 
 }
@@ -191,7 +193,6 @@ connect:
 					glog.Errorf("waiting for event socket, retrying %s", err)
 				}
 				retryCount = (retryCount + 1) % 6
-
 				time.Sleep(connectionRetryInterval)
 				goto connect
 			}
@@ -204,34 +205,43 @@ connect:
 			for {
 				select {
 				case clk := <-clockClassRequestCh:
-					if e.lastGmState != clk.gmState || e.clockClass == protocol.ClockClassUninitialized {
-						glog.Infof("updating clock class for last clock class %#v and gmsState %s ", e.clockClass, clk.gmState)
-						classErr, clockClass := e.updateCLockClass(clk.cfgName, clk.gmState, clk.clockType)
-						if classErr != nil {
-							glog.Errorf("error updating clock class %s", classErr)
-						} else {
-							e.clockClass = clockClass
-							e.lastGmState = clk.gmState
-							clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
-							fmt.Printf("%s", clockClassOut)
-							if e.stdoutToSocket {
-								if c != nil {
-									_, err = c.Write([]byte(clockClassOut))
-									if err != nil {
-										glog.Errorf("failed to write class change event %s", err.Error())
+					//TODO: This takes more than 2 secs
+					go func() {
+						if e.lastGmState != clk.gmState || e.clockClass == protocol.ClockClassUninitialized {
+							glog.Infof("updating clock class for last clock class %#v and gmsState %s ", e.clockClass, clk.gmState)
+							classErr, clockClass := e.updateCLockClass(clk.cfgName, clk.gmState, clk.clockType)
+							if classErr != nil {
+								glog.Errorf("error updating clock class %s", classErr)
+							} else {
+								e.clockClass = clockClass
+								e.lastGmState = clk.gmState
+								clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
+								fmt.Printf("%s", clockClassOut)
+								if e.stdoutToSocket {
+									if c != nil {
+										_, err = c.Write([]byte(clockClassOut))
+										if err != nil {
+											glog.Errorf("failed to write class change event %s", err.Error())
+										}
 									}
 								}
 							}
 						}
-					}
+					}()
 				case <-e.closeCh:
 					return
 				default:
-					time.Sleep(200 * time.Millisecond)
+					time.Sleep(100 * time.Millisecond)
 				}
 			}
 		}(&c)
 		redialClockClass = false
+	}
+	// call all monitoring candidates
+	registeredMonitorCount := 0
+	if len(StateRegisterer.Subscribers) > registeredMonitorCount {
+		registeredMonitorCount = len(StateRegisterer.Subscribers)
+		StateRegisterer.monitor()
 	}
 
 	glog.Info("starting grandmaster state monitoring...")
@@ -273,33 +283,41 @@ connect:
 
 			// Update the in MemData
 			if _, ok := e.data[event.CfgName]; !ok {
-				e.data[event.CfgName] = []Data{{
+				e.data[event.CfgName] = []*Data{{
 					ProcessName: event.ProcessName,
 					State:       event.State,
 					ClockType:   event.ClockType,
 					IFace:       event.IFace,
 					Metrics:     map[ValueType]DataMetrics{},
+					time:        event.Time,
 				}}
-				go EventStateRegisterer.notify(event.ProcessName, event.State)
+				go StateRegisterer.notify(event.ProcessName, event.State)
 			} else {
 				found := false
-				for i, d := range e.data[event.CfgName] {
+				for _, d := range e.data[event.CfgName] {
 					if d.ProcessName == event.ProcessName {
-						if d.State != event.State { // state changed
-							go EventStateRegisterer.notify(event.ProcessName, event.State)
+						if d.time <= event.Time { //ignore stale data
+							if d.State != event.State { // state changed
+								go StateRegisterer.notify(event.ProcessName, event.State)
+							}
+							d.State = event.State
+							d.IFace = event.IFace
+							d.time = event.Time
+						} else {
+							glog.Infof("discarding stale event for process %s, last event @ %d, current event @ %d", event.ProcessName, d.time, event.Time)
 						}
-						e.data[event.CfgName][i].State = event.State
-						e.data[event.CfgName][i].IFace = event.IFace
 						found = true
+						break
 					}
 				}
 				if !found {
-					e.data[event.CfgName] = append(e.data[event.CfgName], Data{
+					e.data[event.CfgName] = append(e.data[event.CfgName], &Data{
 						ProcessName: event.ProcessName,
 						State:       event.State,
 						ClockType:   event.ClockType,
 						Metrics:     map[ValueType]DataMetrics{},
 						IFace:       event.IFace,
+						time:        event.Time,
 					})
 				}
 			}
@@ -318,7 +336,11 @@ connect:
 			logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, event.IFace, gmState))
 
 			// update clock class
-			clockClassRequestCh <- ClockClassRequest{cfgName: event.CfgName, gmState: gmState, clockType: event.ClockType}
+			select {
+			case clockClassRequestCh <- ClockClassRequest{cfgName: event.CfgName, gmState: gmState, clockType: event.ClockType}:
+			default:
+				glog.Error("clock class request not read")
+			}
 
 			if event.WriteToLog {
 				if e.stdoutToSocket {
@@ -339,8 +361,11 @@ connect:
 		case <-e.closeCh:
 			return
 		default:
+			if len(StateRegisterer.Subscribers) > registeredMonitorCount {
+				registeredMonitorCount = len(StateRegisterer.Subscribers)
+				StateRegisterer.monitor()
+			}
 			time.Sleep(50 * time.Millisecond) // cpu saver
-			continue
 		}
 	}
 }
@@ -402,7 +427,6 @@ func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clock
 
 func runGetGMSettings(cfgName string) (protocol.GrandmasterSettings, error) {
 	cfgName = strings.Replace(cfgName, TS2PHCProcessName, PTP4lProcessName, 1)
-
 	return pmc.RunPMCExpGetGMSettings(cfgName)
 }
 
