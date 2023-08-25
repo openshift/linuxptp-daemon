@@ -10,6 +10,7 @@ type Data struct {
 	ClockType   ClockType
 	Metrics     map[ValueType]DataMetrics
 	time        int64
+	logData     string
 }
 
 // DataMetrics ...
