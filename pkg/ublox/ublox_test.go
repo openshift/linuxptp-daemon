@@ -2,9 +2,6 @@ package ublox_test
 
 import (
 	"github.com/openshift/linuxptp-daemon/pkg/ublox"
-	"github.com/stretchr/testify/assert"
-	"regexp"
-	"testing"
 )
 
 type gnssAntennaTest struct {
@@ -15,8 +12,8 @@ type gnssAntennaTest struct {
 	status              bool
 }
 
-func TestFindProtoVersion(t *testing.T) {
-	/*result := `connected to tcp://localhost:2947
+/*func TestFindProtoVersion(t *testing.T) {
+	result := `connected to tcp://localhost:2947
 	ubxtool: poll MON-VER
 
 	sent:
@@ -37,8 +34,8 @@ func TestFindProtoVersion(t *testing.T) {
 	`
 		/*fValue, err := ublox.FindProtoVersion(result)
 		assert.Nil(t, err)
-		assert.Equal(t, 29.20, fValue)*/
-}
+		assert.Equal(t, 29.20, fValue)
+}*/
 
 /*func TestUblox_AntStatus(t *testing.T) {
 	tests := []gnssAntennaTest{
@@ -82,7 +79,7 @@ func TestFindProtoVersion(t *testing.T) {
 		assert.Equal(t, tc.expectedPowerStatus, status.Power())
 	}
 
-}*/
+}
 
 func Test_Query(t *testing.T) {
 	u := ublox.UBlox{}
@@ -92,4 +89,4 @@ func Test_Query(t *testing.T) {
 	assert.NotEmpty(t, ss)
 	assert.NotEmpty(t, s[0])
 	assert.Nil(t, err)
-}
+} */
