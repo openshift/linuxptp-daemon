@@ -125,7 +125,7 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 				for _, ublxOpt := range e810Opts.UblxCmds {
 					ublxArgs := ublxOpt.Args
 					glog.Infof("Running /usr/bin/ubxtool with args %s", strings.Join(ublxArgs, ", "))
-					stdout, err = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput()
+					stdout, err = exec.Command("/usr/bin/ubxtool", ublxArgs...).CombinedOutput()
 					//stdout, err = exec.Command("/usr/local/bin/ubxtool", "-p", "STATUS").CombinedOutput()
 					_data := *data
 					if data != nil && ublxOpt.ReportOutput {
