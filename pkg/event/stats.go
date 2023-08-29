@@ -11,6 +11,7 @@ type Data struct {
 	Metrics     map[ValueType]DataMetrics
 	time        int64
 	logData     string
+	sourceLost  bool
 }
 
 // DataMetrics ...

@@ -36,15 +36,16 @@ type ClockType string
 
 // ClockClassRequest ...
 type ClockClassRequest struct {
-	class     int8
-	cfgName   string
-	gmState   PTPState
-	clockType ClockType
+	cfgName    string
+	gmState    PTPState
+	clockType  ClockType
+	clockClass fbprotocol.ClockClass
 }
 
 var (
-	// increased buffer due to slow reading
-	clockClassRequestCh = make(chan ClockClassRequest, 25)
+	//  make sure only one clock class update is tried if it fails next  try will pass
+	// this will also stop flooding
+	clockClassRequestCh = make(chan ClockClassRequest, 1)
 
 	PMCGMGetter = func(cfgName string) (protocol.GrandmasterSettings, error) {
 		cfgName = strings.Replace(cfgName, TS2PHCProcessName, PTP4lProcessName, 1)
@@ -107,6 +108,13 @@ const (
 
 const connectionRetryInterval = 1 * time.Second
 
+type grandMasterSyncState struct {
+	state      PTPState
+	clockClass fbprotocol.ClockClass
+	sourceLost bool
+	gmLog      string
+}
+
 // EventHandler ... event handler to process events
 type EventHandler struct {
 	sync.Mutex
@@ -119,7 +127,9 @@ type EventHandler struct {
 	offsetMetric   *prometheus.GaugeVec
 	clockMetric    *prometheus.GaugeVec
 	clockClass     fbprotocol.ClockClass
-	lastGmState    PTPState
+	gmSyncState    map[string]*grandMasterSyncState
+	outOfSpec      bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
+	ReduceLog      bool // reduce logs for every announce
 }
 
 // EventChannel .. event channel to subscriber to events
@@ -131,8 +141,10 @@ type EventChannel struct {
 	Values      map[ValueType]int64 // either offset or status , 3 information  offset , phase state and frequency state
 	ClockType   ClockType           // oc bc gm
 	Time        int64               // time.Unix.Now()
+	OutOfSpec   bool                // out of Spec for offset
 	WriteToLog  bool                // send to log in predefined format %s[%d]:[%s] %s %d
 	Reset       bool                // reset data on ptp deletes or process died
+	SourceLost  bool
 }
 
 var (
@@ -158,27 +170,243 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		clockMetric:    clockMetric,
 		offsetMetric:   offsetMetric,
 		clockClass:     protocol.ClockClassUninitialized,
-		lastGmState:    PTP_UNKNOWN,
+		gmSyncState:    map[string]*grandMasterSyncState{},
+		outOfSpec:      false,
+		ReduceLog:      true,
 	}
 
 	StateRegisterer = NewStateNotifier()
 	return ptpEvent
 
 }
-func (e *EventHandler) getGMState(cfgName string) PTPState {
-	lowestState := ""
+
+// getGMState ... get lowest state of all the interfaces
+/*
+GNSS State + DPLL State= DPLL State
+DPLL STate + Ts2phc State =GM State
+----------------------------------------------------------------
+GNSS| Mode              | Offset   | State
+1.  | 0-2(Source LOST)  | in Range | FREERUN
+2.  | 0-2(Source LOST ) | out Range| FREERUN
+3.  | 3                 | in Range | LOCKED
+4.  | 3                 | out Range| FREERUN
+----------------------------------------------------------------
+DPLL | Frequency/Phase  	|  Offset  | GNSS STATE |  DPLL PTP STATE
+------------------------------------------------------------------
+1.  | -1/1/0           	| in Range |  LOCKED    | FREERUN
+2.  | -1/1/0           	| out Range|  FREERUN   | FREERUN
+-----------------------------------------------------------------
+3.  |  2 (LOCKED)       	| in Range |  LOCKED      | LOCKED
+4.  |  2 (LOCKED)       	| in Range |  FREERUN     | LOCKED
+-----------------------------------------------------------------
+SL :-> Source Lost
+------------------------------------------------------------------------------------------
+DPLL| Frequency/Phase      | Offset      | GNSS STATE               | DPLL PTP State
+------------------------------------------------------------------------------------------
+5   | 2 (LOCKED)           | Out Range   | All State                | FREERUN
+6.  | 3 (LOCK_ACQ_HOLDOVER)| In Range    | LOCKED                   | LOCKED
+7.  | 3 (LOCK_ACQ_HOLDOVER)| In/Out Range| FREERUN (SL)             | FREERUN
+8.  | 3 (LOCK_ACQ_HOLDOVER)| Out Range   | LOCKED                   | FREERUN
+*9. | 3 (LOCK_ACQ_HOLDOVER)| In/Out Range| FREERUN (SL)             | HOLDOVER
+------------------------------------------------------------------------------------------
+*10.| 4 (HOLDOVER)		| IN/Out Range   | FREERUN (SL)	            | HOLDOVER
+*11.| 4 (HOLDOVER)		| in/Out Range   | FREERUN (SL)             | AFTER TIME OUT
+                                                                    FREERUN OUT OF SPEC
+
+12. | 4 (HOLDOVER)		| in Range	     | LOCKED                   | LOCKED
+13. | 4 (HOLDOVER)		| Out Range	     | LOCKED                   | FREERUN
+14. | 4 (HOLDOVER)		| in Range       | FREERUN (SL)             | LOCKED
+15. | 4 (HOLDOVER)		| Out Range      | FREERUN (SL)             | FREERUN
+------------------------------------------------------------------------------------------
+FINAL GM STATE  *SL = Source Lost
+---------------------------------------------------------------------------------------------
+| DPLL PTP State        | GNSS PTP STATE    | TS2PHC PTP STATE | GM STATE  | Clock Class
+---------------------------------------------------------------------------------------------
+| FREERUN               | NA                | NA                | FREERUN  | 248
+| HOLDOVER IN SPEC      | NA                | NA                | HOLDOVER | 7
+| FREERUN OUT OF SPEC   | NA                | NA                | FREERUN  | 140
+| LOCKED                | LOCKED            | LOCKED            | LOCKED   | 6
+| LOCKED                | LOCKED            | FREERUN           | FREERUN  | 248
+| LOCKED                | *FREERUN (SL)     | LOCKED            | NA       | Wait for DPLL
+                                                                           | to move to HOLDOVER
+
+| LOCKED                | *FREERUN (SL)     | FREERUN           | NA       | Wait for DPLL
+                                                                           |to move to HOLDOVER
+
+| LOCKED                | *FREERUN(offset)  | LOCKED            | FREERUN  | 248
+| LOCKED                | *FREERUN(offset)  | FREERUN           | FREERUN  | 248
+ Final GM State When DPLL not available
+---------------------------------------------------------------------------------------------
+DPLL PTP State |  GNSS PTP STATE  |	TS2PHC PTP STATE| GM STATE | Clock Class
+---------------------------------------------------------------------------------------------
+| NA           |  FREERUN         |	LOCKED          | FREERUN  | 248
+| NA           |  FREERUN         |	FREERUN         | FREERUN  | 248
+| NA           |  LOCKED          |	FREERUN         | FREERUN  | 248
+| NA           |  LOCKED          |	LOCKED          | LOCKED   | 6
+
+*/
+func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
+	dpllState := PTP_FREERUN
+	gnssState := PTP_FREERUN
+	ts2phcState := PTP_FREERUN
+	gnssSrcLost := e.isSourceLost(cfgName)
+	gmIface := "unknown"
+	if _, ok := e.gmSyncState[cfgName]; !ok {
+		e.gmSyncState[cfgName] = &grandMasterSyncState{
+			state:      PTP_FREERUN,
+			clockClass: protocol.ClockClassUninitialized,
+			sourceLost: gnssSrcLost,
+		}
+	}
+	// right now if GPS offset || mode is bad then consider source lost
+	e.gmSyncState[cfgName].sourceLost = gnssSrcLost
 	if data, ok := e.data[cfgName]; ok {
-		for i, d := range data {
-			if i == 0 || string(d.State) < lowestState {
-				lowestState = string(d.State)
+		for _, d := range data {
+			switch d.ProcessName {
+			case DPLL:
+				dpllState = d.State
+			case GNSS:
+				gnssState = d.State
+				gmIface = d.IFace
+			case TS2PHCProcessName:
+				ts2phcState = d.State
+			}
+			if d.IFace != "" {
+				gmIface = d.IFace
+			}
+		}
+	} else {
+		e.gmSyncState[cfgName].state = PTP_FREERUN
+		e.gmSyncState[cfgName].clockClass = 248
+		e.gmSyncState[cfgName].gmLog = fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), cfgName, gmIface, e.gmSyncState[cfgName].state)
+
+		return *e.gmSyncState[cfgName]
+	}
+
+	switch dpllState {
+	case PTP_FREERUN:
+		e.gmSyncState[cfgName].state = dpllState
+		if e.outOfSpec {
+			// T-GM in holdover, out of holdover specification
+			e.gmSyncState[cfgName].clockClass = protocol.ClockClassOutOfSpec
+		} else { // from holdover it goes to out of spec to free run
+			// T-GM or T-BC in free-run mode
+			e.gmSyncState[cfgName].clockClass = protocol.ClockClassFreerun
+		}
+	case PTP_HOLDOVER:
+		e.gmSyncState[cfgName].state = dpllState
+		// T-GM in holdover, within holdover specification
+		e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass7
+	case PTP_LOCKED:
+		switch gnssState {
+		case PTP_LOCKED:
+			switch ts2phcState {
+			case PTP_FREERUN:
+				e.gmSyncState[cfgName].state = PTP_FREERUN
+				// T-GM or T-BC in free-run mode
+				e.gmSyncState[cfgName].clockClass = protocol.ClockClassFreerun
+			case PTP_LOCKED:
+				e.gmSyncState[cfgName].state = PTP_LOCKED
+				// T-GM connected to a PRTC in locked mode (e.g., PRTC traceable to GNSS)
+				e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass6
+			}
+		case PTP_FREERUN:
+			if gnssSrcLost {
+				switch ts2phcState {
+				case PTP_LOCKED, PTP_FREERUN:
+					// stay with last GM state and wait for DPLL to move to HOLDOVER
+				}
+			} else {
+				switch ts2phcState {
+				case PTP_FREERUN, PTP_LOCKED, PTP_UNKNOWN, PTP_NOTSET:
+					e.gmSyncState[cfgName].state = PTP_FREERUN
+					// T-GM or T-BC in free-run mode
+					e.gmSyncState[cfgName].clockClass = protocol.ClockClassFreerun
+				}
+			}
+		}
+	default:
+		switch gnssState {
+		case PTP_LOCKED:
+			switch ts2phcState {
+			case PTP_FREERUN, PTP_UNKNOWN, PTP_NOTSET:
+				e.gmSyncState[cfgName].state = PTP_FREERUN
+				// T-GM or T-BC in free-run mode
+				e.gmSyncState[cfgName].clockClass = protocol.ClockClassFreerun
+			case PTP_LOCKED:
+				e.gmSyncState[cfgName].state = PTP_LOCKED
+				// T-GM connected to a PRTC in locked mode (e.g., PRTC traceable to GNSS)
+				e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass6
+			}
+		case PTP_FREERUN:
+			switch ts2phcState {
+			case PTP_FREERUN, PTP_LOCKED:
+				e.gmSyncState[cfgName].state = PTP_FREERUN
+				e.gmSyncState[cfgName].clockClass = protocol.ClockClassFreerun
+			}
+		default:
+			e.gmSyncState[cfgName].state = ts2phcState
+			switch ts2phcState {
+			case PTP_FREERUN:
+				e.gmSyncState[cfgName].clockClass = protocol.ClockClassFreerun
+			case PTP_LOCKED:
+				e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass7
 			}
 		}
 	}
-	//gated
-	if lowestState == "" {
-		lowestState = "-1"
+	gmLog := ""
+	// this will reduce log noise
+	gmLog = fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), cfgName, gmIface, e.gmSyncState[cfgName].state)
+	if gmLog != e.gmSyncState[cfgName].gmLog {
+		e.gmSyncState[cfgName].gmLog = gmLog
+		glog.Infof("dpll State %s, gnss State %s, ts2phc state %s, gm state %s,", dpllState, gnssState, ts2phcState, e.gmSyncState[cfgName].state)
+	} else {
+		gmLog = ""
 	}
-	return PTPState(lowestState)
+
+	return grandMasterSyncState{
+		state:      e.gmSyncState[cfgName].state,
+		clockClass: e.gmSyncState[cfgName].clockClass,
+		sourceLost: e.gmSyncState[cfgName].sourceLost,
+		gmLog:      gmLog,
+	}
+}
+
+func (e *EventHandler) getGMState(cfgName string) grandMasterSyncState {
+	if g, ok := e.gmSyncState[cfgName]; ok {
+		return *g
+	}
+	return grandMasterSyncState{
+		state:      PTP_NOTSET,
+		clockClass: 0,
+		sourceLost: false,
+	}
+}
+
+func (e *EventHandler) getGMClockClass(cfgName string) fbprotocol.ClockClass {
+	if g, ok := e.gmSyncState[cfgName]; ok {
+		return g.clockClass
+	}
+	return protocol.ClockClassUninitialized
+}
+
+func (e *EventHandler) isSourceLost(cfgName string) bool {
+	if data, ok := e.data[cfgName]; ok {
+		for _, d := range data {
+			if d.ProcessName == GNSS {
+				return d.sourceLost
+			}
+		}
+	}
+	return false
+}
+
+func (e *EventHandler) updateSpecState(event EventChannel) {
+	// update if DPLL holdover is out of spec
+	if event.ProcessName == DPLL {
+		e.outOfSpec = event.OutOfSpec
+	}
+
 }
 
 // ProcessEvents ... process events to generate new events
@@ -225,34 +453,12 @@ connect:
 			for {
 				select {
 				case clk := <-clockClassRequestCh:
-					//TODO: This takes more than 2 secs
-					go func() {
-						if e.lastGmState != clk.gmState || e.clockClass == protocol.ClockClassUninitialized {
-							glog.Infof("updating clock class for last clock class %#v and gmsState %s ", e.clockClass, clk.gmState)
-							classErr, clockClass := e.updateCLockClass(clk.cfgName, clk.gmState, clk.clockType,
-								PMCGMGetter, PMCGMSetter)
-							if classErr != nil {
-								glog.Errorf("error updating clock class %s", classErr)
-							} else {
-								e.clockClass = clockClass
-								e.lastGmState = clk.gmState
-								clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
-								fmt.Printf("%s", clockClassOut)
-								if e.stdoutToSocket {
-									if c != nil {
-										_, err = c.Write([]byte(clockClassOut))
-										if err != nil {
-											glog.Errorf("failed to write class change event %s", err.Error())
-										}
-									}
-								}
-							}
-						}
-					}()
+					//TODO: This takes more than 2 secs/ so make it blocking
+					e.UpdateClockClass(c, clk)
 				case <-e.closeCh:
 					return
 				default:
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(50 * time.Millisecond)
 				}
 			}
 		}(&c)
@@ -266,19 +472,16 @@ connect:
 	}
 
 	glog.Info("starting grandmaster state monitoring...")
-	lastGmState := PTP_NOTSET
 	for {
 		select {
 		case event := <-e.processChannel:
 			// ts2phc[123455]:[ts2phc.0.config] 12345 s0 offset/gps
 			// replace ts2phc logs here
-
 			if event.Reset { // clean up
 				if event.ProcessName == TS2PHC {
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName)
 					e.clockClass = protocol.ClockClassUninitialized
-					e.lastGmState = PTP_UNKNOWN
 				} else {
 					// Check if the index is within the slice bounds
 					for indexToRemove, d := range e.data[event.CfgName] {
@@ -289,78 +492,29 @@ connect:
 							}
 						}
 					}
+					delete(e.gmSyncState, event.CfgName) // delete the gmSyncState
+					e.outOfSpec = false
 				}
 				continue
 			}
 			var logOut []string
 			logDataValues := ""
-			//if event.WriteToLog {
-			logData := make([]string, 0, len(event.Values))
-			for k, v := range event.Values {
-				logData = append(logData, fmt.Sprintf("%s %d", k, v))
-			}
-			sort.Strings(logData)
-			logDataValues = strings.Join(logData, " ")
 
 			// Update the in MemData
 			if _, ok := e.data[event.CfgName]; !ok {
-				e.data[event.CfgName] = []*Data{{
-					ProcessName: event.ProcessName,
-					State:       event.State,
-					ClockType:   event.ClockType,
-					IFace:       event.IFace,
-					Metrics:     map[ValueType]DataMetrics{},
-					time:        event.Time,
-					logData:     logDataValues,
-				}}
-				go StateRegisterer.notify(event.ProcessName, event.State)
+				logDataValues = e.addData(event).logData
 			} else {
-				found := false
-				for _, d := range e.data[event.CfgName] {
-					if d.ProcessName == event.ProcessName {
-						if d.time <= event.Time { //ignore stale data
-							if d.State != event.State { // state changed
-								go StateRegisterer.notify(event.ProcessName, event.State)
-							}
-							d.State = event.State
-							d.IFace = event.IFace
-							d.time = event.Time
-							if d.logData != logDataValues {
-								d.logData = logDataValues
-							} else {
-								logDataValues = ""
-							}
-						} else {
-							glog.Infof("discarding stale event for process %s, last event @ %d, current event @ %d", event.ProcessName, d.time, event.Time)
-							logDataValues = ""
-						}
-						found = true
-						break
-					}
-				}
-				if !found {
-					e.data[event.CfgName] = append(e.data[event.CfgName], &Data{
-						ProcessName: event.ProcessName,
-						State:       event.State,
-						ClockType:   event.ClockType,
-						Metrics:     map[ValueType]DataMetrics{},
-						IFace:       event.IFace,
-						time:        event.Time,
-						logData:     logDataValues,
-					})
-				}
+				logDataValues = e.updateData(event).logData
 			}
+
 			if event.WriteToLog && logDataValues != "" {
-				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", event.ProcessName,
-					time.Now().Unix(), event.CfgName, event.IFace, logDataValues, event.State))
+				logOut = append(logOut, logDataValues)
 			}
+			// Computes GM state
+			gmState := e.updateGMState(event.CfgName)
 
-			/// get Current GM state computing from DPLL, GNSS & ts2phc state
-			gmState := e.getGMState(event.CfgName)
-
-			if gmState != lastGmState { // if clock class has error , then e.lastGmState will not change
-				lastGmState = gmState
-				logOut = append(logOut, fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), event.CfgName, event.IFace, gmState))
+			if gmState.gmLog != "" {
+				logOut = append(logOut, gmState.gmLog)
 			}
 
 			// Update the metrics
@@ -369,17 +523,25 @@ connect:
 					e.updateMetrics(event.CfgName, event.ProcessName, event.Values)
 					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
 				}
-				e.UpdateClockStateMetrics(gmState, string(GM), event.IFace)
+				e.UpdateClockStateMetrics(gmState.state, string(GM), event.IFace)
 			}
-
 			// update clock class
-			go func() {
-				select {
-				case clockClassRequestCh <- ClockClassRequest{cfgName: event.CfgName, gmState: gmState, clockType: event.ClockType}:
-				default:
-					glog.Error("clock class request not read")
-				}
-			}()
+
+			if uint8(gmState.clockClass) != uint8(e.clockClass) {
+				glog.Infof("clock class change request from %d to %d", uint8(e.clockClass), uint8(gmState.clockClass))
+				go func() {
+					select {
+					case clockClassRequestCh <- ClockClassRequest{
+						cfgName:    event.CfgName,
+						gmState:    gmState.state,
+						clockType:  event.ClockType,
+						clockClass: gmState.clockClass,
+					}:
+					default:
+						glog.Error("clock class request busy updating previous request, will try next event")
+					}
+				}()
+			}
 
 			if event.WriteToLog && len(logOut) > 0 {
 				if e.stdoutToSocket {
@@ -393,12 +555,10 @@ connect:
 					}
 				} else {
 					for _, l := range logOut {
-						glog.Error("wrting here2")
 						fmt.Printf("%s", l)
 					}
 				}
 			}
-
 		case <-e.closeCh:
 			return
 		default:
@@ -406,12 +566,12 @@ connect:
 				registeredMonitorCount = len(StateRegisterer.Subscribers)
 				StateRegisterer.monitor()
 			}
-			time.Sleep(50 * time.Millisecond) // cpu saver
+			time.Sleep(10 * time.Millisecond) // cpu saver
 		}
 	}
 }
 
-func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clockType ClockType,
+func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.ClockClass, clockType ClockType,
 	gmGetterFn func(string) (protocol.GrandmasterSettings, error),
 	gmSetterFn func(string, protocol.GrandmasterSettings) error) (err error, clockClass fbprotocol.ClockClass) {
 	g, err := gmGetterFn(cfgName)
@@ -420,10 +580,10 @@ func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clock
 		return err, clockClass
 	}
 	glog.Infof("current GRANDMASTER_SETTINGS_NP:\n%s", g.String())
-	switch ptpState {
-	case PTP_LOCKED:
-		switch clockType {
-		case GM:
+	switch clockType {
+	case GM:
+		switch clkClass {
+		case fbprotocol.ClockClass6: // T-GM connected to a PRTC in locked mode (e.g., PRTC traceable to GNSS)
 			// update only when ClockClass is changed
 			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass6
@@ -432,28 +592,15 @@ func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clock
 				g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
 				err = gmSetterFn(cfgName, g)
 			}
-		case OC:
-		case BC:
-		}
-	case PTP_FREERUN:
-		switch clockType {
-		case GM:
-			// update only when ClockClass is changed
-			if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
-				g.ClockQuality.ClockClass = protocol.ClockClassFreerun
+		case protocol.ClockClassOutOfSpec: // GM out of holdover specification, traceable to Category 3
+			if g.ClockQuality.ClockClass != protocol.ClockClassOutOfSpec {
+				g.ClockQuality.ClockClass = protocol.ClockClassOutOfSpec
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)
 			}
-		case OC:
-		case BC:
-		}
-	case PTP_HOLDOVER:
-		switch clockType {
-		case GM:
-			// Need to know inSpec or Outof Spec
-			// update only when ClockClass is changed
+		case fbprotocol.ClockClass7: // T-GM in holdover, within holdover specification
 			if g.ClockQuality.ClockClass != fbprotocol.ClockClass7 {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass7
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
@@ -461,11 +608,20 @@ func (e *EventHandler) updateCLockClass(cfgName string, ptpState PTPState, clock
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)
 			}
-		case OC:
-		case BC:
+		case protocol.ClockClassFreerun: // T-GM or T-BC in free-run mode
+			if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
+				g.ClockQuality.ClockClass = protocol.ClockClassFreerun
+				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
+				// T-REC-G.8275.1-202211-I section 6.3.5
+				g.ClockQuality.OffsetScaledLogVariance = 0xffff
+				err = gmSetterFn(cfgName, g)
+			}
+		default:
+			glog.Infof("No clock class identified for %d", clkClass)
 		}
 	default:
 	}
+
 	return err, g.ClockQuality.ClockClass
 }
 
@@ -567,6 +723,109 @@ func (e *EventHandler) unregisterMetrics(configName string, processName string) 
 			}
 		}
 	}
+}
+
+func (e *EventHandler) updateData(event EventChannel) Data {
+	if e.data[event.CfgName] == nil {
+		e.data[event.CfgName] = []*Data{}
+	}
+
+	var eData *Data
+	for _, d := range e.data[event.CfgName] {
+		if d.ProcessName == event.ProcessName {
+			eData = d
+		}
+	}
+	// new record
+	if eData == nil {
+		return e.addData(event)
+	}
+	// update existing record
+	//if event.WriteToLog {
+	logData := make([]string, 0, len(event.Values))
+	for k, v := range event.Values {
+		logData = append(logData, fmt.Sprintf("%s %d", k, v))
+	}
+	sort.Strings(logData)
+	logOut := fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", event.ProcessName,
+		time.Now().Unix(), event.CfgName, event.IFace, strings.Join(logData, " "), event.State)
+
+	if eData.time <= event.Time { //ignore stale data
+		if eData.State != event.State { // state changed
+			if len(StateRegisterer.Subscribers) > 0 {
+				go StateRegisterer.notify(event.ProcessName, event.State)
+			}
+		}
+		eData.sourceLost = event.SourceLost
+		eData.State = event.State
+		eData.IFace = event.IFace
+		eData.time = event.Time
+
+		if logOut != eData.logData {
+			eData.logData = logOut
+		} else {
+			logOut = ""
+		}
+	} else {
+		glog.Infof("discarding stale event for process %s, last event @ %d, current event @ %d", event.ProcessName, eData.time, event.Time)
+		logOut = ""
+
+	}
+	e.updateSpecState(event)
+	return Data{logData: logOut}
+}
+
+// UpdateClockClass ... update clock class
+func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
+	glog.Infof("updating clock class for last clock class %d to %d and gmsState %s ", e.clockClass, clk.clockClass, clk.gmState)
+	classErr, clockClass := e.updateCLockClass(clk.cfgName, clk.clockClass, clk.clockType,
+		PMCGMGetter, PMCGMSetter)
+	if classErr != nil {
+		glog.Errorf("error updating clock class %s", classErr)
+	} else {
+		e.clockClass = clockClass
+		clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
+		if e.stdoutToSocket {
+			if c != nil {
+				_, err := c.Write([]byte(clockClassOut))
+				if err != nil {
+					glog.Errorf("failed to write class change event %s", err.Error())
+				}
+			} else {
+				glog.Errorf("failed to write class change event, connection is nil")
+			}
+		}
+		fmt.Printf("%s", clockClassOut)
+	}
+}
+func (e *EventHandler) addData(event EventChannel) Data {
+	if e.data[event.CfgName] == nil {
+		e.data[event.CfgName] = []*Data{}
+	}
+	//if event.WriteToLog {
+	logData := make([]string, 0, len(event.Values))
+	for k, v := range event.Values {
+		logData = append(logData, fmt.Sprintf("%s %d", k, v))
+	}
+	sort.Strings(logData)
+	newEvent := &Data{
+		ProcessName: event.ProcessName,
+		State:       event.State,
+		ClockType:   event.ClockType,
+		Metrics:     map[ValueType]DataMetrics{},
+		IFace:       event.IFace,
+		time:        event.Time,
+		logData: fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", event.ProcessName,
+			time.Now().Unix(), event.CfgName, event.IFace, strings.Join(logData, " "), event.State),
+		sourceLost: event.SourceLost,
+	}
+	e.data[event.CfgName] = append(e.data[event.CfgName], newEvent)
+	// update if DPLL holdover is out of spec
+	e.updateSpecState(event)
+	if len(StateRegisterer.Subscribers) > 0 {
+		go StateRegisterer.notify(event.ProcessName, event.State)
+	}
+	return *newEvent
 }
 
 func getMetricName(valueType ValueType) string {
