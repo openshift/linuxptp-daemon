@@ -246,7 +246,7 @@ DPLL PTP State |  GNSS PTP STATE  |	TS2PHC PTP STATE| GM STATE | Clock Class
 
 */
 func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
-	dpllState := PTP_FREERUN
+	dpllState := PTP_NOTSET
 	gnssState := PTP_FREERUN
 	ts2phcState := PTP_FREERUN
 	gnssSrcLost := e.isSourceLost(cfgName)
@@ -297,7 +297,7 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 		e.gmSyncState[cfgName].state = dpllState
 		// T-GM in holdover, within holdover specification
 		e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass7
-	case PTP_LOCKED:
+	case PTP_LOCKED, PTP_NOTSET: // consider DPLL is locked if DPLL is not available
 		switch gnssState {
 		case PTP_LOCKED:
 			switch ts2phcState {
