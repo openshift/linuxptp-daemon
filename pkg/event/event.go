@@ -109,10 +109,11 @@ const (
 const connectionRetryInterval = 1 * time.Second
 
 type grandMasterSyncState struct {
-	state      PTPState
-	clockClass fbprotocol.ClockClass
-	sourceLost bool
-	gmLog      string
+	state          PTPState
+	clockClass     fbprotocol.ClockClass
+	sourceLost     bool
+	gmLog          string
+	lastLoggedTime int64
 }
 
 // EventHandler ... event handler to process events
@@ -278,8 +279,8 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 	} else {
 		e.gmSyncState[cfgName].state = PTP_FREERUN
 		e.gmSyncState[cfgName].clockClass = 248
-		e.gmSyncState[cfgName].gmLog = fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), cfgName, gmIface, e.gmSyncState[cfgName].state)
-
+		e.gmSyncState[cfgName].lastLoggedTime = time.Now().Unix()
+		e.gmSyncState[cfgName].gmLog = fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, e.gmSyncState[cfgName].lastLoggedTime, cfgName, gmIface, e.gmSyncState[cfgName].state)
 		return *e.gmSyncState[cfgName]
 	}
 
@@ -354,22 +355,21 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 			}
 		}
 	}
-	gmLog := ""
-	// this will reduce log noise
-	gmLog = fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, time.Now().Unix(), cfgName, gmIface, e.gmSyncState[cfgName].state)
-	if gmLog != e.gmSyncState[cfgName].gmLog {
-		e.gmSyncState[cfgName].gmLog = gmLog
-		glog.Infof("dpll State %s, gnss State %s, ts2phc state %s, gm state %s,", dpllState, gnssState, ts2phcState, e.gmSyncState[cfgName].state)
-	} else {
-		gmLog = ""
-	}
-
-	return grandMasterSyncState{
+	rGrandMasterSyncState := grandMasterSyncState{
 		state:      e.gmSyncState[cfgName].state,
 		clockClass: e.gmSyncState[cfgName].clockClass,
 		sourceLost: e.gmSyncState[cfgName].sourceLost,
-		gmLog:      gmLog,
 	}
+	// this will reduce log noise and prints 1 per sec
+	logTime := time.Now().Unix()
+	if e.gmSyncState[cfgName].lastLoggedTime != logTime {
+		gmLog := fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, logTime, cfgName, gmIface, e.gmSyncState[cfgName].state)
+		e.gmSyncState[cfgName].lastLoggedTime = logTime
+		e.gmSyncState[cfgName].gmLog = gmLog
+		rGrandMasterSyncState.gmLog = gmLog
+		glog.Infof("dpll State %s, gnss State %s, tsphc state %s, gm state %s,", dpllState, gnssState, ts2phcState, e.gmSyncState[cfgName].state)
+	}
+	return rGrandMasterSyncState
 }
 
 func (e *EventHandler) getGMState(cfgName string) grandMasterSyncState {
@@ -543,7 +543,7 @@ connect:
 				}()
 			}
 
-			if event.WriteToLog && len(logOut) > 0 {
+			if len(logOut) > 0 {
 				if e.stdoutToSocket {
 					for _, l := range logOut {
 						fmt.Printf("%s", l)
