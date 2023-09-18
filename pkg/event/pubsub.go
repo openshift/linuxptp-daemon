@@ -6,11 +6,13 @@ import (
 )
 
 type Subscriber interface {
-	Notify(source EventSource, state PTPState)
-	Topic() EventSource
-	Monitor()
-	MonitoringStarted() bool
 	ID() string
+	// Monitor method to start ay monitoring process
+	Monitor()
+	// Notify to call when event occurs
+	Notify(source EventSource, state PTPState)
+
+	Topic() EventSource
 }
 
 type Notifier interface {
@@ -21,10 +23,6 @@ type Notifier interface {
 type StateNotifier struct {
 	sync.Mutex
 	Subscribers map[string]Subscriber
-}
-type ReadyNotifier struct {
-	sync.Mutex
-	Monitors map[string]Subscriber
 }
 
 func (n *StateNotifier) Register(s Subscriber) {
@@ -46,9 +44,11 @@ func (n *StateNotifier) Unregister(s Subscriber) {
 func (n *StateNotifier) monitor() {
 	n.Lock()
 	defer n.Unlock()
-	for _, o := range n.Subscribers {
-		if !o.MonitoringStarted() && o.Topic() == NIL {
+	for key, o := range n.Subscribers {
+		if o.Topic() == MONITORING {
 			o.Monitor()
+			// monitoring is once time registering
+			delete(n.Subscribers, key)
 		}
 	}
 }
@@ -57,7 +57,7 @@ func (n *StateNotifier) notify(source EventSource, state PTPState) {
 	n.Lock()
 	defer n.Unlock()
 	for _, o := range n.Subscribers {
-		if o.Topic() == source && o.Topic() != NIL {
+		if o.Topic() == source && o.Topic() != MONITORING {
 			go o.Notify(source, state)
 		}
 	}
