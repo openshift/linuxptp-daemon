@@ -80,13 +80,13 @@ const TS2PHCProcessName = "ts2phc"
 type EventSource string
 
 const (
-	GNSS    EventSource = "gnss"
-	DPLL    EventSource = "dpll"
-	TS2PHC  EventSource = "ts2phc"
-	PTP4l   EventSource = "ptp4l"
-	PHC2SYS EventSource = "phc2sys"
-	SYNCE   EventSource = "syncE"
-	NIL     EventSource = "nil"
+	GNSS       EventSource = "gnss"
+	DPLL       EventSource = "dpll"
+	TS2PHC     EventSource = "ts2phc"
+	PTP4l      EventSource = "ptp4l"
+	PHC2SYS    EventSource = "phc2sys"
+	SYNCE      EventSource = "syncE"
+	MONITORING EventSource = "monitoring"
 )
 
 // PTPState ...
@@ -453,7 +453,6 @@ connect:
 			for {
 				select {
 				case clk := <-clockClassRequestCh:
-					//TODO: This takes more than 2 secs/ so make it blocking
 					e.UpdateClockClass(c, clk)
 				case <-e.closeCh:
 					return
@@ -465,13 +464,9 @@ connect:
 		redialClockClass = false
 	}
 	// call all monitoring candidates
-	registeredMonitorCount := 0
-	if len(StateRegisterer.Subscribers) > registeredMonitorCount {
-		registeredMonitorCount = len(StateRegisterer.Subscribers)
-		StateRegisterer.monitor()
-	}
+	StateRegisterer.monitor()
 
-	glog.Info("starting grandmaster state monitoring...")
+	glog.Info("starting state monitoring...")
 	for {
 		select {
 		case event := <-e.processChannel:
@@ -482,6 +477,7 @@ connect:
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName)
 					e.clockClass = protocol.ClockClassUninitialized
+
 				} else {
 					// Check if the index is within the slice bounds
 					for indexToRemove, d := range e.data[event.CfgName] {
@@ -562,10 +558,7 @@ connect:
 		case <-e.closeCh:
 			return
 		default:
-			if len(StateRegisterer.Subscribers) > registeredMonitorCount {
-				registeredMonitorCount = len(StateRegisterer.Subscribers)
-				StateRegisterer.monitor()
-			}
+			StateRegisterer.monitor()
 			time.Sleep(10 * time.Millisecond) // cpu saver
 		}
 	}
@@ -579,7 +572,6 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 		glog.Errorf("failed to get current GRANDMASTER_SETTINGS_NP: %s", err)
 		return err, clockClass
 	}
-	glog.Infof("current GRANDMASTER_SETTINGS_NP:\n%s", g.String())
 	switch clockType {
 	case GM:
 		switch clkClass {
@@ -777,12 +769,12 @@ func (e *EventHandler) updateData(event EventChannel) Data {
 
 // UpdateClockClass ... update clock class
 func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
-	glog.Infof("updating clock class for last clock class %d to %d and gmsState %s ", e.clockClass, clk.clockClass, clk.gmState)
 	classErr, clockClass := e.updateCLockClass(clk.cfgName, clk.clockClass, clk.clockType,
 		PMCGMGetter, PMCGMSetter)
 	if classErr != nil {
 		glog.Errorf("error updating clock class %s", classErr)
 	} else {
+		glog.Infof("updated clock class for last clock class %d to %d ", e.clockClass, clockClass)
 		e.clockClass = clockClass
 		clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
 		if e.stdoutToSocket {
