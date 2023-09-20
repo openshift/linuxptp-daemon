@@ -11,9 +11,8 @@ import (
 )
 
 const (
-	DefaultUpdateInterval  = 30
-	DefaultProfilePath     = "/etc/linuxptp"
-	DefaultPmcPollInterval = 5
+	DefaultUpdateInterval = 30
+	DefaultProfilePath    = "/etc/linuxptp"
 )
 
 func GetKubeConfig() (*rest.Config, error) {

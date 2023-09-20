@@ -40,18 +40,16 @@ type ProcessManager struct {
 }
 
 type ptpProcess struct {
-	name             string
-	ifaces           []string
-	ptp4lSocketPath  string
-	ptp4lConfigPath  string
-	configName       string
-	exitCh           chan bool
-	execMutex        sync.Mutex
-	stopped          bool
-	logFilterRegex   string
-	cmd              *exec.Cmd
-	parentClockClass float64
-	pmcCheck         bool
+	name            string
+	ifaces          []string
+	ptp4lSocketPath string
+	ptp4lConfigPath string
+	configName      string
+	exitCh          chan bool
+	execMutex       sync.Mutex
+	stopped         bool
+	logFilterRegex  string
+	cmd             *exec.Cmd
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -86,8 +84,6 @@ type Daemon struct {
 	// channel ensure LinuxPTP.Run() exit when main function exits.
 	// stopCh is created by main function and passed by Daemon via NewLinuxPTP()
 	stopCh <-chan struct{}
-
-	pmcPollInterval int
 }
 
 // New LinuxPTP is called by daemon to generate new linuxptp instance
@@ -98,27 +94,23 @@ func New(
 	kubeClient *kubernetes.Clientset,
 	ptpUpdate *LinuxPTPConfUpdate,
 	stopCh <-chan struct{},
-	pmcPollInterval int,
 ) *Daemon {
 	if !stdoutToSocket {
 		RegisterMetrics(nodeName)
 	}
 	return &Daemon{
-		nodeName:        nodeName,
-		namespace:       namespace,
-		stdoutToSocket:  stdoutToSocket,
-		kubeClient:      kubeClient,
-		ptpUpdate:       ptpUpdate,
-		pmcPollInterval: pmcPollInterval,
-		stopCh:          stopCh,
-		processManager:  &ProcessManager{},
+		nodeName:       nodeName,
+		namespace:      namespace,
+		stdoutToSocket: stdoutToSocket,
+		kubeClient:     kubeClient,
+		ptpUpdate:      ptpUpdate,
+		processManager: &ProcessManager{},
+		stopCh:         stopCh,
 	}
 }
 
 // Run in a for loop to listen for any LinuxPTPConfUpdate changes
 func (dn *Daemon) Run() {
-	tickerPmc := time.NewTicker(time.Second * time.Duration(dn.pmcPollInterval))
-	defer tickerPmc.Stop()
 	for {
 		select {
 		case <-dn.ptpUpdate.UpdateCh:
@@ -126,9 +118,6 @@ func (dn *Daemon) Run() {
 			if err != nil {
 				glog.Errorf("linuxPTP apply node profile failed: %v", err)
 			}
-		case <-tickerPmc.C:
-			dn.HandlePmcTicker()
-
 		case <-dn.stopCh:
 			for _, p := range dn.processManager.process {
 				if p != nil {
@@ -322,14 +311,6 @@ func (dn *Daemon) addProfileConfig(socketPath string, configFile string, nodePro
 	return nil
 }
 
-func (dn *Daemon) HandlePmcTicker() {
-	for _, process := range dn.processManager.process {
-		if process.name == ptp4lProcessName {
-			process.pmcCheck = true
-		}
-	}
-}
-
 // Add fifo scheduling if specified in nodeProfile
 func addScheduling(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
 	if nodeProfile.PtpSchedulingPolicy != nil && *nodeProfile.PtpSchedulingPolicy == "SCHED_FIFO" {
@@ -380,38 +361,6 @@ func processStatus(c *net.Conn, processName, cfgName string, status int64) {
 	_, err := (*c).Write([]byte(deadProcessMsg))
 	if err != nil {
 		glog.Errorf("Write error sending ptp4l/phc2sys process healths status%s:", err)
-	}
-}
-
-func (p *ptpProcess) updateClockClass(c *net.Conn) {
-	if _, matches, e := pmc.RunPMCExp(p.configName, pmc.CmdParentDataSet, pmc.ClockClassChangeRegEx); e == nil {
-		//regex: 'gm.ClockClass[[:space:]]+(\d+)'
-		//match  1: 'gm.ClockClass                         135'
-		//match  2: '135'
-		if len(matches) > 1 {
-			var parseError error
-			var clockClass float64
-			if clockClass, parseError = strconv.ParseFloat(matches[1], 64); parseError == nil {
-				if clockClass != p.parentClockClass {
-					p.parentClockClass = clockClass
-					glog.Infof("clock change event identified")
-					//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
-					clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, clockClass)
-					fmt.Printf("%s", clockClassOut)
-
-					_, err := (*c).Write([]byte(clockClassOut))
-					if err != nil {
-						glog.Errorf("failed to write class change event %s", err.Error())
-					}
-				}
-			} else {
-				glog.Errorf("parse error in clock class value %s", parseError)
-			}
-		} else {
-			glog.Infof("clock class change value not found via PMC")
-		}
-	} else {
-		glog.Error("error parsing PMC util for clock class change event")
 	}
 }
 
@@ -476,18 +425,39 @@ func cmdRun(p *ptpProcess, stdoutToSocket bool) {
 				processStatus(&c, p.name, p.configName, PtpProcessUp)
 				for scanner.Scan() {
 					output := scanner.Text()
-					if p.pmcCheck {
-						p.pmcCheck = false
-						go p.updateClockClass(&c)
-					}
-
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
 						fmt.Printf("%s\n", output)
 					}
 					out := fmt.Sprintf("%s\n", output)
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
-							go p.updateClockClass(&c)
+							go func(c *net.Conn, cfgName string) {
+								if _, matches, e := pmc.RunPMCExp(cfgName, pmc.CmdParentDataSet, pmc.ClockClassChangeRegEx); e == nil {
+									//regex: 'gm.ClockClass[[:space:]]+(\d+)'
+									//match  1: 'gm.ClockClass                         135'
+									//match  2: '135'
+									if len(matches) > 1 {
+										var parseError error
+										var clockClass float64
+										if clockClass, parseError = strconv.ParseFloat(matches[1], 64); parseError == nil {
+											glog.Infof("clock change event identified")
+											//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
+											clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, clockClass)
+											fmt.Printf("%s", clockClassOut)
+											_, err := (*c).Write([]byte(clockClassOut))
+											if err != nil {
+												glog.Errorf("failed to write class change event %s", err.Error())
+											}
+										} else {
+											glog.Errorf("parse error in clock class value %s", parseError)
+										}
+									} else {
+										glog.Infof("clock class change value not found via PMC")
+									}
+								} else {
+									glog.Error("error parsing PMC util for clock class change event")
+								}
+							}(&c, p.configName)
 						}
 					}
 					_, err := c.Write([]byte(out))
