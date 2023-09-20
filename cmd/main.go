@@ -24,9 +24,8 @@ import (
 )
 
 type cliParams struct {
-	updateInterval  int
-	profileDir      string
-	pmcPollInterval int
+	updateInterval int
+	profileDir     string
 }
 
 // Parse Command line flags
@@ -35,8 +34,6 @@ func flagInit(cp *cliParams) {
 		"Interval to update PTP status")
 	flag.StringVar(&cp.profileDir, "linuxptp-profile-path", config.DefaultProfilePath,
 		"profile to start linuxptp processes")
-	flag.IntVar(&cp.pmcPollInterval, "pmc-poll-interval", config.DefaultPmcPollInterval,
-		"Interval for periodical PMC poll")
 }
 
 func main() {
@@ -46,7 +43,6 @@ func main() {
 
 	glog.Infof("resync period set to: %d [s]", cp.updateInterval)
 	glog.Infof("linuxptp profile path set to: %s", cp.profileDir)
-	glog.Infof("pmc poll interval set to: %d [s]", cp.pmcPollInterval)
 
 	cfg, err := config.GetKubeConfig()
 	if err != nil {
@@ -115,7 +111,6 @@ func main() {
 		ptpConfUpdate,
 		stopCh,
 		plugins,
-		cp.pmcPollInterval,
 	).Run()
 
 	tickerPull := time.NewTicker(time.Second * time.Duration(cp.updateInterval))
