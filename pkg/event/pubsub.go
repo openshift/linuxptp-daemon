@@ -42,6 +42,9 @@ func (n *StateNotifier) Unregister(s Subscriber) {
 }
 
 func (n *StateNotifier) monitor() {
+	if len(n.Subscribers) == 0 {
+		return
+	}
 	n.Lock()
 	defer n.Unlock()
 	for key, o := range n.Subscribers {
