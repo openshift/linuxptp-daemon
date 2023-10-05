@@ -456,20 +456,28 @@ connect:
 					e.UpdateClockClass(c, clk)
 				case <-e.closeCh:
 					return
-				default:
-					time.Sleep(50 * time.Millisecond)
 				}
 			}
 		}(&c)
 		redialClockClass = false
 	}
-	// call all monitoring candidates
-	StateRegisterer.monitor()
+	// call all monitoring candidates; verify every 5 secs for any new
+	ticker := time.NewTicker(5 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-e.closeCh:
+				return
+			case <-ticker.C:
+				StateRegisterer.monitor()
+			}
+		}
+	}()
 
 	glog.Info("starting state monitoring...")
 	for {
 		select {
-		case event := <-e.processChannel:
+		case event := <-e.processChannel: // for non GM this thread will be in sleep forever
 			// ts2phc[123455]:[ts2phc.0.config] 12345 s0 offset/gps
 			// replace ts2phc logs here
 			if event.Reset { // clean up
@@ -477,7 +485,6 @@ connect:
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName)
 					e.clockClass = protocol.ClockClassUninitialized
-
 				} else {
 					// Check if the index is within the slice bounds
 					for indexToRemove, d := range e.data[event.CfgName] {
@@ -557,9 +564,6 @@ connect:
 			}
 		case <-e.closeCh:
 			return
-		default:
-			StateRegisterer.monitor()
-			time.Sleep(10 * time.Millisecond) // cpu saver
 		}
 	}
 }
