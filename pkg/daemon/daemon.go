@@ -103,6 +103,7 @@ func New(
 	if !stdoutToSocket {
 		RegisterMetrics(nodeName)
 	}
+	InitializeOffsetMaps()
 	return &Daemon{
 		nodeName:        nodeName,
 		namespace:       namespace,
