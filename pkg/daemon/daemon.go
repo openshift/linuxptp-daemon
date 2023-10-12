@@ -733,22 +733,13 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 // for ts2phc along with processing metrics need to identify event
 func (p *ptpProcess) processPTPMetrics(output string) {
 	if p.name == ts2phcProcessName && (strings.Contains(output, NMEASourceDisabledIndicator) ||
-		strings.Contains(output, InvalidMasterTimestampIndicator)) { //TODO identify which interface lost nmea or 1pps
-		iface := p.ifaces[0]
-		if iface != "" {
-			r := []rune(iface)
-			iface = string(r[:len(r)-1]) + "x"
-		}
-		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]int64{event.NMEA_STATUS: int64(0)})
-		glog.Error("nmea string lost") //TODO: add for 1pps lost
+		strings.Contains(output, InvalidMasterTimestampIndicator)) {
+		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, "", map[event.ValueType]interface{}{event.NMEA_STATUS: int64(0)})
+		glog.Error("nmea string lost")
 	} else {
-		_, source, ptpOffset, _, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
+		source, ptpOffset, _, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
-			var values map[event.ValueType]int64
-			if iface != clockRealTime && p.name == ts2phcProcessName {
-				values = map[event.ValueType]int64{event.NMEA_STATUS: int64(1)}
-			}
-			p.ProcessTs2PhcEvents(ptpOffset, source, iface, values)
+			p.ProcessTs2PhcEvents(ptpOffset, source, iface, map[event.ValueType]interface{}{event.NMEA_STATUS: int64(1)})
 		}
 	}
 }
@@ -799,7 +790,7 @@ func (p *ptpProcess) MonitorEvent(offset float64, clockState string) {
 	// not implemented
 }
 
-func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string, extraValue map[event.ValueType]int64) {
+func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string, extraValue map[event.ValueType]interface{}) {
 	var ptpState event.PTPState
 	ptpState = event.PTP_FREERUN
 	ptpOffsetInt64 := int64(ptpOffset)
@@ -807,12 +798,12 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 		ptpOffsetInt64 >= p.ptpClockThreshold.MinOffsetThreshold {
 		ptpState = event.PTP_LOCKED
 	}
-	if source == ts2phcProcessName {
-		var values = make(map[event.ValueType]int64)
-		values[event.OFFSET] = ptpOffsetInt64
-		if len(p.ifaces) > 0 {
-			iface = p.ifaces[0]
+	if source == ts2phcProcessName { // for ts2phc send it to event to create metrics and events
+		var values = make(map[event.ValueType]interface{})
+		if iface == "" && len(p.ifaces) > 0 {
+			iface = p.ifaces[0] //TODO: with multi card we need to identify interface for PPS card
 		}
+		values[event.OFFSET] = ptpOffsetInt64
 		for k, v := range extraValue {
 			values[k] = v
 		}
@@ -834,7 +825,6 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 			Reset: false,
 		}:
 		default:
-
 		}
 	} else {
 		if ptpState == event.PTP_LOCKED {

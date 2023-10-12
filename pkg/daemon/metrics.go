@@ -76,8 +76,8 @@ type masterOffsetSourceProcess struct { // current slave iface name
 
 var (
 	masterOffsetIface  *masterOffsetInterface     // by slave iface with masked index
-	slaveIface         *slaveInterface            // slave iface name
-	masterOffsetSource *masterOffsetSourceProcess // which  profile and source is used for master offset current
+	slaveIface         *slaveInterface            // current slave iface name
+	masterOffsetSource *masterOffsetSourceProcess // master offset source
 	NodeName           = ""
 
 	Offset = prometheus.NewGaugeVec(
@@ -211,8 +211,8 @@ func updatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, freq
 }
 
 // extractMetrics ...
-func extractMetrics(messageTag string, processName string, ifaces []string, output string) (configName, source string, offset float64, state string, iface string) {
-	configName = strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
+func extractMetrics(messageTag string, processName string, ifaces []string, output string) (source string, offset float64, state string, iface string) {
+	configName := strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
 	if strings.Contains(output, " max ") {
 		ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay := extractSummaryMetrics(configName, processName, output)
 		if ifaceName != "" {
