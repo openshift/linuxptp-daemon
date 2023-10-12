@@ -59,7 +59,6 @@ func (l *LinuxPTPConfUpdate) UpdateConfig(nodeProfilesJson []byte) error {
 	if string(l.appliedNodeProfileJson) == string(nodeProfilesJson) {
 		return nil
 	}
-
 	if nodeProfiles, ok := tryToLoadConfig(nodeProfilesJson); ok {
 		glog.Info("load profiles")
 		l.appliedNodeProfileJson = nodeProfilesJson

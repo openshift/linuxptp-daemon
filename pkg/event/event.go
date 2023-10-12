@@ -29,7 +29,16 @@ const (
 	//Status           ValueType = "status"
 	PHASE_STATUS     ValueType = "phase_status"
 	FREQUENCY_STATUS ValueType = "frequency_status"
+	NMEA_STATUS      ValueType = "nmea_status"
 )
+
+var valueTypeHelpTxt = map[ValueType]string{
+	OFFSET:           "0 = FREERUN, 1 = LOCKED, 2 = HOLDOVER",
+	GPS_STATUS:       "0=NOFIX, 1=Dead Reckoning Only, 2=2D-FIX, 3=3D-FIX, 4=GPS+dead reckoning fix, 5=Time only fix",
+	PHASE_STATUS:     "-1=UNKNOWN, 0=INVALID, 1=FREERUN, 2=LOCKED, 3=LOCKED_HO_ACQ, 4=HOLDOVER",
+	FREQUENCY_STATUS: "-1=UNKNOWN, 0=INVALID, 1=FREERUN, 2=LOCKED, 3=LOCKED_HO_ACQ, 4=HOLDOVER",
+	NMEA_STATUS:      "0 = UNAVAILABLE, 1 = AVAILABLE",
+}
 
 // ClockType ...
 type ClockType string
@@ -135,16 +144,16 @@ type EventHandler struct {
 
 // EventChannel .. event channel to subscriber to events
 type EventChannel struct {
-	ProcessName EventSource         // ptp4l, gnss etc
-	State       PTPState            // PTP locked etc
-	IFace       string              // Interface that is causing the event
-	CfgName     string              // ptp config profile name
-	Values      map[ValueType]int64 // either offset or status , 3 information  offset , phase state and frequency state
-	ClockType   ClockType           // oc bc gm
-	Time        int64               // time.Unix.Now()
-	OutOfSpec   bool                // out of Spec for offset
-	WriteToLog  bool                // send to log in predefined format %s[%d]:[%s] %s %d
-	Reset       bool                // reset data on ptp deletes or process died
+	ProcessName EventSource               // ptp4l, gnss etc
+	State       PTPState                  // PTP locked etc
+	IFace       string                    // Interface that is causing the event
+	CfgName     string                    // ptp config profile name
+	Values      map[ValueType]interface{} // either offset or status , 3 information  offset , phase state and frequency state
+	ClockType   ClockType                 // oc bc gm
+	Time        int64                     // time.Unix.Now()
+	OutOfSpec   bool                      // out of Spec for offset
+	WriteToLog  bool                      // send to log in predefined format %s[%d]:[%s] %s %d
+	Reset       bool                      // reset data on ptp deletes or process died
 	SourceLost  bool
 }
 
@@ -522,11 +531,15 @@ connect:
 
 			// Update the metrics
 			if !e.stdoutToSocket { // if events not enabled
-				if event.ProcessName != TS2PHCProcessName {
-					e.updateMetrics(event.CfgName, event.ProcessName, event.Values)
-					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
+				iface := ""
+				if event.IFace != "" {
+					r := []rune(event.IFace)
+					iface = string(r[:len(r)-1]) + "x"
 				}
-				e.UpdateClockStateMetrics(gmState.state, string(GM), event.IFace)
+				e.UpdateClockStateMetrics(event.State, string(event.ProcessName), iface)
+				//  update all metric that was sent to events
+				e.updateMetrics(event.CfgName, event.ProcessName, event.Values)
+				e.UpdateClockStateMetrics(gmState.state, string(GM), iface)
 			}
 			// update clock class
 
@@ -664,22 +677,41 @@ func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace st
 		e.clockMetric.With(labels).Set(3)
 	}
 }
-func (e *EventHandler) updateMetrics(cfgName string, process EventSource, processData map[ValueType]int64) {
+func (e *EventHandler) updateMetrics(cfgName string, process EventSource, processData map[ValueType]interface{}) {
 	if dataArray, ok := e.data[cfgName]; ok { //  create metric for the data that was captured
 		for _, d := range dataArray {
 			if d.ProcessName == process { // is gnss or dpll or ts2phc
+				iface := d.IFace
+				if len(d.IFace) > 0 {
+					r := []rune(iface)
+					iface = string(r[:len(r)-1]) + "x"
+				}
 				for dataType, value := range processData { // update process with metrics
+					var dataValue float64
+					switch val := value.(type) {
+					case int64:
+						dataValue = float64(val)
+					case float64:
+						dataValue = val
+					default:
+						continue //ignore string for metrics
+					}
+
 					if _, found := d.Metrics[dataType]; !found { //todo: allow duplicate text
 						if dataType == OFFSET {
+							pName := string(d.ProcessName)
+
+							if d.ProcessName == TS2PHCProcessName {
+								pName = "master"
+							}
 							if d.Metrics[dataType].GaugeMetric == nil {
 								m := d.Metrics[dataType]
 								m.GaugeMetric = e.offsetMetric
 								d.Metrics[dataType] = m
 							}
-							pLabels := map[string]string{"from": string(d.ProcessName), "node": e.nodeName,
-								"process": string(d.ProcessName), "iface": d.IFace}
-							d.Metrics[dataType].GaugeMetric.With(pLabels).Set(float64(value))
-							continue
+							pLabels := map[string]string{"from": pName, "node": e.nodeName,
+								"process": string(d.ProcessName), "iface": iface}
+							d.Metrics[dataType].GaugeMetric.With(pLabels).Set(dataValue)
 						} else {
 							metrics := DataMetrics{
 								isRegistered: true,
@@ -688,25 +720,25 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 										Namespace: PTPNamespace,
 										Subsystem: PTPSubsystem,
 										Name:      getMetricName(dataType),
-										Help:      "",
+										Help:      valueTypeHelpTxt[dataType],
 									}, []string{"from", "node", "process", "iface"}),
 								CounterMetric: nil,
 								Name:          string(dataType),
 								ValueType:     prometheus.GaugeValue,
 								Labels: map[string]string{"from": string(d.ProcessName), "node": e.nodeName,
-									"process": string(d.ProcessName), "iface": d.IFace},
-								Value: float64(value),
+									"process": string(d.ProcessName), "iface": iface},
+								Value: dataValue,
 							}
 							registerMetrics(metrics.GaugeMetric)
-							metrics.GaugeMetric.With(metrics.Labels).Set(float64(value))
+							metrics.GaugeMetric.With(metrics.Labels).Set(dataValue)
 							d.Metrics[dataType] = metrics
 						}
 					} else {
 						s := d.Metrics[dataType]
 						s.Labels = map[string]string{"from": string(d.ProcessName), "node": e.nodeName,
-							"process": string(d.ProcessName), "iface": d.IFace}
-						s.Value = float64(value)
-						d.Metrics[dataType].GaugeMetric.With(s.Labels).Set(float64(value))
+							"process": string(d.ProcessName), "iface": iface}
+						s.Value = dataValue
+						d.Metrics[dataType].GaugeMetric.With(s.Labels).Set(dataValue)
 					}
 				}
 			}
@@ -756,7 +788,16 @@ func (e *EventHandler) updateData(event EventChannel) Data {
 	//if event.WriteToLog {
 	logData := make([]string, 0, len(event.Values))
 	for k, v := range event.Values {
-		logData = append(logData, fmt.Sprintf("%s %d", k, v))
+		switch val := v.(type) {
+		case int64, int, int32:
+			logData = append(logData, fmt.Sprintf("%s %d", k, val))
+		case float64:
+			logData = append(logData, fmt.Sprintf("%s %f", k, val))
+		case string:
+			logData = append(logData, fmt.Sprintf("%s %s", k, val))
+		default:
+			continue //ignore string for metrics
+		}
 	}
 	sort.Strings(logData)
 	logOut := fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", event.ProcessName,
@@ -817,7 +858,16 @@ func (e *EventHandler) addData(event EventChannel) Data {
 	//if event.WriteToLog {
 	logData := make([]string, 0, len(event.Values))
 	for k, v := range event.Values {
-		logData = append(logData, fmt.Sprintf("%s %d", k, v))
+		switch val := v.(type) {
+		case int64, int, int32:
+			logData = append(logData, fmt.Sprintf("%s %d", k, val))
+		case float64:
+			logData = append(logData, fmt.Sprintf("%s %f", k, val))
+		case string:
+			logData = append(logData, fmt.Sprintf("%s %s", k, val))
+		default:
+			continue //ignore string for metrics
+		}
 	}
 	sort.Strings(logData)
 	newEvent := &Data{
