@@ -584,6 +584,10 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass6
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+				g.TimePropertiesDS.TimeTraceable = true
+				g.TimePropertiesDS.FrequencyTraceable = true
+				g.TimePropertiesDS.CurrentUtcOffsetValid = true
+				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
 				err = gmSetterFn(cfgName, g)
@@ -592,6 +596,10 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 			if g.ClockQuality.ClockClass != protocol.ClockClassOutOfSpec {
 				g.ClockQuality.ClockClass = protocol.ClockClassOutOfSpec
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
+				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
+				g.TimePropertiesDS.TimeTraceable = false
+				g.TimePropertiesDS.FrequencyTraceable = false
+				g.TimePropertiesDS.CurrentUtcOffsetValid = false
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)
@@ -600,6 +608,10 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 			if g.ClockQuality.ClockClass != fbprotocol.ClockClass7 {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass7
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
+				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
+				g.TimePropertiesDS.TimeTraceable = true
+				g.TimePropertiesDS.FrequencyTraceable = true
+				g.TimePropertiesDS.CurrentUtcOffsetValid = true
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)
@@ -608,6 +620,10 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 			if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
 				g.ClockQuality.ClockClass = protocol.ClockClassFreerun
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
+				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
+				g.TimePropertiesDS.TimeTraceable = false
+				g.TimePropertiesDS.FrequencyTraceable = false
+				g.TimePropertiesDS.CurrentUtcOffsetValid = false
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)
