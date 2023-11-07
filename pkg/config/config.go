@@ -2,10 +2,11 @@ package config
 
 import (
 	"fmt"
-	"github.com/openshift/linuxptp-daemon/pkg/event"
 	"os"
 	"os/user"
 	"path/filepath"
+
+	"github.com/openshift/linuxptp-daemon/pkg/event"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -16,6 +17,13 @@ const (
 	DefaultProfilePath     = "/etc/linuxptp"
 	DefaultPmcPollInterval = 60
 )
+
+type Iface struct {
+	Name     string
+	IsMaster bool
+	Source   event.EventSource
+	PhcId    string
+}
 
 func GetKubeConfig() (*rest.Config, error) {
 	configFromFlags := func(kubeConfig string) (*rest.Config, error) {
