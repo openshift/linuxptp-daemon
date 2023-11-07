@@ -94,6 +94,7 @@ const (
 	TS2PHC     EventSource = "ts2phc"
 	PTP4l      EventSource = "ptp4l"
 	PHC2SYS    EventSource = "phc2sys"
+	PPS        EventSource = "1pps"
 	SYNCE      EventSource = "syncE"
 	MONITORING EventSource = "monitoring"
 )
