@@ -70,7 +70,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			clockState:       event.PTP_LOCKED,
 			outOfSpec:        false,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 3, event.FREQUENCY_STATUS: 3},
-			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
+			wantGMState:      "GM[0]:[ts2phc.0.config] unknown T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 3 offset 0 phase_status 3 s2",
 			desc:             "Initial state, gnss is not set, so expect GM to be FREERUN",
