@@ -150,18 +150,17 @@ type EventHandler struct {
 
 // EventChannel .. event channel to subscriber to events
 type EventChannel struct {
-	ProcessName  EventSource               // ptp4l, gnss etc
-	State        PTPState                  // PTP locked etc
-	IFace        string                    // Interface that is causing the event
-	CfgName      string                    // ptp config profile name
-	Values       map[ValueType]interface{} // either offset or status , 3 information  offset , phase state and frequency state
-	ClockType    ClockType                 // oc bc gm
-	Time         int64                     // time.Unix.Now()
-	OutOfSpec    bool                      // out of Spec for offset
-	WriteToLog   bool                      // send to log in predefined format %s[%d]:[%s] %s %d
-	Reset        bool                      // reset data on ptp deletes or process died
-	SignalSource EventSource
-	SourceLost   bool
+	ProcessName EventSource               // ptp4l, gnss etc
+	State       PTPState                  // PTP locked etc
+	IFace       string                    // Interface that is causing the event
+	CfgName     string                    // ptp config profile name
+	Values      map[ValueType]interface{} // either offset or status , 3 information  offset , phase state and frequency state
+	ClockType   ClockType                 // oc bc gm
+	Time        int64                     // time.Unix.Now()
+	OutOfSpec   bool                      // out of Spec for offset
+	WriteToLog  bool                      // send to log in predefined format %s[%d]:[%s] %s %d
+	Reset       bool                      // reset data on ptp deletes or process died
+	SourceLost  bool
 }
 
 var (
@@ -597,10 +596,20 @@ connect:
 
 			// Update the metrics
 			if !e.stdoutToSocket { // if events not enabled
-				e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
+				eventIface := event.IFace
+				if eventIface != "" {
+					r := []rune(eventIface)
+					eventIface = string(r[:len(r)-1]) + "x"
+				}
+				e.UpdateClockStateMetrics(event.State, string(event.ProcessName), eventIface)
 				//  update all metric that was sent to events
 				e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
-				e.UpdateClockStateMetrics(gmState.state, string(GM), gmState.gmIFace)
+				gmIface := gmState.gmIFace
+				if gmIface != "" {
+					r := []rune(gmIface)
+					gmIface = string(r[:len(r)-1]) + "x"
+				}
+				e.UpdateClockStateMetrics(gmState.state, string(GM), gmIface)
 			}
 
 			if uint8(gmState.clockClass) != uint8(e.clockClass) {
@@ -759,7 +768,6 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 		if _, found := d.Metrics[dataType]; !found {
 			if dataType == OFFSET {
 				pName := string(process)
-
 				if process == TS2PHCProcessName {
 					pName = "master"
 				}
@@ -773,12 +781,6 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 					"process": string(process), "iface": iface}
 				d.Metrics[dataType].GaugeMetric.With(pLabels).Set(dataValue)
 			} else {
-				// check if metric  has been registered with same name
-				if dataType == PPS_STATUS {
-					d.signalSource = PPS
-				} else if dataType == NMEA_STATUS {
-					d.signalSource = GNSS
-				}
 				metric := DataMetric{
 					isRegistered: true,
 					GaugeMetric: prometheus.NewGaugeVec(
