@@ -108,6 +108,7 @@ func New(
 	if !stdoutToSocket {
 		RegisterMetrics(nodeName)
 	}
+	InitializeOffsetMaps()
 	pluginManager := registerPlugins(plugins)
 	return &Daemon{
 		nodeName:        nodeName,
