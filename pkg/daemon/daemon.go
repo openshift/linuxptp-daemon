@@ -17,7 +17,7 @@ import (
 	"github.com/openshift/linuxptp-daemon/pkg/dpll"
 
 	"github.com/openshift/linuxptp-daemon/pkg/event"
-
+	ptpnetwork "github.com/openshift/linuxptp-daemon/pkg/network"
 	"github.com/openshift/linuxptp-daemon/pkg/pmc"
 
 	"github.com/golang/glog"
@@ -331,20 +331,6 @@ func printNodeProfile(nodeProfile *ptpv1.PtpProfile) {
 	glog.Infof("------------------------------------")
 }
 
-func getPhcId(iface string) (phcId string) {
-	deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", iface)
-	phcs, err := os.ReadDir(deviceDir)
-	if err != nil {
-		glog.Error("failed to read " + deviceDir + ": " + err.Error())
-		return
-	}
-	phcId = fmt.Sprintf("/dev/%s", phcs[0].Name())
-	if _, err := os.Stat(phcId); os.IsNotExist(err) {
-		glog.Errorf("phcId %s for %s does not exist", phcId, iface)
-	}
-	return phcId
-}
-
 func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) error {
 
 	dn.pluginManager.OnPTPConfigChange(nodeProfile)
@@ -437,7 +423,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		configOutput, ifaces = output.renderPtp4lConf()
 		for i := range ifaces {
-			ifaces[i].PhcId = getPhcId(ifaces[i].Name)
+			ifaces[i].PhcId = ptpnetwork.GetPhcId(ifaces[i].Name)
 		}
 
 		if configInput != nil {
