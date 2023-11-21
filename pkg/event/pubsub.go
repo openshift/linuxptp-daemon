@@ -2,6 +2,7 @@ package event
 
 import (
 	"fmt"
+	"github.com/golang/glog"
 	"sync"
 )
 
@@ -27,6 +28,7 @@ type StateNotifier struct {
 
 func (n *StateNotifier) Register(s Subscriber) {
 	id := fmt.Sprintf("%s_%s", s.Topic(), s.ID())
+	glog.Infof("Registering  for monitoring with id %s", id)
 	n.Lock()
 	defer n.Unlock()
 	n.Subscribers[id] = s

@@ -1,6 +1,7 @@
 package event
 
 import (
+	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -35,6 +36,7 @@ type DataDetails struct {
 	sourceLost   bool
 }
 
+// UpdateState .. update process state
 func (d *Data) UpdateState() {
 	state := PTP_UNKNOWN
 	for _, detail := range d.Details { // 2 ts2phc or 2 dpll etc
@@ -52,4 +54,5 @@ func (d *Data) UpdateState() {
 		}
 	}
 	d.State = state
+	glog.Infof("state updated for %s =%s", d.ProcessName, d.State)
 }
