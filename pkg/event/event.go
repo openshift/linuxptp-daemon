@@ -808,7 +808,7 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 				if gaugeMetric, ok := e.hasMetric(getMetricName(dataType)); ok {
 					metric.GaugeMetric = gaugeMetric
 				} else {
-					glog.Errorf("trying to register metrics %#v for %s", metric, dataType)
+					glog.Infof("trying to register metrics %#v for %s", metric, dataType)
 					registerMetrics(metric.GaugeMetric)
 				}
 				metric.GaugeMetric.With(metric.Labels).Set(dataValue)
