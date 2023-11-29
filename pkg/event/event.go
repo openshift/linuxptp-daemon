@@ -134,18 +134,19 @@ type grandMasterSyncState struct {
 // EventHandler ... event handler to process events
 type EventHandler struct {
 	sync.Mutex
-	nodeName       string
-	stdoutSocket   string
-	stdoutToSocket bool
-	processChannel <-chan EventChannel
-	closeCh        chan bool
-	data           map[string][]*Data
-	offsetMetric   *prometheus.GaugeVec
-	clockMetric    *prometheus.GaugeVec
-	clockClass     fbprotocol.ClockClass
-	gmSyncState    map[string]*grandMasterSyncState
-	outOfSpec      bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
-	ReduceLog      bool // reduce logs for every announce
+	nodeName         string
+	stdoutSocket     string
+	stdoutToSocket   bool
+	processChannel   <-chan EventChannel
+	closeCh          chan bool
+	data             map[string][]*Data
+	offsetMetric     *prometheus.GaugeVec
+	clockMetric      *prometheus.GaugeVec
+	clockClassMetric *prometheus.GaugeVec
+	clockClass       fbprotocol.ClockClass
+	gmSyncState      map[string]*grandMasterSyncState
+	outOfSpec        bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
+	ReduceLog        bool // reduce logs for every announce
 }
 
 // EventChannel .. event channel to subscriber to events
@@ -175,22 +176,26 @@ func (e *EventHandler) MockEnable() {
 
 // Init ... initialize event manager
 func Init(nodeName string, stdOutToSocket bool, socketName string, processChannel chan EventChannel, closeCh chan bool,
-	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec) *EventHandler {
+	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec, clockClassMetric *prometheus.GaugeVec) *EventHandler {
 	ptpEvent := &EventHandler{
-		nodeName:       nodeName,
-		stdoutSocket:   socketName,
-		stdoutToSocket: stdOutToSocket,
-		closeCh:        closeCh,
-		processChannel: processChannel,
-		data:           map[string][]*Data{},
-		clockMetric:    clockMetric,
-		offsetMetric:   offsetMetric,
-		clockClass:     protocol.ClockClassUninitialized,
-		gmSyncState:    map[string]*grandMasterSyncState{},
-		outOfSpec:      false,
-		ReduceLog:      true,
+		nodeName:         nodeName,
+		stdoutSocket:     socketName,
+		stdoutToSocket:   stdOutToSocket,
+		closeCh:          closeCh,
+		processChannel:   processChannel,
+		data:             map[string][]*Data{},
+		clockMetric:      clockMetric,
+		offsetMetric:     offsetMetric,
+		clockClassMetric: clockClassMetric,
+		clockClass:       protocol.ClockClassUninitialized,
+		gmSyncState:      map[string]*grandMasterSyncState{},
+		outOfSpec:        false,
+		ReduceLog:        true,
 	}
-
+	if clockClassMetric != nil {
+		clockClassMetric.With(prometheus.Labels{
+			"process": PTP4lProcessName, "node": nodeName}).Set(248)
+	}
 	StateRegisterer = NewStateNotifier()
 	return ptpEvent
 
@@ -801,7 +806,7 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 				if gaugeMetric, ok := e.hasMetric(getMetricName(dataType)); ok {
 					metric.GaugeMetric = gaugeMetric
 				} else {
-					glog.Errorf("trying to register metrics %#v for %s", metric, dataType)
+					glog.Infof("trying to register metrics %#v for %s", metric, dataType)
 					registerMetrics(metric.GaugeMetric)
 				}
 				metric.GaugeMetric.With(metric.Labels).Set(dataValue)
@@ -936,6 +941,9 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 			} else {
 				glog.Errorf("failed to write class change event, connection is nil")
 			}
+		} else {
+			e.clockClassMetric.With(prometheus.Labels{
+				"process": PTP4lProcessName, "node": e.nodeName}).Set(float64(clockClass))
 		}
 		fmt.Printf("%s", clockClassOut)
 	}

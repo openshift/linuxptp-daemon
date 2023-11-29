@@ -200,7 +200,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	eChannel := make(chan event.EventChannel, 100)
 	closeChn := make(chan bool)
 	go listenToEvents(closeChn, logOut)
-	eventManager := event.Init("node", true, "/tmp/go.sock", eChannel, closeChn, nil, nil)
+	eventManager := event.Init("node", true, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	eventManager.MockEnable()
 	go eventManager.ProcessEvents()
 	time.Sleep(1 * time.Second)

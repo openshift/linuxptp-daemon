@@ -146,7 +146,7 @@ func New(
 		processManager: &ProcessManager{
 			process:         nil,
 			eventChannel:    eventChannel,
-			ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState),
+			ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics),
 		},
 		stopCh: stopCh,
 	}
@@ -590,7 +590,7 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 					clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, clockClass)
 					fmt.Printf("%s", clockClassOut)
 					if c == nil {
-						glog.Error("failed to write class change event, connection object is nil ")
+						UpdateClockClassMetrics(clockClass) // no socket then update metrics
 					} else {
 						_, err := (*c).Write([]byte(clockClassOut))
 						if err != nil {
@@ -650,6 +650,11 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 						fmt.Printf("%s\n", output)
 					}
 					p.processPTPMetrics(output)
+					if p.name == ptp4lProcessName {
+						if strings.Contains(output, ClockClassChangeIndicator) {
+							go p.updateClockClass(nil)
+						}
+					}
 				}
 				done <- struct{}{}
 			}()
@@ -683,7 +688,6 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 
 					// for ts2phc, we need to extract metrics to identify GM state
 					p.processPTPMetrics(output)
-
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(&c)
