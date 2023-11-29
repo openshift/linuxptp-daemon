@@ -60,7 +60,7 @@ type ptpProcess struct {
 	logFilterRegex    string
 	cmd               *exec.Cmd
 	depProcess        []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
-	nodeProfile       *ptpv1.PtpProfile
+	nodeProfile       ptpv1.PtpProfile
 	parentClockClass  float64
 	pmcCheck          bool
 	clockType         event.ClockType
@@ -255,7 +255,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 						time.Sleep(3 * time.Second)
 						go d.CmdRun(false)
 						time.Sleep(3 * time.Second)
-						dn.pluginManager.AfterRunPTPCommand(p.nodeProfile, d.Name())
+						dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
 						d.MonitorProcess(config.ProcessConfig{
 							ClockType:    p.clockType,
 							ConfigName:   p.configName,
@@ -272,7 +272,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 				}
 				go p.cmdRun(dn.stdoutToSocket)
 			}
-			dn.pluginManager.AfterRunPTPCommand(p.nodeProfile, p.name)
+			dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.name)
 		}
 	}
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
@@ -428,7 +428,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			logFilterRegex:    getLogFilterRegex(nodeProfile),
 			cmd:               cmd,
 			depProcess:        []process{},
-			nodeProfile:       nodeProfile,
+			nodeProfile:       *nodeProfile,
 			clockType:         clockType,
 			ptpClockThreshold: getPTPThreshold(nodeProfile),
 		}
