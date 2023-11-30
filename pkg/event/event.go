@@ -813,8 +813,12 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 				d.Metrics[dataType] = metric
 			}
 		} else {
+			pName := string(process)
+			if dataType == OFFSET && process == TS2PHCProcessName {
+				pName = "master"
+			}
 			s := d.Metrics[dataType]
-			s.Labels = map[string]string{"from": string(process), "node": e.nodeName,
+			s.Labels = map[string]string{"from": pName, "node": e.nodeName,
 				"process": string(process), "iface": iface}
 			s.Value = dataValue
 			d.Metrics[dataType].GaugeMetric.With(s.Labels).Set(dataValue)
