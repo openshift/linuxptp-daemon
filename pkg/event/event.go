@@ -201,6 +201,25 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 
 }
 
+func (e *EventChannel) GetLogData() string {
+	logData := make([]string, 0, len(e.Values))
+	for k, v := range e.Values {
+		switch val := v.(type) {
+		case int64, int, int32:
+			logData = append(logData, fmt.Sprintf("%s %d", k, val))
+		case float64:
+			logData = append(logData, fmt.Sprintf("%s %f", k, val))
+		case string:
+			logData = append(logData, fmt.Sprintf("%s %s", k, val))
+		default:
+			continue //ignore string for metrics
+		}
+	}
+	sort.Strings(logData)
+	return fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", e.ProcessName,
+		time.Now().Unix(), e.CfgName, e.IFace, strings.Join(logData, " "), e.State)
+}
+
 // getGMState ... get lowest state of all the interfaces
 /*
 GNSS State + DPLL State= DPLL State
@@ -581,12 +600,7 @@ connect:
 			logDataValues := ""
 
 			// Update the in MemData
-			var dataDetails *DataDetails
-			if e.data[event.CfgName] == nil {
-				dataDetails = e.addData(event)
-			} else {
-				dataDetails = e.updateData(event)
-			}
+			dataDetails := e.addEvent(event)
 			logDataValues = dataDetails.logData
 
 			if event.WriteToLog && logDataValues != "" {
@@ -852,78 +866,34 @@ func (e *EventHandler) unregisterMetrics(configName string, processName string) 
 	}
 }
 
-func (e *EventHandler) updateData(event EventChannel) *DataDetails {
-	if e.data[event.CfgName] == nil {
-		e.data[event.CfgName] = []*Data{}
+// GetData returns the queried Data and create one if not exist
+func (e *EventHandler) GetData(cfgName string, processName EventSource) *Data {
+	if e.data[cfgName] == nil {
+		e.data[cfgName] = []*Data{}
 	}
 
-	var eData *Data
-	for _, d := range e.data[event.CfgName] {
-		if d.ProcessName == event.ProcessName {
-			eData = d
+	for _, d := range e.data[cfgName] {
+		if d.ProcessName == processName {
+			return d
 		}
-	}
-	// new record
-	if eData == nil {
-		return e.addData(event)
-	}
-	var dataDetails *DataDetails
-	found := false
-
-	for _, d := range eData.Details {
-		if d.IFace == event.IFace {
-			dataDetails = d
-			found = true
-			break
-		}
-	}
-	// new record with existing process
-	if !found {
-		return e.addData(event)
-	}
-	// update existing record
-	//if event.WriteToLog {
-	logData := make([]string, 0, len(event.Values))
-	for k, v := range event.Values {
-		switch val := v.(type) {
-		case int64, int, int32:
-			logData = append(logData, fmt.Sprintf("%s %d", k, val))
-		case float64:
-			logData = append(logData, fmt.Sprintf("%s %f", k, val))
-		case string:
-			logData = append(logData, fmt.Sprintf("%s %s", k, val))
-		default:
-			continue //ignore string for metrics
-		}
-	}
-	sort.Strings(logData)
-	logOut := fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", event.ProcessName,
-		time.Now().Unix(), event.CfgName, event.IFace, strings.Join(logData, " "), event.State)
-
-	if dataDetails.time <= event.Time { // found it
-		if dataDetails.State != event.State { // state changed
-			if len(StateRegisterer.Subscribers) > 0 {
-				go StateRegisterer.notify(event.ProcessName, event.State)
-			}
-		}
-		found = true
-		dataDetails.State = event.State
-		dataDetails.sourceLost = event.SourceLost
-		dataDetails.ClockType = event.ClockType
-		dataDetails.time = event.Time
-		if logOut != dataDetails.logData {
-			dataDetails.logData = logOut
-		} else {
-			logOut = ""
-		}
-	} else {
-		glog.Infof("discarding stale event for process %s, last event @ %d, current event @ %d", event.ProcessName, dataDetails.time, event.Time)
-		logOut = ""
 	}
 
+	d := &Data{
+		ProcessName: processName,
+		State:       PTP_UNKNOWN,
+	}
+	e.data[cfgName] = append(e.data[cfgName], d)
+	return d
+}
+
+func (e *EventHandler) addEvent(event EventChannel) *DataDetails {
+	d := e.GetData(event.CfgName, event.ProcessName)
+	d.AddEvent(event)
+
+	// update if DPLL holdover is out of spec
 	e.updateSpecState(event)
-	eData.UpdateState()
-	return dataDetails
+	d.UpdateState()
+	return d.GetDataDetails(event.IFace)
 }
 
 // UpdateClockClass ... update clock class
@@ -951,51 +921,6 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 		}
 		fmt.Printf("%s", clockClassOut)
 	}
-}
-func (e *EventHandler) addData(event EventChannel) *DataDetails {
-	if e.data[event.CfgName] == nil {
-		e.data[event.CfgName] = []*Data{}
-	}
-	//if event.WriteToLog {
-	logData := make([]string, 0, len(event.Values))
-	for k, v := range event.Values {
-		switch val := v.(type) {
-		case int64, int, int32:
-			logData = append(logData, fmt.Sprintf("%s %d", k, val))
-		case float64:
-			logData = append(logData, fmt.Sprintf("%s %f", k, val))
-		case string:
-			logData = append(logData, fmt.Sprintf("%s %s", k, val))
-		default:
-			continue //ignore string for metrics
-		}
-	}
-	sort.Strings(logData)
-	details := &DataDetails{
-		ClockType: event.ClockType,
-		Metrics:   map[ValueType]DataMetric{},
-		IFace:     event.IFace,
-		time:      event.Time,
-		logData: fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", event.ProcessName,
-			time.Now().Unix(), event.CfgName, event.IFace, strings.Join(logData, " "), event.State),
-		State:      event.State,
-		sourceLost: event.SourceLost,
-	}
-	newEvent := &Data{
-		ProcessName: event.ProcessName,
-		State:       PTP_UNKNOWN,
-	}
-	newEvent.Details = append(newEvent.Details, details)
-
-	e.data[event.CfgName] = append(e.data[event.CfgName], newEvent)
-	// update if DPLL holdover is out of spec
-	e.updateSpecState(event)
-	if len(StateRegisterer.Subscribers) > 0 {
-		go StateRegisterer.notify(event.ProcessName, event.State)
-	}
-	newEvent.logData = details.logData
-	newEvent.UpdateState()
-	return details
 }
 
 func getMetricName(valueType ValueType) string {
