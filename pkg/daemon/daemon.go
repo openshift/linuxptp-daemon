@@ -38,23 +38,23 @@ const (
 	InvalidMasterTimestampIndicator = "ignoring invalid master time stamp"
 )
 
-// ProcessManager manages a set of ptpProcess
+// ProcessManager manages a set of PtpProcess
 // which could be ptp4l, phc2sys or timemaster.
 // Processes in ProcessManager will be started
 // or stopped simultaneously.
 type ProcessManager struct {
-	process         []*ptpProcess
+	process         []*PtpProcess
 	eventChannel    chan event.EventChannel
 	ptpEventHandler *event.EventHandler
 }
 
-type ptpProcess struct {
-	name              string
-	ifaces            config.IFaces
+type PtpProcess struct {
+	Name              string
+	Ifaces            config.IFaces
 	ptp4lSocketPath   string
 	ptp4lConfigPath   string
 	configName        string
-	messageTag        string
+	MessageTag        string
 	eventCh           chan event.EventChannel
 	exitCh            chan bool
 	execMutex         sync.Mutex
@@ -66,17 +66,17 @@ type ptpProcess struct {
 	parentClockClass  float64
 	pmcCheck          bool
 	clockType         event.ClockType
-	ptpClockThreshold *ptpv1.PtpClockThreshold
+	PtpClockThreshold *ptpv1.PtpClockThreshold
 }
 
-func (p *ptpProcess) Stopped() bool {
+func (p *PtpProcess) Stopped() bool {
 	p.execMutex.Lock()
 	me := p.stopped
 	p.execMutex.Unlock()
 	return me
 }
 
-func (p *ptpProcess) setStopped(val bool) {
+func (p *PtpProcess) setStopped(val bool) {
 	p.execMutex.Lock()
 	p.stopped = val
 	p.execMutex.Unlock()
@@ -204,7 +204,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	glog.Infof("in applyNodePTPProfiles")
 	for _, p := range dn.processManager.process {
 		if p != nil {
-			glog.Infof("stopping process.... %s", p.name)
+			glog.Infof("stopping process.... %s", p.Name)
 			p.cmdStop()
 			if p.depProcess != nil {
 				for _, d := range p.depProcess {
@@ -263,18 +263,18 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 							ConfigName:   p.configName,
 							EventChannel: dn.processManager.eventChannel,
 							GMThreshold: config.Threshold{
-								Max:             p.ptpClockThreshold.MaxOffsetThreshold,
-								Min:             p.ptpClockThreshold.MinOffsetThreshold,
-								HoldOverTimeout: p.ptpClockThreshold.HoldOverTimeout,
+								Max:             p.PtpClockThreshold.MaxOffsetThreshold,
+								Min:             p.PtpClockThreshold.MinOffsetThreshold,
+								HoldOverTimeout: p.PtpClockThreshold.HoldOverTimeout,
 							},
 							InitialPTPState: event.PTP_FREERUN,
 						})
-						glog.Infof("Max %d Min %d Holdover %d", p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
+						glog.Infof("Max %d Min %d Holdover %d", p.PtpClockThreshold.MaxOffsetThreshold, p.PtpClockThreshold.MinOffsetThreshold, p.PtpClockThreshold.HoldOverTimeout)
 					}
 				}
 				go p.cmdRun(dn.stdoutToSocket)
 			}
-			dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.name)
+			dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.Name)
 		}
 	}
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
@@ -415,13 +415,13 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		args := strings.Split(cmdLine, " ")
 		cmd = exec.Command(args[0], args[1:]...)
 
-		dprocess := ptpProcess{
-			name:              p,
-			ifaces:            ifaces,
+		dprocess := PtpProcess{
+			Name:              p,
+			Ifaces:            ifaces,
 			ptp4lConfigPath:   configPath,
 			ptp4lSocketPath:   socketPath,
 			configName:        configFile,
-			messageTag:        messageTag,
+			MessageTag:        messageTag,
 			exitCh:            make(chan bool),
 			stopped:           false,
 			logFilterRegex:    getLogFilterRegex(nodeProfile),
@@ -429,7 +429,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			depProcess:        []process{},
 			nodeProfile:       *nodeProfile,
 			clockType:         clockType,
-			ptpClockThreshold: getPTPThreshold(nodeProfile),
+			PtpClockThreshold: getPTPThreshold(nodeProfile),
 		}
 		//TODO HARDWARE PLUGIN for e810
 		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
@@ -437,7 +437,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				output.gnss_serial_port = GPSPIPE_SERIALPORT
 			}
 			//TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
-			gmInterface := dprocess.ifaces.GetGMInterface().Name
+			gmInterface := dprocess.Ifaces.GetGMInterface().Name
 
 			if e := mkFifo(); e != nil {
 				glog.Errorf("Error creating named pipe, GNSS monitoring will not work as expected %s", e.Error())
@@ -480,7 +480,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			var localHoldoverTimeout uint64 = dpll.LocalHoldoverTimeout
 			var maxInSpecOffset uint64 = dpll.MaxInSpecOffset
 			var clockId uint64
-			for _, iface := range dprocess.ifaces {
+			for _, iface := range dprocess.Ifaces {
 				var eventSource []event.EventSource
 				if iface.Source == event.GNSS || iface.Source == event.PPS {
 					for k, v := range (*nodeProfile).PtpSettings {
@@ -529,7 +529,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 func (dn *Daemon) HandlePmcTicker() {
 	for _, p := range dn.processManager.process {
-		if p.name == ptp4lProcessName {
+		if p.Name == ptp4lProcessName {
 			p.pmcCheck = true
 		}
 	}
@@ -569,7 +569,7 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 	}
 }
 
-func (p *ptpProcess) updateClockClass(c *net.Conn) {
+func (p *PtpProcess) updateClockClass(c *net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
 			glog.Errorf("Recovered in f %#v", r)
@@ -587,7 +587,7 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 					p.parentClockClass = clockClass
 					glog.Infof("clock change event identified")
 					//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
-					clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, clockClass)
+					clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.Name, time.Now().Unix(), p.configName, clockClass)
 					fmt.Printf("%s", clockClassOut)
 					if c == nil {
 						UpdateClockClassMetrics(clockClass) // no socket then update metrics
@@ -609,8 +609,8 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 	}
 }
 
-// cmdRun runs given ptpProcess and restarts on errors
-func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
+// cmdRun runs given PtpProcess and restarts on errors
+func (p *PtpProcess) cmdRun(stdoutToSocket bool) {
 	var c net.Conn
 	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
 	defer func() {
@@ -628,8 +628,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 	}
 
 	for {
-		glog.Infof("Starting %s...", p.name)
-		glog.Infof("%s cmd: %+v", p.name, p.cmd)
+		glog.Infof("Starting %s...", p.Name)
+		glog.Infof("%s cmd: %+v", p.Name, p.cmd)
 
 		//
 		// don't discard process stderr output
@@ -637,20 +637,20 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 		p.cmd.Stderr = os.Stderr
 		cmdReader, err := p.cmd.StdoutPipe()
 		if err != nil {
-			glog.Errorf("CmdRun() error creating StdoutPipe for %s: %v", p.name, err)
+			glog.Errorf("CmdRun() error creating StdoutPipe for %s: %v", p.Name, err)
 			break
 		}
 		if !stdoutToSocket {
 			scanner := bufio.NewScanner(cmdReader)
-			processStatus(nil, p.name, p.messageTag, PtpProcessUp)
+			processStatus(nil, p.Name, p.MessageTag, PtpProcessUp)
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
 						fmt.Printf("%s\n", output)
 					}
-					p.processPTPMetrics(output)
-					if p.name == ptp4lProcessName {
+					p.ProcessPTPMetrics(output)
+					if p.Name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(nil)
 						}
@@ -673,7 +673,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 					}
 				}
 				scanner := bufio.NewScanner(cmdReader)
-				processStatus(&c, p.name, p.messageTag, PtpProcessUp)
+				processStatus(&c, p.Name, p.MessageTag, PtpProcessUp)
 				for scanner.Scan() {
 					output := scanner.Text()
 					if p.pmcCheck {
@@ -687,8 +687,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 					out := fmt.Sprintf("%s\n", output)
 
 					// for ts2phc, we need to extract metrics to identify GM state
-					p.processPTPMetrics(output)
-					if p.name == ptp4lProcessName {
+					p.ProcessPTPMetrics(output)
+					if p.Name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(&c)
 						}
@@ -706,27 +706,27 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 		if !p.Stopped() {
 			err = p.cmd.Start() // this is asynchronous call,
 			if err != nil {
-				glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
+				glog.Errorf("CmdRun() error starting %s: %v", p.Name, err)
 			}
 		}
 		<-done // goroutine is done
 		err = p.cmd.Wait()
 		if err != nil {
-			glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
+			glog.Errorf("CmdRun() error waiting for %s: %v", p.Name, err)
 		}
 		if stdoutToSocket && c != nil {
-			processStatus(&c, p.name, p.messageTag, PtpProcessDown)
+			processStatus(&c, p.Name, p.MessageTag, PtpProcessDown)
 		} else {
-			processStatus(nil, p.name, p.messageTag, PtpProcessDown)
+			processStatus(nil, p.Name, p.MessageTag, PtpProcessDown)
 		}
 
 		time.Sleep(connectionRetryInterval) // Delay to prevent flooding restarts if startup fails
 		// Don't restart after termination
 		if p.Stopped() {
-			glog.Infof("Not recreating %s...", p.name)
+			glog.Infof("Not recreating %s...", p.Name)
 			break
 		} else {
-			glog.Infof("Recreating %s...", p.name)
+			glog.Infof("Recreating %s...", p.Name)
 			newCmd := exec.Command(p.cmd.Args[0], p.cmd.Args[1:]...)
 			p.cmd = newCmd
 		}
@@ -739,41 +739,42 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 }
 
 // for ts2phc along with processing metrics need to identify event
-func (p *ptpProcess) processPTPMetrics(output string) {
-	if p.name == ts2phcProcessName && (strings.Contains(output, NMEASourceDisabledIndicator) ||
+func (p *PtpProcess) ProcessPTPMetrics(output string) {
+	if p.Name == ts2phcProcessName && (strings.Contains(output, NMEASourceDisabledIndicator) ||
 		strings.Contains(output, InvalidMasterTimestampIndicator)) { //TODO identify which interface lost nmea or 1pps
-		iface := p.ifaces.GetGMInterface().Name
+		iface := p.Ifaces.GetGMInterface().Name
 		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]interface{}{event.NMEA_STATUS: int64(0)})
 		glog.Error("nmea string lost") //TODO: add for 1pps lost
 	} else {
-		configName, source, ptpOffset, _, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
+		configName, source, ptpOffset, _, iface := extractMetrics(p.MessageTag, p.Name, p.Ifaces, output)
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
 			var values map[event.ValueType]interface{}
 			ifaceName := masterOffsetIface.getByAlias(configName, iface).name
-			if iface != clockRealTime && p.name == ts2phcProcessName {
-				eventSource := p.ifaces.GetEventSource(ifaceName)
+			if iface != clockRealTime && p.Name == ts2phcProcessName {
+				eventSource := p.Ifaces.GetEventSource(ifaceName)
 				if eventSource == event.GNSS {
 					values = map[event.ValueType]interface{}{event.NMEA_STATUS: int64(1)}
 				}
+				p.ProcessTs2PhcEvents(ptpOffset, source, iface, values)
 			}
 			p.ProcessTs2PhcEvents(ptpOffset, source, ifaceName, values)
 		}
 	}
 }
 
-// cmdStop stops ptpProcess launched by cmdRun
-func (p *ptpProcess) cmdStop() {
-	glog.Infof("stopping %s...", p.name)
+// cmdStop stops PtpProcess launched by cmdRun
+func (p *PtpProcess) cmdStop() {
+	glog.Infof("stopping %s...", p.Name)
 	if p.cmd == nil {
 		return
 	}
 	p.setStopped(true)
 	if p.cmd.Process != nil {
-		glog.Infof("Sending TERM to (%s) PID: %d", p.name, p.cmd.Process.Pid)
+		glog.Infof("Sending TERM to (%s) PID: %d", p.Name, p.cmd.Process.Pid)
 		err := p.cmd.Process.Signal(syscall.SIGTERM)
 		if err != nil {
 			// If the process is already terminated, we will get an error here
-			glog.Errorf("failed to send SIGTERM to %s (%d): %v", p.name, p.cmd.Process.Pid, err)
+			glog.Errorf("failed to send SIGTERM to %s (%d): %v", p.Name, p.cmd.Process.Pid, err)
 			return
 		}
 	}
@@ -784,7 +785,7 @@ func (p *ptpProcess) cmdStop() {
 		}
 	}
 	<-p.exitCh
-	glog.Infof("Process %s (%d) terminated", p.name, p.cmd.Process.Pid)
+	glog.Infof("Process %s (%d) terminated", p.Name, p.cmd.Process.Pid)
 }
 
 func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
@@ -803,16 +804,16 @@ func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
 	}
 }
 
-func (p *ptpProcess) MonitorEvent(offset float64, clockState string) {
+func (p *PtpProcess) MonitorEvent(offset float64, clockState string) {
 	// not implemented
 }
 
-func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string, extraValue map[event.ValueType]interface{}) {
+func (p *PtpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string, extraValue map[event.ValueType]interface{}) {
 	var ptpState event.PTPState
 	ptpState = event.PTP_FREERUN
 	ptpOffsetInt64 := int64(ptpOffset)
-	if ptpOffsetInt64 <= p.ptpClockThreshold.MaxOffsetThreshold &&
-		ptpOffsetInt64 >= p.ptpClockThreshold.MinOffsetThreshold {
+	if ptpOffsetInt64 <= p.PtpClockThreshold.MaxOffsetThreshold &&
+		ptpOffsetInt64 >= p.PtpClockThreshold.MinOffsetThreshold {
 		ptpState = event.PTP_LOCKED
 	}
 	if source == ts2phcProcessName { // for ts2phc send it to event to create metrics and events
@@ -847,9 +848,9 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 			iface = string(r[:len(r)-1]) + "x"
 		}
 		if ptpState == event.PTP_LOCKED {
-			updateClockStateMetrics(p.name, iface, LOCKED)
+			updateClockStateMetrics(p.Name, iface, LOCKED)
 		} else {
-			updateClockStateMetrics(p.name, iface, FREERUN)
+			updateClockStateMetrics(p.Name, iface, FREERUN)
 		}
 	}
 
