@@ -29,6 +29,7 @@ const (
 	//Status           ValueType = "status"
 	PHASE_STATUS     ValueType = "phase_status"
 	FREQUENCY_STATUS ValueType = "frequency_status"
+	NMEA_STATUS      ValueType = "nmea_status"
 )
 
 // ClockType ...
@@ -119,18 +120,19 @@ type grandMasterSyncState struct {
 // EventHandler ... event handler to process events
 type EventHandler struct {
 	sync.Mutex
-	nodeName       string
-	stdoutSocket   string
-	stdoutToSocket bool
-	processChannel <-chan EventChannel
-	closeCh        chan bool
-	data           map[string][]*Data
-	offsetMetric   *prometheus.GaugeVec
-	clockMetric    *prometheus.GaugeVec
-	clockClass     fbprotocol.ClockClass
-	gmSyncState    map[string]*grandMasterSyncState
-	outOfSpec      bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
-	ReduceLog      bool // reduce logs for every announce
+	nodeName         string
+	stdoutSocket     string
+	stdoutToSocket   bool
+	processChannel   <-chan EventChannel
+	closeCh          chan bool
+	data             map[string][]*Data
+	offsetMetric     *prometheus.GaugeVec
+	clockMetric      *prometheus.GaugeVec
+	clockClassMetric *prometheus.GaugeVec
+	clockClass       fbprotocol.ClockClass
+	gmSyncState      map[string]*grandMasterSyncState
+	outOfSpec        bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
+	ReduceLog        bool // reduce logs for every announce
 }
 
 // EventChannel .. event channel to subscriber to events
@@ -160,22 +162,26 @@ func (e *EventHandler) MockEnable() {
 
 // Init ... initialize event manager
 func Init(nodeName string, stdOutToSocket bool, socketName string, processChannel chan EventChannel, closeCh chan bool,
-	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec) *EventHandler {
+	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec, clockClassMetric *prometheus.GaugeVec) *EventHandler {
 	ptpEvent := &EventHandler{
-		nodeName:       nodeName,
-		stdoutSocket:   socketName,
-		stdoutToSocket: stdOutToSocket,
-		closeCh:        closeCh,
-		processChannel: processChannel,
-		data:           map[string][]*Data{},
-		clockMetric:    clockMetric,
-		offsetMetric:   offsetMetric,
-		clockClass:     protocol.ClockClassUninitialized,
-		gmSyncState:    map[string]*grandMasterSyncState{},
-		outOfSpec:      false,
-		ReduceLog:      true,
+		nodeName:         nodeName,
+		stdoutSocket:     socketName,
+		stdoutToSocket:   stdOutToSocket,
+		closeCh:          closeCh,
+		processChannel:   processChannel,
+		data:             map[string][]*Data{},
+		clockMetric:      clockMetric,
+		offsetMetric:     offsetMetric,
+		clockClassMetric: clockClassMetric,
+		clockClass:       protocol.ClockClassUninitialized,
+		gmSyncState:      map[string]*grandMasterSyncState{},
+		outOfSpec:        false,
+		ReduceLog:        true,
 	}
-
+	if clockClassMetric != nil {
+		clockClassMetric.With(prometheus.Labels{
+			"process": PTP4lProcessName, "node": nodeName}).Set(248)
+	}
 	StateRegisterer = NewStateNotifier()
 	return ptpEvent
 
@@ -408,6 +414,19 @@ func (e *EventHandler) updateSpecState(event EventChannel) {
 	}
 
 }
+func (e *EventHandler) hasMetric(name string) (*prometheus.GaugeVec, bool) {
+	// update if DPLL holdover is out of spec
+	for _, eData := range e.data {
+		for _, data := range eData {
+			for _, mv := range data.Metrics {
+				if mv.Name == name {
+					return mv.GaugeMetric, true
+				}
+			}
+		}
+	}
+	return nil, false
+}
 
 // ProcessEvents ... process events to generate new events
 func (e *EventHandler) ProcessEvents() {
@@ -522,10 +541,8 @@ connect:
 
 			// Update the metrics
 			if !e.stdoutToSocket { // if events not enabled
-				if event.ProcessName != TS2PHCProcessName {
-					e.updateMetrics(event.CfgName, event.ProcessName, event.Values)
-					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
-				}
+				e.updateMetrics(event.CfgName, event.ProcessName, event.Values)
+				e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
 				e.UpdateClockStateMetrics(gmState.state, string(GM), event.IFace)
 			}
 			// update clock class
@@ -651,6 +668,8 @@ func (e *EventHandler) GetPTPState(source EventSource, cfgName string) PTPState 
 
 // UpdateClockStateMetrics ...
 func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace string) {
+	r := []rune(iFace)
+	iFace = string(r[:len(r)-1]) + "x"
 	labels := prometheus.Labels{}
 	labels = prometheus.Labels{
 		"process": process, "node": e.nodeName, "iface": iFace}
@@ -669,6 +688,15 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 		for _, d := range dataArray {
 			if d.ProcessName == process { // is gnss or dpll or ts2phc
 				for dataType, value := range processData { // update process with metrics
+					from := string(d.ProcessName)
+					iface := d.IFace
+					if len(d.IFace) > 0 {
+						r := []rune(iface)
+						iface = string(r[:len(r)-1]) + "x"
+					}
+					if dataType == OFFSET && from == TS2PHCProcessName { //make sure ts2phc offsets are read from master
+						from = "master"
+					}
 					if _, found := d.Metrics[dataType]; !found { //todo: allow duplicate text
 						if dataType == OFFSET {
 							if d.Metrics[dataType].GaugeMetric == nil {
@@ -676,8 +704,8 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 								m.GaugeMetric = e.offsetMetric
 								d.Metrics[dataType] = m
 							}
-							pLabels := map[string]string{"from": string(d.ProcessName), "node": e.nodeName,
-								"process": string(d.ProcessName), "iface": d.IFace}
+							pLabels := map[string]string{"from": from, "node": e.nodeName,
+								"process": string(d.ProcessName), "iface": iface}
 							d.Metrics[dataType].GaugeMetric.With(pLabels).Set(float64(value))
 							continue
 						} else {
@@ -693,18 +721,23 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 								CounterMetric: nil,
 								Name:          string(dataType),
 								ValueType:     prometheus.GaugeValue,
-								Labels: map[string]string{"from": string(d.ProcessName), "node": e.nodeName,
-									"process": string(d.ProcessName), "iface": d.IFace},
+								Labels: map[string]string{"from": from, "node": e.nodeName,
+									"process": string(d.ProcessName), "iface": iface},
 								Value: float64(value),
 							}
-							registerMetrics(metrics.GaugeMetric)
+							if gaugeMetric, ok := e.hasMetric(getMetricName(dataType)); ok {
+								metrics.GaugeMetric = gaugeMetric
+							} else {
+								glog.Infof("trying to register metrics %#v for %s", metrics, dataType)
+								registerMetrics(metrics.GaugeMetric)
+							}
 							metrics.GaugeMetric.With(metrics.Labels).Set(float64(value))
 							d.Metrics[dataType] = metrics
 						}
 					} else {
 						s := d.Metrics[dataType]
-						s.Labels = map[string]string{"from": string(d.ProcessName), "node": e.nodeName,
-							"process": string(d.ProcessName), "iface": d.IFace}
+						s.Labels = map[string]string{"from": from, "node": e.nodeName,
+							"process": string(d.ProcessName), "iface": iface}
 						s.Value = float64(value)
 						d.Metrics[dataType].GaugeMetric.With(s.Labels).Set(float64(value))
 					}
@@ -806,6 +839,9 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 			} else {
 				glog.Errorf("failed to write class change event, connection is nil")
 			}
+		} else {
+			e.clockClassMetric.With(prometheus.Labels{
+				"process": PTP4lProcessName, "node": e.nodeName}).Set(float64(clockClass))
 		}
 		fmt.Printf("%s", clockClassOut)
 	}

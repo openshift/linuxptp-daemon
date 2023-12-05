@@ -27,13 +27,15 @@ import (
 )
 
 const (
-	PtpNamespace              = "openshift-ptp"
-	PTP4L_CONF_FILE_PATH      = "/etc/ptp4l.conf"
-	PTP4L_CONF_DIR            = "/ptp4l-conf"
-	connectionRetryInterval   = 1 * time.Second
-	eventSocket               = "/cloud-native/events.sock"
-	ClockClassChangeIndicator = "selected best master clock"
-	GPSDDefaultGNSSSerialPort = "/dev/gnss0"
+	PtpNamespace                    = "openshift-ptp"
+	PTP4L_CONF_FILE_PATH            = "/etc/ptp4l.conf"
+	PTP4L_CONF_DIR                  = "/ptp4l-conf"
+	connectionRetryInterval         = 1 * time.Second
+	eventSocket                     = "/cloud-native/events.sock"
+	ClockClassChangeIndicator       = "selected best master clock"
+	GPSDDefaultGNSSSerialPort       = "/dev/gnss0"
+	NMEASourceDisabledIndicator     = "nmea source timed out"
+	InvalidMasterTimestampIndicator = "ignoring invalid master time stamp"
 )
 
 // ProcessManager manages a set of ptpProcess
@@ -144,7 +146,7 @@ func New(
 		processManager: &ProcessManager{
 			process:         nil,
 			eventChannel:    eventChannel,
-			ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState),
+			ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics),
 		},
 		stopCh: stopCh,
 	}
@@ -580,7 +582,7 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 					clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, clockClass)
 					fmt.Printf("%s", clockClassOut)
 					if c == nil {
-						glog.Error("failed to write class change event, connection object is nil ")
+						UpdateClockClassMetrics(clockClass) // no socket then update metrics
 					} else {
 						_, err := (*c).Write([]byte(clockClassOut))
 						if err != nil {
@@ -639,9 +641,11 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
 						fmt.Printf("%s\n", output)
 					}
-					source, ptpOffset, _, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
-					if iface != "" {
-						p.ProcessTs2PhcEvents(ptpOffset, source, iface)
+					p.processPTPMetrics(output)
+					if p.name == ptp4lProcessName {
+						if strings.Contains(output, ClockClassChangeIndicator) {
+							go p.updateClockClass(nil)
+						}
 					}
 				}
 				done <- struct{}{}
@@ -675,19 +679,12 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 					out := fmt.Sprintf("%s\n", output)
 
 					// for ts2phc, we need to extract metrics to identify GM state
-					if p.name == ts2phcProcessName {
-						source, ptpOffset, _, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
-						if iface != "" {
-							p.ProcessTs2PhcEvents(ptpOffset, source, iface)
-						}
-					}
-
+					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(&c)
 						}
 					}
-
 					_, err2 := c.Write([]byte(out))
 					if err2 != nil {
 						glog.Errorf("Write %s error %s:", out, err2)
@@ -729,6 +726,29 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 			if err2 := c.Close(); err2 != nil {
 				glog.Errorf("closing connection returned error %s", err2)
 			}
+		}
+	}
+}
+
+// for ts2phc along with processing metrics need to identify event
+func (p *ptpProcess) processPTPMetrics(output string) {
+	if p.name == ts2phcProcessName && (strings.Contains(output, NMEASourceDisabledIndicator) ||
+		strings.Contains(output, InvalidMasterTimestampIndicator)) { //TODO identify which interface lost nmea or 1pps
+		iface := p.ifaces[0]
+		if iface != "" {
+			r := []rune(iface)
+			iface = string(r[:len(r)-1]) + "x"
+		}
+		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]int64{event.NMEA_STATUS: int64(0)})
+		glog.Error("nmea string lost") //TODO: add for 1pps lost
+	} else {
+		_, source, ptpOffset, _, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
+		if iface != "" { // for ptp4l/phc2sys this function only update metrics
+			var values map[event.ValueType]int64
+			if iface != clockRealTime && p.name == ts2phcProcessName {
+				values = map[event.ValueType]int64{event.NMEA_STATUS: int64(1)}
+			}
+			p.ProcessTs2PhcEvents(ptpOffset, source, iface, values)
 		}
 	}
 }
@@ -779,20 +799,22 @@ func (p *ptpProcess) MonitorEvent(offset float64, clockState string) {
 	// not implemented
 }
 
-func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string) {
+func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string, extraValue map[event.ValueType]int64) {
 	var ptpState event.PTPState
 	ptpState = event.PTP_FREERUN
 	ptpOffsetInt64 := int64(ptpOffset)
 	if ptpOffsetInt64 <= p.ptpClockThreshold.MaxOffsetThreshold &&
 		ptpOffsetInt64 >= p.ptpClockThreshold.MinOffsetThreshold {
 		ptpState = event.PTP_LOCKED
-		updateClockStateMetrics(p.name, iface, LOCKED)
-	} else {
-		updateClockStateMetrics(p.name, iface, FREERUN)
 	}
-	if source == ts2phcProcessName && p.clockType == event.GM {
+	if source == ts2phcProcessName {
+		var values = make(map[event.ValueType]int64)
+		values[event.OFFSET] = ptpOffsetInt64
 		if len(p.ifaces) > 0 {
 			iface = p.ifaces[0]
+		}
+		for k, v := range extraValue {
+			values[k] = v
 		}
 		select {
 		case p.eventCh <- event.EventChannel{
@@ -800,17 +822,26 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 			State:       ptpState,
 			CfgName:     p.configName,
 			IFace:       iface,
-			Values: map[event.ValueType]int64{
-				event.OFFSET: ptpOffsetInt64,
-			},
-			ClockType:  p.clockType,
-			Time:       time.Now().UnixMilli(),
-			WriteToLog: false,
-			Reset:      false,
+			Values:      values,
+			ClockType:   p.clockType,
+			Time:        time.Now().UnixMilli(),
+			WriteToLog: func() bool { // only write to log if there is something extra
+				if len(extraValue) > 0 {
+					return true
+				}
+				return false
+			}(),
+			Reset: false,
 		}:
 		default:
 
 		}
-
+	} else {
+		if ptpState == event.PTP_LOCKED {
+			updateClockStateMetrics(p.name, iface, LOCKED)
+		} else {
+			updateClockStateMetrics(p.name, iface, FREERUN)
+		}
 	}
+
 }
