@@ -292,6 +292,11 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 	gnssSrcLost := e.isSourceLost(cfgName)
 	gmInterface := e.getGNSSInterface(cfgName)
 
+	if gmInterface == GM_INTERFACE_UNKNOWN {
+		glog.Infof("GM-GNSS interface is not yet identified, gm state reporting delayed.")
+		return grandMasterSyncState{gmIFace: gmInterface}
+	}
+
 	if _, ok := e.gmSyncState[cfgName]; !ok {
 		e.gmSyncState[cfgName] = &grandMasterSyncState{
 			state:      PTP_FREERUN,
@@ -609,7 +614,7 @@ connect:
 			// Computes GM state
 			gmState := e.updateGMState(event.CfgName)
 
-			if gmState.gmLog != "" {
+			if gmState.gmLog != "" && gmState.gmIFace != GM_INTERFACE_UNKNOWN {
 				logOut = append(logOut, gmState.gmLog)
 			}
 
@@ -623,12 +628,14 @@ connect:
 				e.UpdateClockStateMetrics(event.State, string(event.ProcessName), eventIface)
 				//  update all metric that was sent to events
 				e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
-				gmIface := gmState.gmIFace
-				if gmIface != "" {
-					r := []rune(gmIface)
-					gmIface = string(r[:len(r)-1]) + "x"
+				if gmState.gmIFace != GM_INTERFACE_UNKNOWN { // race condition ;
+					gmIface := gmState.gmIFace
+					if gmIface != "" {
+						r := []rune(gmIface)
+						gmIface = string(r[:len(r)-1]) + "x"
+					}
+					e.UpdateClockStateMetrics(gmState.state, string(GM), gmIface)
 				}
-				e.UpdateClockStateMetrics(gmState.state, string(GM), gmIface)
 			}
 
 			if uint8(gmState.clockClass) != uint8(e.clockClass) {
