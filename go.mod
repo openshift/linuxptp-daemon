@@ -8,7 +8,7 @@ require (
 	github.com/facebook/time v0.0.0-20230529151911-512b3b30ab23
 	github.com/golang/glog v1.0.0
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
-	github.com/jaypipes/ghw v0.9.0
+	github.com/jaypipes/ghw v0.12.0
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
 	github.com/prometheus/client_golang v1.12.2
