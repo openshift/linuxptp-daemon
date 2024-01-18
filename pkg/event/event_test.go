@@ -53,7 +53,7 @@ type PTPEvents struct {
 	clockState       event.PTPState
 	cfgName          string
 	outOfSpec        bool
-	values           map[event.ValueType]int64
+	values           map[event.ValueType]interface{}
 	wantGMState      string // want is the expected output.
 	wantClockState   string
 	wantProcessState string
@@ -69,17 +69,17 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
 			outOfSpec:        false,
-			values:           map[event.ValueType]int64{event.OFFSET: 0, event.PHASE_STATUS: 3, event.FREQUENCY_STATUS: 3},
-			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 3, event.FREQUENCY_STATUS: 3, event.PPS_STATUS: 1},
+			wantGMState:      "GM[0]:[ts2phc.0.config] unknown T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
-			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 3 offset 0 phase_status 3 s2",
+			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 3 offset 0 phase_status 3 pps_status 1 s2",
 			desc:             "Initial state, gnss is not set, so expect GM to be FREERUN",
 		},
 		{
 			processName:      event.GNSS,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
-			values:           map[event.ValueType]int64{event.OFFSET: 0, event.GPS_STATUS: 3},
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 3},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "gnss[0]:[ts2phc.0.config] ens1f0 gnss_status 3 offset 0 s2",
@@ -89,7 +89,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
-			values:           map[event.ValueType]int64{event.OFFSET: 0},
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 offset 0 s2",
@@ -99,7 +99,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_FREERUN,
-			values:           map[event.ValueType]int64{event.OFFSET: 5000},
+			values:           map[event.ValueType]interface{}{event.OFFSET: 5000},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 offset 5000 s0",
@@ -109,7 +109,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
-			values:           map[event.ValueType]int64{event.OFFSET: 0},
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 offset 0 s2",
@@ -120,7 +120,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_FREERUN,
 			outOfSpec:        false,
-			values:           map[event.ValueType]int64{event.OFFSET: 0, event.GPS_STATUS: 0},
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
 			wantProcessState: "gnss[0]:[ts2phc.0.config] ens1f0 gnss_status 0 offset 0 s0",
@@ -133,10 +133,10 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_HOLDOVER,
 			outOfSpec:        false,
-			values:           map[event.ValueType]int64{event.OFFSET: 0, event.PHASE_STATUS: 4, event.FREQUENCY_STATUS: 4},
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 4, event.FREQUENCY_STATUS: 4, event.PPS_STATUS: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
-			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 4 offset 0 phase_status 4 s1",
+			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 4 offset 0 phase_status 4 pps_status 1 s1",
 			desc:             "dpll is on Holdover, where source is lost, move to holdover state",
 		},
 		{
@@ -144,10 +144,10 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_FREERUN,
 			outOfSpec:        true,
-			values:           map[event.ValueType]int64{event.OFFSET: 0, event.PHASE_STATUS: 1, event.FREQUENCY_STATUS: 1},
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 1, event.FREQUENCY_STATUS: 1, event.PPS_STATUS: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 140",
-			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 1 offset 0 phase_status 1 s0",
+			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 1 offset 0 phase_status 1 pps_status 1 s0",
 			desc:             "dpll move to FREERUN from holdover (out of spec)",
 		},
 		{
@@ -155,7 +155,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
 			outOfSpec:        false,
-			values:           map[event.ValueType]int64{event.OFFSET: 0, event.GPS_STATUS: 3},
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 3},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 140",
 			wantProcessState: "gnss[0]:[ts2phc.0.config] ens1f0 gnss_status 3 offset 0 s2",
@@ -167,10 +167,32 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
 			outOfSpec:        true,
-			values:           map[event.ValueType]int64{event.OFFSET: 0, event.PHASE_STATUS: 3, event.FREQUENCY_STATUS: 3},
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 3, event.FREQUENCY_STATUS: 3, event.PPS_STATUS: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
-			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 3 offset 0 phase_status 3 s2",
+			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 3 offset 0 phase_status 3 pps_status 1 s2",
+			desc:             "everything is in locked state",
+		},
+		{
+			processName:      event.TS2PHCProcessName,
+			cfgName:          "ts2phc.0.config",
+			clockState:       event.PTP_FREERUN,
+			outOfSpec:        true,
+			values:           map[event.ValueType]interface{}{event.OFFSET: 99999, event.NMEA_STATUS: 0},
+			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
+			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 nmea_status 0 offset 99999 s0",
+			desc:             "ts2phc is not in locked state",
+		},
+		{
+			processName:      event.TS2PHCProcessName,
+			cfgName:          "ts2phc.0.config",
+			clockState:       event.PTP_LOCKED,
+			outOfSpec:        true,
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.NMEA_STATUS: 1},
+			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
+			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 nmea_status 1 offset 0 s2",
 			desc:             "everything is in locked state",
 		},
 	}
@@ -298,7 +320,7 @@ func ProcessTestEvents(c net.Conn, logOut chan<- string) {
 }
 
 func sendEvents(cfgName string, processName event.EventSource, state event.PTPState,
-	values map[event.ValueType]int64, outOfSpec bool, sourceLost bool) event.EventChannel {
+	values map[event.ValueType]interface{}, outOfSpec bool, sourceLost bool) event.EventChannel {
 	glog.Info("sending Nav status event to event handler Process")
 	return event.EventChannel{
 		ProcessName: processName,

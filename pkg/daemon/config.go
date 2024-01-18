@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strconv"
 	"strings"
 
+	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/event"
 
 	"github.com/golang/glog"
@@ -59,7 +61,6 @@ func (l *LinuxPTPConfUpdate) UpdateConfig(nodeProfilesJson []byte) error {
 	if string(l.appliedNodeProfileJson) == string(nodeProfilesJson) {
 		return nil
 	}
-
 	if nodeProfiles, ok := tryToLoadConfig(nodeProfilesJson); ok {
 		glog.Info("load profiles")
 		l.appliedNodeProfileJson = nodeProfilesJson
@@ -175,21 +176,54 @@ func (output *ptp4lConf) populatePtp4lConf(config *string) error {
 	return nil
 }
 
-func (conf *ptp4lConf) renderPtp4lConf() (string, string) {
-	configOut := fmt.Sprintf("#profile: %s\n", conf.profile_name)
+func getSource(is_ts2phc_master string) event.EventSource {
+	if ts2phcMaster, err := strconv.ParseBool(strings.TrimSpace(is_ts2phc_master)); err == nil {
+		if ts2phcMaster {
+			return event.GNSS
+		}
+	}
+	return event.PPS
+}
+
+func (conf *ptp4lConf) renderPtp4lConf() (configOut string, ifaces config.IFaces) {
+	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
 	conf.mapping = nil
+	var nmea_source event.EventSource
 
 	for _, section := range conf.sections {
 		configOut = fmt.Sprintf("%s\n%s", configOut, section.sectionName)
+
+		if section.sectionName == "[nmea]" {
+			if source, ok := section.options["ts2phc.master"]; ok {
+				nmea_source = getSource(source)
+			}
+		}
 		if section.sectionName != "[global]" && section.sectionName != "[nmea]" {
-			iface := section.sectionName
-			iface = strings.ReplaceAll(iface, "[", "")
-			iface = strings.ReplaceAll(iface, "]", "")
-			conf.mapping = append(conf.mapping, iface)
+			i := section.sectionName
+			i = strings.ReplaceAll(i, "[", "")
+			i = strings.ReplaceAll(i, "]", "")
+			conf.mapping = append(conf.mapping, i)
+			iface := config.Iface{Name: i}
+			if source, ok := section.options["ts2phc.master"]; ok {
+				iface.Source = getSource(source)
+			} else {
+				// if not defined here, use source defined at nmea section
+				iface.Source = nmea_source
+			}
+			if masterOnly, ok := section.options["masterOnly"]; ok {
+				// TODO add error handling
+				iface.IsMaster, _ = strconv.ParseBool(strings.TrimSpace(masterOnly))
+			}
+			ifaces = append(ifaces, config.Iface{
+				Name:     iface.Name,
+				IsMaster: false,
+				Source:   iface.Source,
+				PhcId:    iface.PhcId,
+			})
 		}
 		for k, v := range section.options {
 			configOut = fmt.Sprintf("%s\n%s %s", configOut, k, v)
 		}
 	}
-	return configOut, strings.Join(conf.mapping, ",")
+	return configOut, ifaces
 }
