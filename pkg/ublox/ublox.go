@@ -261,6 +261,23 @@ func (u *UBlox) EnableNMEA() {
 	}
 }
 
+// ConfigureOffsetMsg ... configure the receiver to output that message periodically
+func (u *UBlox) ConfigureOffsetMsg() error {
+	/*CFG-MSG,1,34,1: This is the command or configuration directive being issued to the tool. It consists of several parameters separated by commas:
+	CFG-MSG: This indicates that you are configuring a message.
+	1: This might represent a message layer or class identifier.
+	34: This could be the message ID, specifying the specific message you want to configure. In this case, "34"  represent a UBX-NAV-CLOCK message type.
+	1: This likely indicates enabling (1) the specified message (message ID 34) for the chosen class (1).*/
+
+	args := []string{"-p", "CFG-MSG,1,34,1", "-P", "29.20"}
+	if err := exec.Command(UBXCommand, args...).Run(); err != nil {
+		glog.Errorf("error executing ubxtool command: %s,%v", err, args)
+		return fmt.Errorf("configuring %s failed", "UBX-NAV-CLOCk")
+	}
+	glog.Info("configured")
+	return nil
+}
+
 func extractOffset(output string) string {
 	// Find the line that contains "tAcc"
 	lines := strings.Split(output, "\n")
