@@ -1,0 +1,12 @@
+# References:
+# https://docs.snyk.io/scan-applications/snyk-code/using-snyk-code-from-the-cli/excluding-directories-and-files-from-the-snyk-code-cli-test
+# https://docs.snyk.io/snyk-cli/commands/ignore
+exclude:
+  global:
+    # - "vendor/**"
+    # - "unpacked_remote_sources/cachito-gomod-with-deps/app/vendor/**"
+    - "**/*_test.go"
+    - "**/*_test.sh"
+    - "**/testdata/**"
+    - hack # scripts only
+    - bin # this binary folder is not in git repo. Exclude this when run snyk locally.
