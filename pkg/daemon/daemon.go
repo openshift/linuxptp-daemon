@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"cmp"
 	"fmt"
-	"k8s.io/utils/pointer"
 	"net"
 	"os"
 	"os/exec"
@@ -85,14 +84,6 @@ func (p *ProcessManager) RunProcessPTPMetrics(log string) {
 	p.process[0].processPTPMetrics(log)
 }
 
-type phc2SysProcess struct {
-	process     string
-	configPath  string
-	configOpts  *string
-	phc2sysOpts *string
-	ptpProcess  *ptpProcess
-	nodeProfile *ptpv1.PtpProfile
-}
 type ptpProcess struct {
 	name              string
 	ifaces            config.IFaces
@@ -285,7 +276,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 		aHasPhc2sysOpts := a.Phc2sysOpts != nil && *a.Phc2sysOpts != ""
 		bHasPhc2sysOpts := b.Phc2sysOpts != nil && *b.Phc2sysOpts != ""
 		//sorted in ascending order
-		// here having phc2sysOptions is considered a low number
+		// here having phc2sysOptions is considered a high number
 		if !aHasPhc2sysOpts && bHasPhc2sysOpts {
 			return -1 //  a<b return -1
 		} else if aHasPhc2sysOpts && !bHasPhc2sysOpts {
@@ -380,7 +371,6 @@ ptpconfig profiles for ptp4l
 func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) error {
 
 	dn.pluginManager.OnPTPConfigChange(nodeProfile)
-	var phcProcess *phc2SysProcess
 
 	ptpProcesses := []string{
 		ts2phcProcessName,  // there can be only one ts2phc process in the system
@@ -422,16 +412,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configFile = fmt.Sprintf("phc2sys.%d.config", runID)
 			configPath = fmt.Sprintf("/var/run/%s", configFile)
 			messageTag = fmt.Sprintf("[ptp4l.%d.config]", runID)
-			phcProcess = &phc2SysProcess{
-				process:    pProcess,
-				configPath: configPath,
-				configOpts: pointer.String(*configOpts),
-				nodeProfile: &ptpv1.PtpProfile{
-					PtpSchedulingPolicy:   pointer.String(*nodeProfile.PtpSchedulingPolicy),
-					PtpSchedulingPriority: nodeProfile.PtpSchedulingPriority,
-				},
-				ptpProcess: nil,
-			}
+
 		case ts2phcProcessName:
 			configInput = nodeProfile.Ts2PhcConf
 			configOpts = nodeProfile.Ts2PhcOpts
@@ -471,7 +452,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				// if ha profile is mentioned then you don't need uds_address here
 				if _, ok := (*nodeProfile).PtpSettings[PTP_HA_IDENTIFIER]; !ok {
 					section.options["uds_address"] = socketPath
-				} //else this is not HA profile
+				}
 				if gnssSerialPort, ok := section.options["ts2phc.nmea_serialport"]; ok {
 					output.gnss_serial_port = strings.TrimSpace(gnssSerialPort)
 					section.options["ts2phc.nmea_serialport"] = GPSPIPE_SERIALPORT
@@ -493,6 +474,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		cmdLine = fmt.Sprintf("/usr/sbin/%s -f %s  %s ", pProcess, configPath, *configOpts)
 		cmdLine = addScheduling(nodeProfile, cmdLine)
+		if pProcess == phc2sysProcessName {
+			cmdLine = dn.applyHaProfiles(nodeProfile, cmdLine)
+		}
 		args := strings.Split(cmdLine, " ")
 		cmd = exec.Command(args[0], args[1:]...)
 
@@ -611,26 +595,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			printNodeProfile(nodeProfile)
 			return fmt.Errorf("failed to write the configuration file named %s: %v", configPath, err)
 		}
-		if pProcess == phc2sysProcessName { // system should have only one phc2sys;
-			phcProcess.ptpProcess = &dprocess
-		} else {
-			printNodeProfile(nodeProfile)
-			dn.processManager.process = append(dn.processManager.process, &dprocess)
-		}
-	}
-	// append phc2sys process at the end
-	if phcProcess.ptpProcess != nil { // append phc2sysProcess at the end
-		if profiles, ok := (*nodeProfile).PtpSettings[PTP_HA_IDENTIFIER]; ok {
-			configStr := fmt.Sprintf("%s %s", *phcProcess.configOpts, strings.Join(dn.getHaProfiles(profiles), " "))
-			phcProcess.configOpts = pointer.String(configStr)
-		}
-		cmdLine = fmt.Sprintf("/usr/sbin/%s -f %s  %s ", phcProcess.ptpProcess.name, phcProcess.configPath, *phcProcess.configOpts)
-		cmdLine = addScheduling(phcProcess.nodeProfile, cmdLine)
-		args := strings.Split(cmdLine, " ")
-		cmd = exec.Command(args[0], args[1:]...)
-		phcProcess.ptpProcess.cmd = cmd
-		printNodeProfile(phcProcess.nodeProfile)
-		dn.processManager.process = append(dn.processManager.process, phcProcess.ptpProcess)
+
+		printNodeProfile(nodeProfile)
+		dn.processManager.process = append(dn.processManager.process, &dprocess)
+
 	}
 	return nil
 }
@@ -981,19 +949,22 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 	}
 }
 
-func (dn *Daemon) getHaProfiles(profiles string) []string {
-	haProfiles := strings.Split(profiles, ",")
-	updateHaProfileToSocketPath := make([]string, 0, len(haProfiles)-1)
-	for _, profileName := range haProfiles {
-		if strings.TrimSpace(profileName) != "" {
-		next:
-			for _, dmProcess := range dn.processManager.process {
-				if strings.TrimSpace(*dmProcess.nodeProfile.Name) == strings.TrimSpace(profileName) {
-					updateHaProfileToSocketPath = append(updateHaProfileToSocketPath, "-z "+dmProcess.ptp4lSocketPath)
-					continue next
+func (dn *Daemon) applyHaProfiles(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
+	if profiles, ok := (*nodeProfile).PtpSettings[PTP_HA_IDENTIFIER]; ok {
+		haProfiles := strings.Split(profiles, ",")
+		updateHaProfileToSocketPath := make([]string, 0, len(haProfiles))
+		for _, profileName := range haProfiles {
+			if strings.TrimSpace(profileName) != "" {
+				for _, dmProcess := range dn.processManager.process {
+					if strings.TrimSpace(*dmProcess.nodeProfile.Name) == strings.TrimSpace(profileName) {
+						updateHaProfileToSocketPath = append(updateHaProfileToSocketPath, "-z "+dmProcess.ptp4lSocketPath)
+						break // Exit inner loop if profile found
+					}
 				}
 			}
 		}
+		cmdLine = fmt.Sprintf("%s %s", cmdLine, strings.Join(updateHaProfileToSocketPath, " "))
 	}
-	return updateHaProfileToSocketPath
+	glog.Infof(cmdLine)
+	return cmdLine
 }
