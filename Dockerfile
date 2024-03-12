@@ -3,7 +3,7 @@ WORKDIR /go/src/github.com/openshift/linuxptp-daemon
 COPY . .
 RUN make clean && make
 
-FROM registry.ci.openshift.org/ocp/4.14:base-rhel9
+FROM registry.ci.openshift.org/ocp/4.16:base-rhel9
 
 COPY ./extra/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
 
