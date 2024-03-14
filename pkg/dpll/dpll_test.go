@@ -56,7 +56,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		expectedIntermediateState: event.PTP_FREERUN,
 		expectedState:             event.PTP_FREERUN,
 		expectedPhaseStatus:       0, //no phase status event for eec
-		expectedPhaseOffset:       dpll.FaultyPhaseOffset,
+		expectedPhaseOffset:       dpll.FaultyPhaseOffset * 1000000,
 		expectedFrequencyStatus:   2, // locked
 		expectedInSpecState:       true,
 		desc:                      "1.locked frequency status, unknonw Phase status ",
@@ -110,7 +110,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 					return 4 //holdover
 				}
 			}(), //no phase status event for eec
-			expectedPhaseOffset: dpll.FaultyPhaseOffset,
+			expectedPhaseOffset: dpll.FaultyPhaseOffset * 1000000,
 			expectedFrequencyStatus: func() int64 {
 				if pinType == 2 {
 					return 4
@@ -150,7 +150,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 					return 4
 				}
 			}(), //no phase status event for eec
-			expectedPhaseOffset: dpll.FaultyPhaseOffset,
+			expectedPhaseOffset: dpll.FaultyPhaseOffset * 1000000,
 			expectedFrequencyStatus: func() int64 {
 				if pinType == 2 {
 					return 4
