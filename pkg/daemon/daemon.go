@@ -41,11 +41,13 @@ const (
 	PTP_HA_IDENTIFIER               = "haProfiles"
 	HAInDomainIndicator             = "as domain source clock"
 	HAOutOfDomainIndicator          = "as out-of-domain source"
+	MessageTagSuffixSeperator       = ":"
 )
 
 var (
-	haInDomainRegEx  = regexp.MustCompile("selecting ([\\w\\-]+) as domain source clock")
-	haOutDomainRegEx = regexp.MustCompile("selecting ([\\w\\-]+) as out-of-domain source clock")
+	haInDomainRegEx      = regexp.MustCompile("selecting ([\\w\\-]+) as domain source clock")
+	haOutDomainRegEx     = regexp.MustCompile("selecting ([\\w\\-]+) as out-of-domain source clock")
+	MessagTagSuffixRegEx = regexp.MustCompile(`([a-zA-Z0-9]+\.[a-zA-Z0-9]+\.config):[a-zA-Z0-9]+(:[a-zA-Z0-9]+)?`)
 )
 
 // ProcessManager manages a set of ptpProcess
@@ -433,15 +435,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			socketPath = fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
 			configFile = fmt.Sprintf("ptp4l.%d.config", runID)
 			configPath = fmt.Sprintf("/var/run/%s", configFile)
-			messageTag = fmt.Sprintf("[ptp4l.%d.config]", runID)
+			messageTag = fmt.Sprintf("[ptp4l.%d.config:{level}]", runID)
 		case phc2sysProcessName:
 			configInput = nodeProfile.Phc2sysConf
 			configOpts = nodeProfile.Phc2sysOpts
 			if !ptpHAEnabled {
 				socketPath = fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
-				messageTag = fmt.Sprintf("[ptp4l.%d.config]", runID)
+				messageTag = fmt.Sprintf("[ptp4l.%d.config:{level}]", runID)
 			} else { // when ptp ha enabled it has its own valid config
-				messageTag = fmt.Sprintf("[phc2sys.%d.config]", runID)
+				messageTag = fmt.Sprintf("[phc2sys.%d.config:{level}]", runID)
 			}
 			configFile = fmt.Sprintf("phc2sys.%d.config", runID)
 			configPath = fmt.Sprintf("/var/run/%s", configFile)
@@ -451,7 +453,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			socketPath = fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
 			configFile = fmt.Sprintf("ts2phc.%d.config", runID)
 			configPath = fmt.Sprintf("/var/run/%s", configFile)
-			messageTag = fmt.Sprintf("[ts2phc.%d.config]", runID)
+			messageTag = fmt.Sprintf("[ts2phc.%d.config:{level}]", runID)
 		}
 
 		if configOpts == nil || *configOpts == "" {
@@ -682,6 +684,9 @@ func addScheduling(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
 
 func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 	cfgName := strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
+	if cfgName != "" {
+		cfgName = strings.Split(cfgName, MessageTagSuffixSeperator)[0]
+	}
 	// ptp4l[5196819.100]: [ptp4l.0.config] PTP_PROCESS_STOPPED:0/1
 	deadProcessMsg := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d\n", processName, time.Now().Unix(), cfgName, status)
 	UpdateProcessStatusMetrics(processName, cfgName, status)
@@ -823,7 +828,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
 						p.announceHAFailOver(&c, output) // do not use go routine since order of execution is important here
 					}
-					_, err2 := c.Write([]byte(out))
+					_, err2 := c.Write([]byte(removeMessageSuffix(out)))
 					if err2 != nil {
 						glog.Errorf("Write %s error %s:", out, err2)
 						goto connect
@@ -1095,4 +1100,16 @@ func failOverIndicator(output string, count int) (int64, int64) {
 		return 0, 1 //0=out; 1=active == 1
 	}
 	return 0, 0
+}
+
+func removeMessageSuffix(input string) (output string) {
+	// container log output  "ptp4l[2464681.628]: [phc2sys.1.config:7] master offset -4 s2 freq -26835 path delay 525"
+	// make sure non-supported version can handle suffix tags
+	// clear {} from unparsed template
+	//"ptp4l[2464681.628]: [phc2sys.1.config:{level}] master offset -4 s2 freq -26835 path delay 525"
+	replacer := strings.NewReplacer("{", "", "}", "")
+	output = replacer.Replace(input)
+	// Replace matching parts in the input string
+	output = MessagTagSuffixRegEx.ReplaceAllString(output, "$1")
+	return output
 }
