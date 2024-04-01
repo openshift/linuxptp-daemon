@@ -236,24 +236,19 @@ retry:
 						}
 						break
 					}
-
 				}
-				//glog.Infof("MonitorGNSSEventsWithUblox nStatus=%d ; nOffset=%d", nStatus, nOffset)
+
 				g.offset = nOffset
-				g.sourceLost = false
-				if nStatus >= 3 {
+				if nStatus < 3 {
+					g.sourceLost = true
+				} else if nStatus >= 3 && g.isOffsetInRange() {
 					g.state = event.PTP_LOCKED
-					if !g.isOffsetInRange() {
-						g.state = event.PTP_LOCKED
-					}
+					g.sourceLost = false
 				} else {
 					g.state = event.PTP_FREERUN
-					g.sourceLost = true
 				}
+				glog.Infof("qe-bug: status %v , iface %v sourc lost %v", g.state, g.gmInterface, g.sourceLost)
 
-				//if lastState != nStatus || lastOffset != g.offset {
-				//lastState = nStatus
-				//lastOffset = g.offset
 				select {
 				case g.processConfig.EventChannel <- event.EventChannel{
 					ProcessName: event.GNSS,
