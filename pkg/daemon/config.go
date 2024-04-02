@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
@@ -49,7 +48,7 @@ func NewLinuxPTPConfUpdate() (*LinuxPTPConfUpdate, error) {
 		}
 	}
 
-	defaultPTP4lConfig, err := ioutil.ReadFile(PTP4L_CONF_FILE_PATH)
+	defaultPTP4lConfig, err := os.ReadFile(PTP4L_CONF_FILE_PATH)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read %s: %v", PTP4L_CONF_FILE_PATH, err)
 	}
