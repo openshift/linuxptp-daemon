@@ -3,14 +3,18 @@ package event
 import (
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
+	"strconv"
+	"strings"
 )
+
+type DDetails []*DataDetails
 
 // Data ...
 type Data struct {
-	ProcessName EventSource    // ts2phc  // dppl
-	Details     []*DataDetails // array of iface and  offset
-	State       PTPState       // have the worst state here
-	logData     string         // iface that is connected to GNSS
+	ProcessName EventSource // ts2phc  // dppl
+	Details     DDetails    // array of iface and  offset
+	State       PTPState    // have the worst state here
+	logData     string      // iface that is connected to GNSS
 }
 
 // DataMetrics ...
@@ -100,6 +104,32 @@ func (d *Data) AddEvent(event EventChannel) {
 	d.logData = details.logData
 	d.Details = append(d.Details, details)
 	if len(StateRegisterer.Subscribers) > 0 {
+		glog.Infof("notify state changed for %s", event.ProcessName)
 		go StateRegisterer.notify(event.ProcessName, event.State)
 	}
+}
+
+// ToString ... data
+func (d *Data) toString() string {
+	out := strings.Builder{}
+	out.WriteString("  logData : " + d.logData)
+	out.WriteString("  state: " + string(d.State))
+	out.WriteString("   process name: " + string(d.ProcessName))
+	out.WriteString("  Data Details: " + d.Details.toString())
+	out.WriteString("-----\r\n")
+	return out.String()
+}
+
+// toString ... data details
+func (dd DDetails) toString() string {
+	out := strings.Builder{}
+	for _, d := range dd {
+		out.WriteString("  Iface name: " + d.IFace)
+		out.WriteString("  state: " + string(d.State))
+		out.WriteString("  clock type: " + string(d.ClockType))
+		out.WriteString(" signal source: " + string(d.signalSource))
+		out.WriteString(" source lost: " + strconv.FormatBool(d.sourceLost))
+		out.WriteString("-----\r\n")
+	}
+	return out.String()
 }
