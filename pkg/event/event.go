@@ -484,9 +484,11 @@ func (e *EventHandler) toString() string {
 					out.WriteString("  metric Name: " + mv.Name + "\r\n")
 					out.WriteString("  registered: " + strconv.FormatBool(mv.isRegistered) + "\r\n")
 				}
+				out.WriteString("  signal source: " + string(dataDetails.signalSource) + "\r\n")
 				out.WriteString("  details state: " + string(dataDetails.State) + "\r\n")
 				out.WriteString("  log: " + string(dataDetails.logData) + "\r\n")
 				out.WriteString("  iface: " + string(dataDetails.IFace) + "\r\n")
+				out.WriteString("  source lost : " + strconv.FormatBool(dataDetails.sourceLost) + "\r\n")
 			}
 			out.WriteString("-----\r\n")
 		}
@@ -586,6 +588,7 @@ connect:
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName) // this will delete all index
 					e.clockClass = protocol.ClockClassUninitialized
+
 				} else {
 					// Check if the index is within the slice bounds
 					for indexToRemove, d := range e.data[event.CfgName] {
