@@ -35,6 +35,7 @@ const (
 	ClockClassChangeIndicator       = "selected best master clock"
 	GPSDDefaultGNSSSerialPort       = "/dev/gnss0"
 	NMEASourceDisabledIndicator     = "nmea source timed out"
+	NMEASourceDisabledIndicator2    = "source ts not valid"
 	InvalidMasterTimestampIndicator = "ignoring invalid master time stamp"
 )
 
@@ -281,7 +282,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	for _, p := range dn.processManager.process {
 		if p != nil {
 			p.eventCh = dn.processManager.eventChannel
-			// start ptp4l process early , it doesnt have
+			// start ptp4l process early , it doesn't have
 			if p.depProcess == nil {
 				go p.cmdRun(dn.stdoutToSocket)
 			} else {
@@ -302,7 +303,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 							},
 							InitialPTPState: event.PTP_FREERUN,
 						})
-						glog.Infof("Max %d Min %d Holdover %d", p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
+						glog.Infof("enabling dep process %s with Max %d Min %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
 					}
 				}
 				go p.cmdRun(dn.stdoutToSocket)
@@ -414,7 +415,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		output.profile_name = *nodeProfile.Name
 
 		if nodeProfile.Interface != nil && *nodeProfile.Interface != "" {
-			output.sections = append([]ptp4lConfSection{{options: map[string]string{}, sectionName: fmt.Sprintf("[%s]", *nodeProfile.Interface)}}, output.sections...)
+			output.sections = append([]ptp4lConfSection{{
+				options:     map[string]string{},
+				sectionName: fmt.Sprintf("[%s]", *nodeProfile.Interface)}}, output.sections...)
 		} else {
 			iface := string("")
 			nodeProfile.Interface = &iface
@@ -447,7 +450,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		cmdLine = addScheduling(nodeProfile, cmdLine)
 		args := strings.Split(cmdLine, " ")
 		cmd = exec.Command(args[0], args[1:]...)
-
 		dprocess := ptpProcess{
 			name:              p,
 			ifaces:            ifaces,
@@ -513,10 +515,20 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			var localHoldoverTimeout uint64 = dpll.LocalHoldoverTimeout
 			var maxInSpecOffset uint64 = dpll.MaxInSpecOffset
 			var clockId uint64
+			phaseOffsetPinFilter := map[string]string{}
 			for _, iface := range dprocess.ifaces {
 				var eventSource []event.EventSource
 				if iface.Source == event.GNSS || iface.Source == event.PPS {
+					glog.Info("Init dpll: ptp settings ", (*nodeProfile).PtpSettings)
 					for k, v := range (*nodeProfile).PtpSettings {
+						glog.Info("Init dpll: ptp kv ", k, " ", v)
+						if strings.Contains(k, strings.Join([]string{iface.Name, "phaseOffset"}, ".")) {
+							filterKey := strings.Split(k, ".")
+							property := filterKey[len(filterKey)-1]
+							phaseOffsetPinFilter[property] = v
+							glog.Infof("dpll phase offset filter property: %s[%s]=%s", iface.Name, property, v)
+							continue
+						}
 						i, err := strconv.ParseUint(v, 10, 64)
 						if err != nil {
 							continue
@@ -540,8 +552,12 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 						eventSource = []event.EventSource{event.GNSS}
 					}
 					// pass array of ifaces which has source + clockId -
+					// here we have multiple dpll objects identified by clock id
+					// depends on will be either PPS or  GNSS,
+					// ONLY the one with GNSS dependcy will go to HOLDOVER
 					dpllDaemon := dpll.NewDpll(clockId, localMaxHoldoverOffSet, localHoldoverTimeout,
-						maxInSpecOffset, iface.Name, eventSource, dpll.NONE)
+						maxInSpecOffset, iface.Name, eventSource, dpll.NONE, dn.GetPhaseOffsetPinFilter(nodeProfile))
+					glog.Infof("depending on %s", dpllDaemon.DependsOn())
 					dpllDaemon.CmdInit()
 					dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
 				}
@@ -558,6 +574,23 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	}
 
 	return nil
+}
+
+func (dn *Daemon) GetPhaseOffsetPinFilter(nodeProfile *ptpv1.PtpProfile) map[string]map[string]string {
+	phaseOffsetPinFilter := map[string]map[string]string{}
+	for k, v := range (*nodeProfile).PtpSettings {
+		if strings.Contains(k, "phaseOffsetFilter") {
+			filterKey := strings.Split(k, ".")
+			property := filterKey[len(filterKey)-1]
+			clockIdStr := filterKey[len(filterKey)-2]
+			if len(phaseOffsetPinFilter[clockIdStr]) == 0 {
+				phaseOffsetPinFilter[clockIdStr] = map[string]string{}
+			}
+			phaseOffsetPinFilter[clockIdStr][property] = v
+			continue
+		}
+	}
+	return phaseOffsetPinFilter
 }
 
 func (dn *Daemon) HandlePmcTicker() {
@@ -774,7 +807,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 // for ts2phc along with processing metrics need to identify event
 func (p *ptpProcess) processPTPMetrics(output string) {
 	if p.name == ts2phcProcessName && (strings.Contains(output, NMEASourceDisabledIndicator) ||
-		strings.Contains(output, InvalidMasterTimestampIndicator)) { //TODO identify which interface lost nmea or 1pps
+		strings.Contains(output, InvalidMasterTimestampIndicator) ||
+		strings.Contains(output, NMEASourceDisabledIndicator2)) { //TODO identify which interface lost nmea or 1pps
 		iface := p.ifaces.GetGMInterface().Name
 		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]interface{}{event.NMEA_STATUS: int64(0)})
 		glog.Error("nmea string lost") //TODO: add for 1pps lost

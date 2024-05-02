@@ -1,10 +1,10 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,7 +19,7 @@ import (
 
 const (
 	GPSD_PROCESSNAME     = "gpsd"
-	GNSSMONITOR_INTERVAL = 5 * time.Second
+	GNSSMONITOR_INTERVAL = 1 * time.Second
 )
 
 type GPSD struct {
@@ -41,6 +41,8 @@ type GPSD struct {
 	gpsdDoneCh           chan bool
 	sourceLost           bool
 	subscriber           *GPSDSubscriber
+	monitorCtx           context.Context
+	monitorCancel        context.CancelFunc
 }
 
 // GPSDSubscriber ... event subscriber
@@ -53,7 +55,8 @@ type GPSDSubscriber struct {
 // Monitor ...
 func (s GPSDSubscriber) Monitor() {
 	glog.Info("Starting GNSS Monitoring")
-	go s.gpsd.MonitorGNSSEventsWithGPSD()
+
+	go s.gpsd.MonitorGNSSEventsWithUblox()
 }
 
 // Topic ... event topic
@@ -72,7 +75,6 @@ func (s GPSDSubscriber) Notify(source event.EventSource, state event.PTPState) {
 // MonitorProcess ... Monitor GPSD process
 func (g *GPSD) MonitorProcess(p config.ProcessConfig) {
 	g.processConfig = p
-	//go g.MonitorGNSSEventsWithGPSD(p, "E810")
 }
 
 func (g *GPSD) registerSubscriber() {
@@ -127,7 +129,8 @@ func (g *GPSD) CmdStop() {
 		}
 	}
 	g.unRegisterSubscriber()
-	<-g.exitCh
+	<-g.exitCh // waiting for all child routines to exit; we could add timeout to avoid waiting
+	g.monitorCancel()
 	glog.Infof("Process %s terminated", g.name)
 }
 
@@ -136,6 +139,7 @@ func (g *GPSD) CmdInit() {
 	if g.name == "" {
 		g.name = GPSD_PROCESSNAME
 	}
+	g.monitorCtx, g.monitorCancel = context.WithCancel(context.Background())
 	g.cmdLine = fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -G -N %s", g.Name(), g.SerialPort())
 }
 
@@ -176,226 +180,117 @@ func (g *GPSD) CmdRun(stdoutToSocket bool) {
 			if err != nil {
 				glog.Errorf("CmdRun() error waiting for %s: %v", g.Name(), err)
 			}
+		}
+		time.Sleep(connectionRetryInterval) // Delay to prevent flooding restarts if startup fails
+		// Don't restart after termination
+		if g.Stopped() {
+			glog.Infof("not recreating %s...", g.name)
+			g.exitCh <- struct{}{} // cmdStop is waiting for confirmation
+			break
+		} else {
+			glog.Infof("Recreating %s...", g.name)
 			newCmd := exec.Command(g.cmd.Args[0], g.cmd.Args[1:]...)
 			g.cmd = newCmd
-		} else {
-			processStatus(nil, g.name, g.messageTag, PtpProcessDown)
-			g.exitCh <- struct{}{}
-			break
-		}
-	}
-}
-
-// MonitorGNSSEventsWithGPSD ... monitor GNSS events
-func (g *GPSD) MonitorGNSSEventsWithGPSD() {
-	// close the session if it is already open
-	defer func() {
-		if g.gpsdSession != nil {
-			err := g.gpsdSession.Close()
-			if err != nil {
-				return
-			}
-		}
-	}()
-	g.offset = 5 // default to 5 nano secs
-	var err error
-	noFixThreshold := 3 // default
-	// handle if its restarts
-	if g.gpsdSession != nil {
-		_ = g.gpsdSession.Close()
-	}
-retry:
-	if g.gpsdSession, err = gpsdlib.Dial(gpsdlib.DefaultAddress); err != nil {
-		glog.Errorf("Failed to connect to GPSD: %s, retrying", err)
-		time.Sleep(2 * time.Second)
-		goto retry
-	}
-	// TPV data like gps state
-	g.gpsdSession.AddFilter("TPV", func(r interface{}) {
-		tpv := r.(*gpsdlib.TPVReport)
-		// gate it to the serial port
-		if strings.TrimSpace(tpv.Device) != strings.TrimSpace(g.serialPort) {
-			glog.Infof("Device %s is not %s set for monitoring", tpv.Device, g.serialPort)
-			return // do not send event
-		}
-		// prevent noise, wait for 3 occurrence of no fix state
-		if tpv.Mode == gpsdlib.NoFix || tpv.Mode == gpsdlib.NoValueSeen {
-			g.noFixStateOccurrence++
-		} else {
-			g.noFixStateOccurrence = 0
-		}
-
-		if g.noFixStateOccurrence > noFixThreshold {
-			g.state = event.PTP_FREERUN
-			g.sourceLost = true
-		} else if tpv.Mode == gpsdlib.Mode2D || tpv.Mode == gpsdlib.Mode3D {
-			g.sourceLost = false
-			if g.isOffsetInRange() {
-				g.state = event.PTP_LOCKED
-			} else {
-				g.state = event.PTP_FREERUN
-			}
-		} else {
-			return // do not send event yet
-		}
-		select {
-		case g.processConfig.EventChannel <- event.EventChannel{
-			ProcessName: event.GNSS,
-			State:       g.state,
-			CfgName:     g.processConfig.ConfigName,
-			IFace:       g.gmInterface,
-			Values: map[event.ValueType]interface{}{
-				event.GPS_STATUS: int64(tpv.Mode),
-				event.OFFSET:     g.offset,
-			},
-			ClockType:  g.processConfig.ClockType,
-			Time:       time.Now().UnixMilli(),
-			SourceLost: g.sourceLost,
-			WriteToLog: true,
-			Reset:      false,
-		}:
-		default:
-			glog.Error("failed to send gpsd event to event handler")
-		}
-
-	})
-retryWatch:
-	g.gpsdDoneCh = g.gpsdSession.Watch()
-	for {
-		select {
-		case <-g.exitCh:
-			glog.Infof("GPSD Monitor() exitCh")
-			goto exit
-		case <-g.gpsdDoneCh:
-			if !g.stopped {
-				time.Sleep(1 * time.Second)
-				// check if gpsd is still running
-				if g.cmd.Process != nil {
-					killErr := syscall.Kill(g.cmd.Process.Pid, syscall.Signal(0))
-					if killErr == nil {
-						glog.Infof("restarting gpsd session watch")
-						goto retryWatch
-					}
-				}
-				glog.Infof("restarting gpsd monitoring")
-				goto retry
-			}
-			glog.Infof("GPSD Monitor() gpsdDone closed")
-			goto exit
-		default:
-			// do nothing
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
-exit:
-	select {
-	case g.processConfig.EventChannel <- event.EventChannel{
-		ProcessName: event.GNSS,
-		CfgName:     g.processConfig.ConfigName,
-		ClockType:   g.processConfig.ClockType,
-		Time:        time.Now().UnixMilli(),
-		Reset:       true,
-	}:
-	default:
-		glog.Error("failed to send gnss terminated event to eventHandler")
-	}
-
-}
-func (g *GPSD) getUbloxOffset() {
-	if g.ublxTool == nil {
-		return
-	}
-	if offsetS, err := g.ublxTool.GetNavOffset(); err != nil {
-		glog.Errorf("failed to get nav offset %s", err)
-		g.offset = 99999999
-	} else {
-		if g.offset, err = strconv.ParseInt(offsetS, 10, 64); err != nil {
-			glog.Errorf("failed to parse offset %s", err)
-			g.offset = 99999999
 		}
 	}
 }
 
 // MonitorGNSSEventsWithUblox ... monitor GNSS events with ublox
-func (g *GPSD) MonitorGNSSEventsWithUblox(processCfg config.ProcessConfig, pluginName string) {
-	//done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
-	// var currentNavStatus int64
-	g.processConfig = processCfg
-	var err error
-	//currentNavStatus = 0
-	var ublx *ublox.UBlox
+func (g *GPSD) MonitorGNSSEventsWithUblox() {
+	//var ublx *ublox.UBlox
 	g.state = event.PTP_FREERUN
+	ticker := time.NewTicker(GNSSMONITOR_INTERVAL)
+	doneFn := func() {
+		select {
+		case g.processConfig.EventChannel <- event.EventChannel{
+			ProcessName: event.GNSS,
+			CfgName:     g.processConfig.ConfigName,
+			ClockType:   g.processConfig.ClockType,
+			Time:        time.Now().UnixMilli(),
+			Reset:       true,
+		}:
+		default:
+			glog.Error("failed to send gnss terminated event to eventHandler")
+		}
+		ticker.Stop()
+		return // exit
+	}
 retry:
-	if ublx, err = ublox.NewUblox(); err != nil {
+	if ublx, err := ublox.NewUblox(); err != nil {
 		glog.Errorf("failed to initialize GNSS monitoring via ublox %s", err)
 		time.Sleep(GNSSMONITOR_INTERVAL)
 		goto retry
 	} else {
 		//TODO: monitor on 1PPS  events trigger
-		ticker := time.NewTicker(GNSSMONITOR_INTERVAL)
-		//var lastState int64
-		//var lastOffset int64
-		//lastState = -1
-		//	lastOffset = -1
 		nStatus := int64(0)
-		offsetS := "99999999"
-		var err error
+		nOffset := int64(99999999)
+		missedTickers := 0
 		for {
 			select {
 			case <-ticker.C:
-				// do stuff
-				if nStatus, err = ublx.NavStatus(); err != nil {
-					glog.Errorf("failed to get nav status %s", err)
-					nStatus = 0
+				emptyCount := 0
+				for {
+					//UbloxPollInit only initializes if not running
+					ublx.UbloxPollInit()
+					output := ublx.UbloxPollPull()
+					if strings.Contains(output, "UBX-NAV-CLOCK") {
+						nextLine := ublx.UbloxPollPull()
+						//parse
+						nOffset = ublox.ExtractOffset(nextLine)
+						emptyCount = 0
+						missedTickers = 0
+					} else if strings.Contains(output, "UBX-NAV-STATUS") {
+						nextLine := ublx.UbloxPollPull()
+						//parse
+						nStatus = ublox.ExtractNavStatus(nextLine)
+						emptyCount = 0
+						missedTickers = 0
+					} else if len(output) == 0 {
+						emptyCount++
+					}
+					if emptyCount >= 10 {
+						missedTickers++
+						if missedTickers > 3 {
+							ublx.UbloxPollReset()
+							missedTickers = 0
+						}
+						break
+					}
 				}
-				if offsetS, err = ublx.GetNavOffset(); err != nil {
-					glog.Errorf("failed to get nav offset %s", err)
-					g.offset = 99999999
-				} else {
-					g.offset, _ = strconv.ParseInt(offsetS, 10, 64)
-				}
-				if nStatus >= 3 && g.isOffsetInRange() {
+				g.offset = nOffset
+				g.sourceLost = false
+				switch nStatus >= 3 {
+				case true:
 					g.state = event.PTP_LOCKED
-				} else {
+					if !g.isOffsetInRange() {
+						g.state = event.PTP_FREERUN
+					}
+				default:
 					g.state = event.PTP_FREERUN
+					g.sourceLost = true
 				}
-				//if lastState != nStatus || lastOffset != g.offset {
-				//lastState = nStatus
-				//lastOffset = g.offset
 				select {
-				case processCfg.EventChannel <- event.EventChannel{
+				case g.processConfig.EventChannel <- event.EventChannel{
 					ProcessName: event.GNSS,
 					State:       g.state,
-					CfgName:     processCfg.ConfigName,
+					CfgName:     g.processConfig.ConfigName,
 					IFace:       g.gmInterface,
 					Values: map[event.ValueType]interface{}{
 						event.GPS_STATUS: nStatus,
 						event.OFFSET:     g.offset,
 					},
-					ClockType:  processCfg.ClockType,
+					ClockType:  g.processConfig.ClockType,
 					Time:       time.Now().UnixMilli(),
-					SourceLost: false,
+					SourceLost: g.sourceLost,
 					WriteToLog: true,
 					Reset:      false,
 				}:
 				default:
 					glog.Error("failed to send gnss terminated event to eventHandler")
 				}
-				//}
-			case <-g.exitCh:
-				select {
-				case processCfg.EventChannel <- event.EventChannel{
-					ProcessName: event.GNSS,
-					CfgName:     processCfg.ConfigName,
-					ClockType:   processCfg.ClockType,
-					Time:        time.Now().UnixMilli(),
-					Reset:       true,
-				}:
-				default:
-					glog.Error("failed t send gnss terminated event to eventHandler")
-				}
-				ticker.Stop()
-				return // exit
+			case <-g.monitorCtx.Done():
+				doneFn()
+				return
 			}
 		}
 	}

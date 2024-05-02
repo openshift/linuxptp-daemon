@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,7 @@ type E810Opts struct {
 	UblxCmds            []E810UblxCmds               `json:"ublxCmds"`
 	DevicePins          map[string]map[string]string `json:"pins"`
 	DpllSettings        map[string]uint64            `json:"settings"`
+	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
 }
 
 type E810UblxCmds struct {
@@ -49,6 +51,25 @@ done
 
 echo "Disabled all SMA and U.FL Connections"
 `
+
+func getDefaultUblxCmds() []E810UblxCmds {
+	// Ublx command to output NAV-CLOCK every second
+	cfgMsgNavClock := E810UblxCmds{
+		ReportOutput: false,
+		Args:         []string{"-p", "CFG-MSG,1,34,1"},
+	}
+	// Ublx command to output NAV-STATUS every second
+	cfgMsgNavStatus := E810UblxCmds{
+		ReportOutput: false,
+		Args:         []string{"-p", "CFG-MSG,1,3,1"},
+	}
+	// Ublx command to save configuration to storage
+	cfgSave := E810UblxCmds{
+		ReportOutput: false,
+		Args:         []string{"-p", "SAVE"},
+	}
+	return []E810UblxCmds{cfgMsgNavClock, cfgMsgNavStatus, cfgSave}
+}
 
 func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	glog.Info("calling onPTPConfigChange for e810 plugin")
@@ -98,6 +119,24 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					(*nodeProfile).PtpSettings[k] = strconv.FormatUint(v, 10)
 				}
 			}
+			for iface, properties := range e810Opts.PhaseOffsetPins {
+				ifaceFound := false
+				for dev := range e810Opts.DevicePins {
+					if strings.Compare(iface, dev) == 0 {
+						ifaceFound = true
+						break
+					}
+				}
+				if !ifaceFound {
+					glog.Errorf("e810 phase offset pin filter initialization failed: interface %s not found among  %v",
+						iface, reflect.ValueOf(e810Opts.DevicePins).MapKeys())
+					break
+				}
+				for pinProperty, value := range properties {
+					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getClockIdE810(iface), 10), pinProperty}, ".")
+					(*nodeProfile).PtpSettings[key] = value
+				}
+			}
 		}
 	}
 	return nil
@@ -121,7 +160,7 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			}
 			if command == "gpspipe" {
 				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
-				for _, ublxOpt := range e810Opts.UblxCmds {
+				for _, ublxOpt := range append(e810Opts.UblxCmds, getDefaultUblxCmds()...) {
 					ublxArgs := ublxOpt.Args
 					glog.Infof("Running /usr/bin/ubxtool with args %s", strings.Join(ublxArgs, ", "))
 					stdout, err = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput()
