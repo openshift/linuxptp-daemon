@@ -1,6 +1,6 @@
 module github.com/openshift/linuxptp-daemon
 
-go 1.21
+go 1.22
 
 require github.com/openshift/ptp-operator v0.0.0-20230207052655-ede9197d99ca
 
