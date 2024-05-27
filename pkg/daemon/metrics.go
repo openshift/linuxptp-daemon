@@ -20,14 +20,15 @@ import (
 )
 
 const (
-	PTPNamespace = "openshift"
-	PTPSubsystem = "ptp"
-
-	ptp4lProcessName  = "ptp4l"
-	phcProcessName    = "phc2sys"
-	ts2phcProcessName = "ts2phc"
-	clockRealTime     = "CLOCK_REALTIME"
-	master            = "master"
+	PTPNamespace       = "openshift"
+	PTPSubsystem       = "ptp"
+	GNSS               = "gnss"
+	DPLL               = "dpll"
+	ptp4lProcessName   = "ptp4l"
+	phc2sysProcessName = "phc2sys"
+	ts2phcProcessName  = "ts2phc"
+	clockRealTime      = "CLOCK_REALTIME"
+	master             = "master"
 
 	faultyOffset = 999999
 
@@ -262,7 +263,7 @@ func extractMetrics(messageTag string, processName string, ifaces []config.Iface
 					if slaveIface.isFaulty(configName, ifaces[portId-1].Name) &&
 						masterOffsetSource.get(configName) == ptp4lProcessName {
 						updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
-						updatePTPMetrics(phc, phcProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
+						updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
 						updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN)
 						masterOffsetIface.set(configName, "")
 						slaveIface.set(configName, "")
@@ -486,6 +487,48 @@ func UpdateProcessStatusMetrics(process, cfgName string, status int64) {
 	}
 }
 
+// DeleteMetrics ...
+func deleteMetrics(ifaces config.IFaces, process, config string) {
+
+	deleteProcessStatusMetrics(config, process)
+	for _, iface := range ifaces {
+		InterfaceRole.Delete(prometheus.Labels{
+			"process": ptp4lProcessName, "node": NodeName, "iface": iface.Name})
+	}
+	for _, iface := range masterOffsetIface.iface {
+		ClockState.Delete(prometheus.Labels{
+			"process": process, "node": NodeName, "iface": iface.alias})
+		Delay.Delete(prometheus.Labels{
+			"from": master, "process": process, "node": NodeName, "iface": iface.alias})
+		FrequencyAdjustment.Delete(prometheus.Labels{
+			"from": master, "process": process, "node": NodeName, "iface": iface.alias})
+		MaxOffset.Delete(prometheus.Labels{
+			"from": master, "process": process, "node": NodeName, "iface": iface.alias})
+		Offset.Delete(prometheus.Labels{
+			"from": master, "process": process, "node": NodeName, "iface": iface.alias})
+	}
+}
+
+func deleteOsClockStateMetrics(profiles map[string][]string) {
+	ClockState.Delete(prometheus.Labels{
+		"process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+	Delay.Delete(prometheus.Labels{
+		"from": phc, "process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+	FrequencyAdjustment.Delete(prometheus.Labels{
+		"from": phc, "process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+	MaxOffset.Delete(prometheus.Labels{
+		"from": phc, "process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+	Offset.Delete(prometheus.Labels{
+		"from": phc, "process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+}
+
+func deleteProcessStatusMetrics(config, process string) {
+	ProcessStatus.Delete(prometheus.Labels{
+		"process": process, "node": NodeName, "config": config})
+	ProcessRestartCount.Delete(prometheus.Labels{
+		"process": process, "node": NodeName, "config": config})
+
+}
 func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 	replacer := strings.NewReplacer("[", " ", "]", " ", ":", " ")
 	output = replacer.Replace(output)

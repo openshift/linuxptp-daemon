@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,15 +52,28 @@ type ProcessManager struct {
 
 // NewProcessManager is used by unit tests
 func NewProcessManager() *ProcessManager {
-	process := &ptpProcess{}
-	process.ptpClockThreshold = &ptpv1.PtpClockThreshold{
+	processPTP := &ptpProcess{}
+	processPTP.ptpClockThreshold = &ptpv1.PtpClockThreshold{
 		HoldOverTimeout:    5,
 		MaxOffsetThreshold: 100,
 		MinOffsetThreshold: -100,
 	}
 	return &ProcessManager{
-		process: []*ptpProcess{process},
+		process: []*ptpProcess{processPTP},
 	}
+}
+
+// SetTestProfile ...
+func (p *ProcessManager) SetTestProfileProcess(name string, ifaces config.IFaces, socketPath,
+	ptp4lConfigPath string, nodeProfile ptpv1.PtpProfile) {
+	p.process = append(p.process, &ptpProcess{
+		name:            name,
+		ifaces:          ifaces,
+		ptp4lSocketPath: socketPath,
+		ptp4lConfigPath: ptp4lConfigPath,
+		execMutex:       sync.Mutex{},
+		nodeProfile:     nodeProfile,
+	})
 }
 
 // SetTestData is used by unit tests
@@ -234,6 +248,11 @@ func printWhenNotNil(p interface{}, description string) {
 	}
 }
 
+// SetProcessManager ...
+func (dn *Daemon) SetProcessManager(p *ProcessManager) {
+	dn.processManager = p
+}
+
 func (dn *Daemon) applyNodePTPProfiles() error {
 	glog.Infof("in applyNodePTPProfiles")
 	for _, p := range dn.processManager.process {
@@ -249,6 +268,8 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 				}
 			}
 			p.depProcess = nil
+			//cleanup metrics
+			deleteMetrics(p.ifaces, p.name, p.configName)
 			p = nil
 		}
 	}
@@ -270,6 +291,20 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 
 	glog.Infof("updating NodePTPProfiles to:")
 	runID := 0
+	sort.Slice(dn.ptpUpdate.NodeProfiles, func(i, j int) bool {
+		a := dn.ptpUpdate.NodeProfiles[i]
+		b := dn.ptpUpdate.NodeProfiles[j]
+		aHasPhc2sysOpts := a.Phc2sysOpts != nil && *a.Phc2sysOpts != ""
+		bHasPhc2sysOpts := b.Phc2sysOpts != nil && *b.Phc2sysOpts != ""
+		//sorted in ascending order
+		// here having phc2sysOptions is considered a high number
+		if !aHasPhc2sysOpts && bHasPhc2sysOpts {
+			return true //  a<b return true
+		} else if aHasPhc2sysOpts && !bHasPhc2sysOpts {
+			return false //  a>b return false
+		}
+		return *a.Name < *b.Name
+	})
 	for _, profile := range dn.ptpUpdate.NodeProfiles {
 		err := dn.applyNodePtpProfile(runID, &profile)
 		if err != nil {
@@ -352,10 +387,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 	dn.pluginManager.OnPTPConfigChange(nodeProfile)
 
-	ptp_processes := []string{
-		ts2phcProcessName,
-		ptp4lProcessName,
-		phcProcessName,
+	ptpProcesses := []string{
+		ts2phcProcessName,  // there can be only one ts2phc process in the system
+		ptp4lProcessName,   // there could be more than one ptp4l in the system
+		phc2sysProcessName, // there can be only one phc2sys process in the system
 	}
 
 	var err error
@@ -369,7 +404,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	var cmd *exec.Cmd
 	var pProcess string
 
-	for _, p := range ptp_processes {
+	for _, p := range ptpProcesses {
 		pProcess = p
 		switch pProcess {
 		case ptp4lProcessName:
@@ -383,7 +418,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configFile = fmt.Sprintf("ptp4l.%d.config", runID)
 			configPath = fmt.Sprintf("/var/run/%s", configFile)
 			messageTag = fmt.Sprintf("[ptp4l.%d.config]", runID)
-		case phcProcessName:
+		case phc2sysProcessName:
 			configInput = nodeProfile.Phc2sysConf
 			configOpts = nodeProfile.Phc2sysOpts
 			socketPath = fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
@@ -426,7 +461,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		for index, section := range output.sections {
 			if section.sectionName == "[global]" {
 				section.options["message_tag"] = messageTag
-				section.options["uds_address"] = socketPath
+				if socketPath != "" {
+					section.options["uds_address"] = socketPath
+				}
 				if gnssSerialPort, ok := section.options["ts2phc.nmea_serialport"]; ok {
 					output.gnss_serial_port = strings.TrimSpace(gnssSerialPort)
 					section.options["ts2phc.nmea_serialport"] = GPSPIPE_SERIALPORT
@@ -446,7 +483,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			*configInput = configOutput
 		}
 
-		cmdLine = fmt.Sprintf("/usr/sbin/%s -f %s  %s ", p, configPath, *configOpts)
+		cmdLine = fmt.Sprintf("/usr/sbin/%s -f %s  %s ", pProcess, configPath, *configOpts)
 		cmdLine = addScheduling(nodeProfile, cmdLine)
 		args := strings.Split(cmdLine, " ")
 		cmd = exec.Command(args[0], args[1:]...)
@@ -466,12 +503,12 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			clockType:         clockType,
 			ptpClockThreshold: getPTPThreshold(nodeProfile),
 		}
-		//TODO HARDWARE PLUGIN for e810
+		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
 			if output.gnss_serial_port == "" {
 				output.gnss_serial_port = GPSPIPE_SERIALPORT
 			}
-			//TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
+			// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
 			gmInterface := dprocess.ifaces.GetGMInterface().Name
 
 			if e := mkFifo(); e != nil {
@@ -569,10 +606,11 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			printNodeProfile(nodeProfile)
 			return fmt.Errorf("failed to write the configuration file named %s: %v", configPath, err)
 		}
+
 		printNodeProfile(nodeProfile)
 		dn.processManager.process = append(dn.processManager.process, &dprocess)
-	}
 
+	}
 	return nil
 }
 
@@ -593,6 +631,7 @@ func (dn *Daemon) GetPhaseOffsetPinFilter(nodeProfile *ptpv1.PtpProfile) map[str
 	return phaseOffsetPinFilter
 }
 
+// HandlePmcTicker  ....
 func (dn *Daemon) HandlePmcTicker() {
 	for _, p := range dn.processManager.process {
 		if p.name == ptp4lProcessName {
@@ -844,6 +883,7 @@ func (p *ptpProcess) cmdStop() {
 			return
 		}
 	}
+	glog.Infof("removing config path %s for %s ", p.ptp4lConfigPath, p.name)
 	if p.ptp4lConfigPath != "" {
 		err := os.Remove(p.ptp4lConfigPath)
 		if err != nil {
