@@ -17,6 +17,7 @@ import (
 
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/dpll"
+	"github.com/openshift/linuxptp-daemon/pkg/leap"
 
 	"github.com/openshift/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/openshift/linuxptp-daemon/pkg/network"
@@ -171,6 +172,8 @@ type Daemon struct {
 
 	// Allow vendors to include plugins
 	pluginManager PluginManager
+
+	leapManager *leap.LeapManager
 }
 
 // New LinuxPTP is called by daemon to generate new linuxptp instance
@@ -186,6 +189,7 @@ func New(
 	refreshNodePtpDevice *bool,
 	closeManager chan bool,
 	pmcPollInterval int,
+	leapManager *leap.LeapManager,
 ) *Daemon {
 	if !stdoutToSocket {
 		RegisterMetrics(nodeName)
@@ -209,7 +213,8 @@ func New(
 			eventChannel:    eventChannel,
 			ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics),
 		},
-		stopCh: stopCh,
+		leapManager: leapManager,
+		stopCh:      stopCh,
 	}
 }
 
@@ -542,6 +547,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			if e := mkFifo(); e != nil {
 				glog.Errorf("Error creating named pipe, GNSS monitoring will not work as expected %s", e.Error())
 			}
+
+			for _, section := range output.sections {
+				if section.sectionName == "[global]" {
+					section.options["leapfile"] = fmt.Sprintf("%s/%s", config.DefaultLeapConfigPath, os.Getenv("NODE_NAME"))
+					break
+				}
+			}
+			// Write ts2phc.x.conf with leap-file path per node name
+			configOutput, _ = output.renderPtp4lConf()
 			gpsDaemon := &GPSD{
 				name:        GPSD_PROCESSNAME,
 				execMutex:   sync.Mutex{},
@@ -551,6 +565,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				gmInterface: gmInterface,
 				stopped:     false,
 				messageTag:  messageTag,
+				leapManager: dn.leapManager,
 			}
 			gpsDaemon.CmdInit()
 			gpsDaemon.cmdLine = addScheduling(nodeProfile, gpsDaemon.cmdLine)
