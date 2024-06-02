@@ -26,6 +26,7 @@ github.com/evanphx/json-patch/v5
 # github.com/facebook/time v0.0.0-20230529151911-512b3b30ab23
 ## explicit; go 1.18
 github.com/facebook/time/hostendian
+github.com/facebook/time/leaphash
 github.com/facebook/time/ptp/protocol
 # github.com/fsnotify/fsnotify v1.5.4
 ## explicit; go 1.16
