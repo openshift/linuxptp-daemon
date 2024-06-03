@@ -1,10 +1,11 @@
 package ublox_test
 
 import (
-	"github.com/openshift/linuxptp-daemon/pkg/ublox"
-	"github.com/stretchr/testify/assert"
 	"regexp"
 	"testing"
+
+	"github.com/openshift/linuxptp-daemon/pkg/ublox"
+	"github.com/stretchr/testify/assert"
 )
 
 type gnssAntennaTest struct {
@@ -93,4 +94,25 @@ func Test_Query(t *testing.T) {
 	assert.NotEmpty(t, ss)
 	assert.NotEmpty(t, s[0])
 	assert.Nil(t, err)
+}
+
+func Test_ExtractLeapSec(t *testing.T) {
+	var data = []string{
+		"iTOW 376008000 version 0 reserved2 0 0 0 srcOfCurrLs 2",
+		"currLs 18 srcOfLsChange 2 lsChange 0 timeToLsEvent 77643210",
+		"dateOfLsGpsWn 2441 dateOfLsGpsDn 7 reserved2 0 0 0",
+		"valid x3",
+	}
+	res := ublox.ExtractLeapSec(data)
+	desired := &ublox.TimeLs{
+		SrcOfCurrLs:   2,
+		CurrLs:        18,
+		SrcOfLsChange: 2,
+		LsChange:      0,
+		TimeToLsEvent: 77643210,
+		DateOfLsGpsWn: 2441,
+		DateOfLsGpsDn: 7,
+		Valid:         3,
+	}
+	assert.Equal(t, desired, res, "TimeLs parsing result mismatch")
 }
