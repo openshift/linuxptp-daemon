@@ -108,7 +108,6 @@ spec:
       logging_level 7
       ts2phc.pulsewidth 100000000
       ts2phc.nmea_serialport  /dev/ttyGNSS_1700_0
-      leapfile  /usr/share/zoneinfo/leap-seconds.list
       [ens2f0]
       ts2phc.extts_polarity rising
       ts2phc.extts_correction 0
