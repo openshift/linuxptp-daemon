@@ -12,11 +12,6 @@ type PluginManager struct {
 	data    map[string]*interface{}
 }
 
-func HelloWorld() {
-	glog.Infof("hello world")
-	return
-}
-
 func registerPlugins(plugins []string) PluginManager {
 	glog.Infof("Begin plugin registration...")
 	manager := PluginManager{plugins: make(map[string]*plugin.Plugin),

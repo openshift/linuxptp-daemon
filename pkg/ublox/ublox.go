@@ -105,15 +105,6 @@ func (u *UBlox) MonVersion(command string, regEx *regexp.Regexp) (*string, error
 		glog.Errorf("error reading ublox MON-VER command  %s", err)
 		return nil, err
 	}
-	if err != nil {
-		glog.Errorf("error reading gnss status %s", err)
-		return nil, err
-	}
-
-	if err != nil {
-		glog.Errorf("error %s", err)
-		return nil, err
-	}
 	return &stdout, nil
 }
 

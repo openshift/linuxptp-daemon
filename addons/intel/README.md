@@ -111,6 +111,9 @@ spec:
       [ens2f0]
       ts2phc.extts_polarity rising
       ts2phc.extts_correction 0
+    synce4lOpts: " "
+    synce4lConf: |
+      [global]
   recommend:
   - profile: "profile1"
     priority: 4

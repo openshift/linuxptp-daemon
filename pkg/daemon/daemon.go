@@ -393,6 +393,8 @@ func printNodeProfile(nodeProfile *ptpv1.PtpProfile) {
 	printWhenNotNil(nodeProfile.Phc2sysConf, "Phc2sysConf")
 	printWhenNotNil(nodeProfile.Ts2PhcOpts, "Ts2PhcOpts")
 	printWhenNotNil(nodeProfile.Ts2PhcConf, "Ts2PhcConf")
+	printWhenNotNil(nodeProfile.Synce4lOpts, "Synce4lOpts")
+	printWhenNotNil(nodeProfile.Synce4lConf, "Synce4lConf")
 	printWhenNotNil(nodeProfile.PtpSchedulingPolicy, "PtpSchedulingPolicy")
 	printWhenNotNil(nodeProfile.PtpSchedulingPriority, "PtpSchedulingPriority")
 	printWhenNotNil(nodeProfile.PtpSettings, "PtpSettings")
@@ -411,6 +413,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 	ptpProcesses := []string{
 		ts2phcProcessName,  // there can be only one ts2phc process in the system
+		syncEProcessName,   // there can be only one synce Process per profile
 		ptp4lProcessName,   // there could be more than one ptp4l in the system
 		phc2sysProcessName, // there can be only one phc2sys process in the system
 	}
@@ -461,6 +464,13 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configFile = fmt.Sprintf("ts2phc.%d.config", runID)
 			configPath = fmt.Sprintf("/var/run/%s", configFile)
 			messageTag = fmt.Sprintf("[ts2phc.%d.config:{level}]", runID)
+		case syncEProcessName:
+			configOpts = nodeProfile.Synce4lOpts
+			configInput = nodeProfile.Synce4lConf
+			socketPath = ""
+			configFile = fmt.Sprintf("synce4l.%d.config", runID)
+			configPath = fmt.Sprintf("/var/run/%s", configFile)
+			messageTag = fmt.Sprintf("[synce4l.%d.config]", runID)
 		}
 
 		if configOpts == nil || *configOpts == "" {

@@ -27,6 +27,7 @@ const (
 	ptp4lProcessName   = "ptp4l"
 	phc2sysProcessName = "phc2sys"
 	ts2phcProcessName  = "ts2phc"
+	syncEProcessName   = "synce4l"
 	clockRealTime      = "CLOCK_REALTIME"
 	master             = "master"
 

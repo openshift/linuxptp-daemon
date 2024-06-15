@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -30,8 +31,8 @@ type PtpOperatorConfigSpec struct {
 
 	DaemonNodeSelector map[string]string `json:"daemonNodeSelector"`
 	// EventConfig to configure event sidecar
-	EventConfig    *PtpEventConfig `json:"ptpEventConfig,omitempty"`
-	EnabledPlugins []string        `json:"plugins,omitempty"`
+	EventConfig    *PtpEventConfig                 `json:"ptpEventConfig,omitempty"`
+	EnabledPlugins *map[string]*apiextensions.JSON `json:"plugins,omitempty"`
 }
 
 // PtpOperatorConfigStatus defines the observed state of PtpOperatorConfig
@@ -67,11 +68,18 @@ type PtpEventConfig struct {
 	// +kubebuilder:default=false
 	// EnableEventPublisher will deploy event proxy as a sidecar
 	EnableEventPublisher bool `json:"enableEventPublisher,omitempty"`
-	// TransportHost format is <protocol>://<transport-service>.<namespace>.svc.cluster.local:<transport-port>"
-	// Example HTTP transport: "http://ptp-event-publisher-service.openshift-ptp.svc.cluster.local:9043"
-	// Example AMQP transport: "amqp://amq-router-service-name.amq-namespace.svc.cluster.local"
+	// TransportHost format is <protocol>://<transport-service>.<namespace>.svc.cluster.local:<transport-port>
+	// Example HTTP transport: "http://ptp-event-publisher-service-NODE_NAME.openshift-ptp.svc.cluster.local:9043"
 	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Transport Host",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:text"}
 	TransportHost string `json:"transportHost,omitempty"`
+	// StorageType is the type of storage to store subscription data
+	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Storage Type",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:text"}
+	StorageType string `json:"storageType,omitempty"`
+	// ApiVersion is used to determine which API is used for the event service
+	// 1.0: default version. event service is mapped to internal REST-API.
+	// 2.x: event service is mapped to O-RAN v3.0 Compliant O-Cloud Notification REST-API.
+	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="ApiVersion",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:text"}
+	ApiVersion string `json:"apiVersion,omitempty"`
 }
 
 func init() {
