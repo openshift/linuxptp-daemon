@@ -6,6 +6,7 @@ RUN make clean && make
 FROM registry.ci.openshift.org/ocp/4.16:base-rhel9
 
 COPY ./extra/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
+COPY ./extra/preStop.sh preStop.sh
 
 RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata  && yum clean all
 
