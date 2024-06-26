@@ -38,12 +38,15 @@ type LeapManager struct {
 	// ts2phc path of leap-seconds.list file
 	LeapFilePath string
 	// client
-	client    *kubernetes.Clientset
+	client    kubernetes.Interface
 	namespace string
 	// Leap file structure
 	leapFile LeapFile
 	// Retry configmap update if failed
 	retryUpdate bool
+	// Default leap file path and name
+	leapFilePath string
+	leapFileName string
 }
 
 type LeapEvent struct {
@@ -60,20 +63,22 @@ type LeapFile struct {
 
 func New(kubeclient *kubernetes.Clientset, namespace string) (*LeapManager, error) {
 	lm := &LeapManager{
-		UbloxLsInd: make(chan ublox.TimeLs, 2),
-		Close:      make(chan bool),
-		client:     kubeclient,
-		namespace:  namespace,
-		leapFile:   LeapFile{},
+		UbloxLsInd:   make(chan ublox.TimeLs, 2),
+		Close:        make(chan bool),
+		client:       kubeclient,
+		namespace:    namespace,
+		leapFile:     LeapFile{},
+		leapFilePath: defaultLeapFilePath,
+		leapFileName: defaultLeapFileName,
 	}
-	err := lm.PopulateLeapData()
+	err := lm.populateLeapData()
 	if err != nil {
 		return nil, err
 	}
 	return lm, nil
 }
 
-func ParseLeapFile(b []byte) (*LeapFile, error) {
+func parseLeapFile(b []byte) (*LeapFile, error) {
 	var l = LeapFile{}
 	lines := strings.Split(string(b), "\n")
 	for i := 0; i < len(lines); i++ {
@@ -91,7 +96,10 @@ func ParseLeapFile(b []byte) (*LeapFile, error) {
 			}
 			sec, err := strconv.ParseInt(fields[1], 10, 8)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse Leap seconds %s value from file: %s, %v", fields[1], defaultLeapFileName, err)
+				return nil, fmt.Errorf("failed to parse Leap seconds %s value: %s", fields[1], err)
+			}
+			if _, err := strconv.ParseInt(fields[0], 10, 64); err != nil {
+				return nil, fmt.Errorf("failed to parse Leap event time %s: %s", fields[0], err)
 			}
 			ev := LeapEvent{
 				LeapTime: fields[0],
@@ -104,7 +112,7 @@ func ParseLeapFile(b []byte) (*LeapFile, error) {
 	return &l, nil
 }
 
-func (l *LeapManager) RenderLeapData() (*bytes.Buffer, error) {
+func (l *LeapManager) renderLeapData() (*bytes.Buffer, error) {
 	templateStr := `# Do not edit
 # This file is generated automatically by linuxptp-daemon
 #$	{{ .UpdateTime }}
@@ -128,7 +136,7 @@ func (l *LeapManager) RenderLeapData() (*bytes.Buffer, error) {
 	return &buf, nil
 }
 
-func (l *LeapManager) PopulateLeapData() error {
+func (l *LeapManager) populateLeapData() error {
 	cm, err := l.client.CoreV1().ConfigMaps(l.namespace).Get(context.TODO(), leapConfigMapName, metav1.GetOptions{})
 	nodeName := os.Getenv("NODE_NAME")
 	if err != nil {
@@ -136,12 +144,12 @@ func (l *LeapManager) PopulateLeapData() error {
 	}
 	lf, found := cm.Data[nodeName]
 	if !found {
-		glog.Info("Populate leap data from file")
+		glog.Info("Populate Leap data from file")
 		b, err := os.ReadFile(filepath.Join(defaultLeapFilePath, defaultLeapFileName))
 		if err != nil {
 			return err
 		}
-		leapData, err := ParseLeapFile(b)
+		leapData, err := parseLeapFile(b)
 		if err != nil {
 			return err
 		}
@@ -151,7 +159,8 @@ func (l *LeapManager) PopulateLeapData() error {
 		start := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
 		expSec := int(exp.Sub(start).Seconds())
 		l.leapFile.ExpirationTime = fmt.Sprint(expSec)
-		data, err := l.RenderLeapData()
+		l.rehashLeapData()
+		data, err := l.renderLeapData()
 		if err != nil {
 			return err
 		}
@@ -161,22 +170,19 @@ func (l *LeapManager) PopulateLeapData() error {
 		cm.Data[nodeName] = data.String()
 		_, err = l.client.CoreV1().ConfigMaps(l.namespace).Update(context.TODO(), cm, metav1.UpdateOptions{})
 		if err != nil {
+			l.retryUpdate = true
 			return err
 		}
 	} else {
-		glog.Info("Populate leap data from configmap")
-		leapData, err := ParseLeapFile([]byte(lf))
+		glog.Info("Populate Leap data from configmap")
+		leapData, err := parseLeapFile([]byte(lf))
 		if err != nil {
 			return err
 		}
 		l.leapFile = *leapData
 	}
+	glog.Info("Leap file expiration is set to ", l.leapFile.ExpirationTime)
 	return nil
-}
-
-func (l *LeapManager) SetLeapFile(leapFile string) {
-	l.LeapFilePath = leapFile
-	glog.Info("setting Leap file to ", leapFile)
 }
 
 func (l *LeapManager) Run() {
@@ -185,12 +191,12 @@ func (l *LeapManager) Run() {
 	for {
 		select {
 		case v := <-l.UbloxLsInd:
-			l.HandleLeapIndication(&v)
+			l.handleLeapIndication(&v)
 		case <-l.Close:
 			return
 		case <-ticker.C:
 			if l.retryUpdate {
-				l.UpdateLeapConfigmap()
+				l.updateLeapConfigmap()
 			}
 			// TODO: if current time is within -12h ... +60s from leap event:
 			// Send PMC command
@@ -198,26 +204,27 @@ func (l *LeapManager) Run() {
 	}
 }
 
-// AddLeapEvent appends a new leap event to the list of leap events
-func (l *LeapManager) AddLeapEvent(leapTime time.Time,
-	leapSec int, expirationTime time.Time, currentTime time.Time) {
+// updateLeapFile updates a new leap event to the list of leap events, if provided
+func (l *LeapManager) updateLeapFile(leapTime time.Time,
+	leapSec int, currentTime time.Time) {
 
 	startTime := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
-	leapTimeTai := int(leapTime.Sub(startTime).Seconds())
+	if leapSec != 0 {
+		leapTimeTai := int(leapTime.Sub(startTime).Seconds())
 
-	ev := LeapEvent{
-		LeapTime: fmt.Sprint(leapTimeTai),
-		LeapSec:  leapSec,
-		Comment: fmt.Sprintf("# %v %v %v",
-			leapTime.Day(), leapTime.Month().String()[:3], leapTime.Year()),
+		ev := LeapEvent{
+			LeapTime: fmt.Sprint(leapTimeTai),
+			LeapSec:  leapSec,
+			Comment: fmt.Sprintf("# %v %v %v",
+				leapTime.Day(), leapTime.Month().String()[:3], leapTime.Year()),
+		}
+		l.leapFile.LeapEvents = append(l.leapFile.LeapEvents, ev)
 	}
-	l.leapFile.LeapEvents = append(l.leapFile.LeapEvents, ev)
 	l.leapFile.UpdateTime = fmt.Sprint(int(currentTime.Sub(startTime).Seconds()))
-	l.RehashLeapData()
-
+	l.rehashLeapData()
 }
 
-func (l *LeapManager) RehashLeapData() {
+func (l *LeapManager) rehashLeapData() {
 	data := fmt.Sprint(l.leapFile.UpdateTime) + fmt.Sprint(l.leapFile.ExpirationTime)
 
 	for _, ev := range l.leapFile.LeapEvents {
@@ -236,8 +243,8 @@ func (l *LeapManager) RehashLeapData() {
 	l.leapFile.Hash = groupedHash
 }
 
-func (l *LeapManager) UpdateLeapConfigmap() {
-	data, err := l.RenderLeapData()
+func (l *LeapManager) updateLeapConfigmap() {
+	data, err := l.renderLeapData()
 	if err != nil {
 		glog.Error("Leap: ", err)
 		return
@@ -263,42 +270,67 @@ func (l *LeapManager) UpdateLeapConfigmap() {
 	l.retryUpdate = false
 }
 
-// HandleLeapIndication handles NAV-TIMELS indication
+func (l *LeapManager) handleLeapIndication(data *ublox.TimeLs) {
+	r, err := l.processLeapIndication(data)
+	if err != nil {
+		glog.Error(err)
+	}
+	if r != nil {
+		l.updateLeapFile(r.leapTime, r.leapSec, r.updateTime)
+		l.updateLeapConfigmap()
+	}
+}
+
+type leapIndResult struct {
+	leapTime   time.Time
+	leapSec    int
+	updateTime time.Time
+}
+
+// processLeapIndication handles NAV-TIMELS indication
 // and updates the leapseconds.list file
-// If leap event is closer than 12 hours in the future,
-// GRANDMASTER_SETTINGS_NP dataset will be updated with
-// the up to date leap second information
-func (l *LeapManager) HandleLeapIndication(data *ublox.TimeLs) {
+func (l *LeapManager) processLeapIndication(data *ublox.TimeLs) (*leapIndResult, error) {
+
 	glog.Infof("Leap indication: %+v", data)
 	if data.SrcOfCurrLs != leapSourceGps {
 		glog.Info("Discarding Leap event not originating from GPS")
-		return
+		return nil, nil
 	}
-	// Current leap seconds on file
+	result := &leapIndResult{}
+	startOfTimes := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
+	// Last leap seconds on file
 	leapSecOnFile := l.leapFile.LeapEvents[len(l.leapFile.LeapEvents)-1].LeapSec
+	sec, err := strconv.Atoi(l.leapFile.LeapEvents[len(l.leapFile.LeapEvents)-1].LeapTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert Leap time to seconds: %v", err)
+	}
+	fileLsDate := startOfTimes.Add(time.Duration(sec) * time.Second)
+	currentTime := time.Now().UTC()
+	fileLsPassed := fileLsDate.Before(currentTime)
 
 	validCurrLs := (data.Valid & curreLsValidMask) > 0
 	validTimeToLsEvent := (data.Valid & timeToLsEventValidMask) > 0
-	expirationTime := time.Date(2036, time.January, 1, 0, 0, 0, 0, time.UTC)
-	currentTime := time.Now().UTC()
-
 	if validTimeToLsEvent && validCurrLs {
 		leapSec := int(data.CurrLs) + gpsToTaiDiff + int(data.LsChange)
-		if leapSec != leapSecOnFile {
+		if leapSec != leapSecOnFile && fileLsPassed {
 			// File update is needed
 			glog.Infof("Leap Seconds on file outdated: %d on file, %d + %d + %d in GNSS data",
 				leapSecOnFile, int(data.CurrLs), gpsToTaiDiff, int(data.LsChange))
-			startTime := time.Date(1980, time.January, 6, 0, 0, 0, 0, time.UTC)
+			gpsStartTime := time.Date(1980, time.January, 6, 0, 0, 0, 0, time.UTC)
 			deltaHours, err := time.ParseDuration(fmt.Sprintf("%dh",
 				data.DateOfLsGpsWn*7*24+uint(data.DateOfLsGpsDn)*24))
 			if err != nil {
-				glog.Error("Leap: ", err)
-				return
+				return nil, fmt.Errorf("failed to parse time duration: Leap: %v", err)
 			}
-			leapTime := startTime.Add(deltaHours)
-			// Add a new leap event
-			l.AddLeapEvent(leapTime, leapSec, expirationTime, currentTime)
-			l.UpdateLeapConfigmap()
+			if data.LsChange == 0 && data.TimeToLsEvent >= 0 {
+				result.leapTime = currentTime
+			} else {
+				result.leapTime = gpsStartTime.Add(deltaHours)
+			}
+			result.updateTime = currentTime
+			result.leapSec = leapSec
+			return result, nil
 		}
 	}
+	return nil, nil
 }
