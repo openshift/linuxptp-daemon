@@ -175,8 +175,8 @@ func (output *ptp4lConf) populatePtp4lConf(config *string) error {
 	return nil
 }
 
-func getSource(is_ts2phc_master string) event.EventSource {
-	if ts2phcMaster, err := strconv.ParseBool(strings.TrimSpace(is_ts2phc_master)); err == nil {
+func getSource(isTs2phcMaster string) event.EventSource {
+	if ts2phcMaster, err := strconv.ParseBool(strings.TrimSpace(isTs2phcMaster)); err == nil {
 		if ts2phcMaster {
 			return event.GNSS
 		}

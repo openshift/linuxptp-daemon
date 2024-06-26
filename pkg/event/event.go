@@ -89,6 +89,9 @@ const PTP4lProcessName = "ptp4l"
 // TS2PHCProcessName ...
 const TS2PHCProcessName = "ts2phc"
 
+// SYNCEProcessName ...
+const SYNCEProcessName = "synce"
+
 // EventSource ...
 type EventSource string
 

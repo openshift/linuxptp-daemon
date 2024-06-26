@@ -428,8 +428,22 @@ func (in *PtpOperatorConfigSpec) DeepCopyInto(out *PtpOperatorConfigSpec) {
 	}
 	if in.EnabledPlugins != nil {
 		in, out := &in.EnabledPlugins, &out.EnabledPlugins
-		*out = make([]string, len(*in))
-		copy(*out, *in)
+		*out = new(map[string]*apiextensionsv1.JSON)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make(map[string]*apiextensionsv1.JSON, len(*in))
+			for key, val := range *in {
+				var outVal *apiextensionsv1.JSON
+				if val == nil {
+					(*out)[key] = nil
+				} else {
+					in, out := &val, &outVal
+					*out = new(apiextensionsv1.JSON)
+					(*in).DeepCopyInto(*out)
+				}
+				(*out)[key] = outVal
+			}
+		}
 	}
 }
 
@@ -486,6 +500,11 @@ func (in *PtpProfile) DeepCopyInto(out *PtpProfile) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.Synce4lOpts != nil {
+		in, out := &in.Synce4lOpts, &out.Synce4lOpts
+		*out = new(string)
+		**out = **in
+	}
 	if in.Ptp4lConf != nil {
 		in, out := &in.Ptp4lConf, &out.Ptp4lConf
 		*out = new(string)
@@ -498,6 +517,11 @@ func (in *PtpProfile) DeepCopyInto(out *PtpProfile) {
 	}
 	if in.Ts2PhcConf != nil {
 		in, out := &in.Ts2PhcConf, &out.Ts2PhcConf
+		*out = new(string)
+		**out = **in
+	}
+	if in.Synce4lConf != nil {
+		in, out := &in.Synce4lConf, &out.Synce4lConf
 		*out = new(string)
 		**out = **in
 	}
