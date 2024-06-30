@@ -129,6 +129,7 @@ type ptpProcess struct {
 	clockType         event.ClockType
 	ptpClockThreshold *ptpv1.PtpClockThreshold
 	haProfile         map[string][]string // stores list of interface name for each profile
+	lm                *leap.LeapManager
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -464,6 +465,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configFile = fmt.Sprintf("ts2phc.%d.config", runID)
 			configPath = fmt.Sprintf("/var/run/%s", configFile)
 			messageTag = fmt.Sprintf("[ts2phc.%d.config:{level}]", runID)
+			dn.leapManager.SetPtp4lConfigPath(fmt.Sprintf("ptp4l.%d.config", runID))
 		case syncEProcessName:
 			configOpts = nodeProfile.Synce4lOpts
 			configInput = nodeProfile.Synce4lConf
@@ -548,6 +550,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			clockType:         clockType,
 			ptpClockThreshold: getPTPThreshold(nodeProfile),
 			haProfile:         haProfile,
+			lm:                dn.leapManager,
 		}
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
@@ -903,7 +906,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 func (p *ptpProcess) processPTPMetrics(output string) {
 	if p.name == ts2phcProcessName && (strings.Contains(output, NMEASourceDisabledIndicator) ||
 		strings.Contains(output, InvalidMasterTimestampIndicator) ||
-		strings.Contains(output, NMEASourceDisabledIndicator2)) { //TODO identify which interface lost nmea or 1pps
+		(strings.Contains(output, NMEASourceDisabledIndicator2) &&
+			(!p.lm.IsLeapInWindow(time.Now().UTC(), -2*time.Second, time.Second)))) { //TODO identify which interface lost nmea or 1pps
 		iface := p.ifaces.GetGMInterface().Name
 		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]interface{}{event.NMEA_STATUS: int64(0)})
 		glog.Error("nmea string lost") //TODO: add for 1pps lost
