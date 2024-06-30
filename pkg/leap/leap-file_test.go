@@ -299,3 +299,66 @@ func Test_handleLeapIndication(t *testing.T) {
 	assert.Equal(t, "3928780800", lm.leapFile.LeapEvents[1].LeapTime)
 	assert.Equal(t, "4291747200", lm.leapFile.ExpirationTime)
 }
+
+func Test_IsLeapInWindow_Pos(t *testing.T) {
+	now := time.Now().UTC()
+	startTime := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
+	diff := now.Sub(startTime)
+	leapTime := fmt.Sprintf("%d", int(diff.Seconds()))
+	lm := &LeapManager{
+
+		leapFile: LeapFile{
+			LeapEvents: []LeapEvent{
+				{
+					LeapTime: leapTime,
+				},
+			},
+		},
+	}
+	res := lm.IsLeapInWindow(now, -1*time.Second, time.Second)
+	assert.True(t, res)
+}
+func Test_IsLeapInWindow_Neg(t *testing.T) {
+	now := time.Now().UTC()
+	startTime := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
+	diff := now.Sub(startTime)
+	leapTime := fmt.Sprintf("%d", int(diff.Seconds())-1)
+	lm := &LeapManager{
+
+		leapFile: LeapFile{
+			LeapEvents: []LeapEvent{
+				{
+					LeapTime: leapTime,
+				},
+			},
+		},
+	}
+	res := lm.IsLeapInWindow(now, -1*time.Second, time.Second)
+	assert.False(t, res)
+}
+
+func Test_SetPtp4lConfigPath(t *testing.T) {
+	path := "test"
+	lm := &LeapManager{}
+	lm.SetPtp4lConfigPath(path)
+	assert.Equal(t, path, lm.ptp4lConfigPath)
+}
+
+func Test_New_Good(t *testing.T) {
+	cm := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "openshift-ptp", Name: "leap-configmap"},
+		Data: map[string]string{
+			"test-node-name": `# Do not edit
+# This file is generated automatically by linuxptp-daemon
+#$	3927775672
+#@	4291747200
+3692217600     37    # 1 Jan 2017`,
+		},
+	}
+	os.Setenv("NODE_NAME", "test-node-name")
+	client := fake.NewSimpleClientset(cm)
+	lm, err := New(client, "openshift-ptp")
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(lm.leapFile.LeapEvents))
+}
