@@ -118,6 +118,10 @@ func (g *GPSD) Stopped() bool {
 // CmdStop .... stop
 func (g *GPSD) CmdStop() {
 	glog.Infof("stopping %s...", g.name)
+	// Need to ensure cleanup to workaround ublox cpu spike bug
+	if g.ublxTool != nil {
+		g.ublxTool.UbloxPollStop()
+	}
 	if g.cmd == nil {
 		return
 	}
@@ -225,6 +229,7 @@ retry:
 		goto retry
 	} else {
 		//TODO: monitor on 1PPS  events trigger
+		g.ublxTool = ublx
 		nStatus := int64(0)
 		nOffset := int64(99999999)
 		missedTickers := 0

@@ -35,13 +35,18 @@ const (
 	// CMD_VOLTAGE_CONTROLER ...
 	CMD_VOLTAGE_CONTROLER = " -v 1 -z CFG-HW-ANT_CFG_VOLTCTRL,%d"
 	// CMD_NAV_STATUS ...
-	CMD_NAV_STATUS = " -t -p NAV-STATUS"
-	UBXCommand     = "/usr/local/bin/ubxtool"
+	CMD_NAV_STATUS  = " -t -p NAV-STATUS"
+	UBXCommand      = "/usr/local/bin/ubxtool"
+	UBXTOOL_NEW     = 0
+	UBXTOOL_ACTIVE  = 1
+	UBXTOOL_DEAD    = 2
+	UBXTOOL_STOPPED = 3
 )
 
 // UBlox ... UBlox type
 type UBlox struct {
-	active       bool
+	status       int
+	statusMutex  sync.Mutex
 	protoVersion *string
 	mockExp      func(cmdStr string) ([]string, error)
 	cmd          *exec.Cmd
@@ -57,9 +62,9 @@ func NewUblox() (*UBlox, error) {
 	u := &UBlox{
 		protoVersion: &ubloxProtoVersion,
 		mockExp:      nil,
-		active:       false,
 		bufferlen:    0,
 	}
+	u.setStatus(UBXTOOL_NEW)
 	u.EnableNMEA()
 	u.DisableBinary()
 
@@ -216,7 +221,7 @@ func (u *UBlox) UbloxPollPull() string {
 }
 
 func (u *UBlox) UbloxPollInit() {
-	if !u.active {
+	if u.getStatus() == UBXTOOL_NEW || u.getStatus() == UBXTOOL_DEAD {
 		u.buffermutex.Lock()
 		u.bufferlen = 0
 		u.buffer = nil
@@ -227,13 +232,16 @@ func (u *UBlox) UbloxPollInit() {
 		u.cmd = exec.Command("python", args...)
 		stdoutreader, _ := u.cmd.StdoutPipe()
 		u.reader = bufio.NewReader(stdoutreader)
-		u.active = true
+		u.setStatus(UBXTOOL_ACTIVE)
 		err := u.cmd.Start()
 		if err != nil {
 			glog.Errorf("UbloxPoll err=%s", err.Error())
-			u.active = false
+			u.setStatus(UBXTOOL_STOPPED)
+		} else {
+			pid := u.cmd.Process.Pid
+			glog.Infof("Starting ubxtool polling with PID=%d", pid)
+			go u.UbloxPollPushThread()
 		}
-		go u.UbloxPollPushThread()
 	}
 }
 
@@ -241,7 +249,9 @@ func (u *UBlox) UbloxPollPushThread() {
 	for {
 		output, err := u.reader.ReadString('\n')
 		if err != nil {
-			u.active = false
+			if u.getStatus() != UBXTOOL_STOPPED {
+				u.setStatus(UBXTOOL_DEAD)
+			}
 			glog.Errorf("ublox poll thread error %s", err)
 			return
 		} else if len(output) > 0 {
@@ -253,9 +263,37 @@ func (u *UBlox) UbloxPollPushThread() {
 	}
 }
 
+func (u *UBlox) setStatus(val int) {
+	//glog.Infof("ubxtool setStatus=%d", val)
+	u.statusMutex.Lock()
+	u.status = val
+	u.statusMutex.Unlock()
+}
+
+func (u *UBlox) getStatus() int {
+	u.statusMutex.Lock()
+	ret := u.status
+	u.statusMutex.Unlock()
+	//glog.Infof("ubxtool getStatus=%d", ret)
+	return ret
+}
+
 func (u *UBlox) UbloxPollReset() {
-	glog.Info("stopping ublox poll process.")
+	pid := u.cmd.Process.Pid
+	glog.Infof("Stopping ubxtool polling with PID=%d", pid)
 	_ = u.cmd.Process.Kill()
+	if u.getStatus() != UBXTOOL_STOPPED {
+		u.setStatus(UBXTOOL_DEAD)
+	}
+	u.cmd.Wait()
+}
+
+func (u *UBlox) UbloxPollStop() {
+	pid := u.cmd.Process.Pid
+	glog.Infof("Stopping ubxtool polling with PID=%d", pid)
+	u.setStatus(UBXTOOL_STOPPED)
+	_ = u.cmd.Process.Kill()
+	u.cmd.Wait()
 }
 
 // DisableBinary ...  disable binary
