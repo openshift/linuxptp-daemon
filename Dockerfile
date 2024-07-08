@@ -4,12 +4,9 @@ ENV GOTOOLCHAIN=local
 COPY . .
 RUN make clean && make
 
-# Change to 4.17 after 4.16 goes to GA
-FROM registry.ci.openshift.org/ocp/4.16:base-rhel9
-
+FROM registry.ci.openshift.org/ocp/4.17:base-rhel9
 
 RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata synce4l && yum clean all
-
 
 RUN yum install -y gpsd-minimal
 RUN yum install -y gpsd-minimal-clients
