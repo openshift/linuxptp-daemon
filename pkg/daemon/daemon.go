@@ -408,6 +408,11 @@ since phc2sysOpts needs to collect profile information from applied
 ptpconfig profiles for ptp4l
 */
 func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) error {
+	testDir, test := nodeProfile.PtpSettings["unitTest"]
+	var configPrefix = "/var/run"
+	if test {
+		configPrefix = testDir
+	}
 
 	dn.pluginManager.OnPTPConfigChange(nodeProfile)
 
@@ -442,34 +447,34 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				_configOpts := " "
 				configOpts = &_configOpts
 			}
-			socketPath = fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
+			socketPath = fmt.Sprintf("%s/ptp4l.%d.socket", configPrefix, runID)
 			configFile = fmt.Sprintf("ptp4l.%d.config", runID)
-			configPath = fmt.Sprintf("/var/run/%s", configFile)
+			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 			messageTag = fmt.Sprintf("[ptp4l.%d.config:{level}]", runID)
 		case phc2sysProcessName:
 			configInput = nodeProfile.Phc2sysConf
 			configOpts = nodeProfile.Phc2sysOpts
 			if !ptpHAEnabled {
-				socketPath = fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
+				socketPath = fmt.Sprintf("%s/ptp4l.%d.socket", configPrefix, runID)
 				messageTag = fmt.Sprintf("[ptp4l.%d.config:{level}]", runID)
 			} else { // when ptp ha enabled it has its own valid config
 				messageTag = fmt.Sprintf("[phc2sys.%d.config:{level}]", runID)
 			}
 			configFile = fmt.Sprintf("phc2sys.%d.config", runID)
-			configPath = fmt.Sprintf("/var/run/%s", configFile)
+			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 		case ts2phcProcessName:
 			configInput = nodeProfile.Ts2PhcConf
 			configOpts = nodeProfile.Ts2PhcOpts
-			socketPath = fmt.Sprintf("/var/run/ptp4l.%d.socket", runID)
+			socketPath = fmt.Sprintf("%s/ptp4l.%d.socket", configPrefix, runID)
 			configFile = fmt.Sprintf("ts2phc.%d.config", runID)
-			configPath = fmt.Sprintf("/var/run/%s", configFile)
+			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 			messageTag = fmt.Sprintf("[ts2phc.%d.config:{level}]", runID)
 		case syncEProcessName:
 			configOpts = nodeProfile.Synce4lOpts
 			configInput = nodeProfile.Synce4lConf
 			socketPath = ""
 			configFile = fmt.Sprintf("synce4l.%d.config", runID)
-			configPath = fmt.Sprintf("/var/run/%s", configFile)
+			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 			messageTag = fmt.Sprintf("[synce4l.%d.config]", runID)
 		}
 
@@ -516,9 +521,16 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		// This adds the flags needed for monitor
 		addFlagsForMonitor(p, configOpts, output, dn.stdoutToSocket)
-		configOutput, ifaces := output.renderPtp4lConf()
-		for i := range ifaces {
-			ifaces[i].PhcId = ptpnetwork.GetPhcId(ifaces[i].Name)
+		var configOutput string
+		var ifaces config.IFaces
+		if pProcess == syncEProcessName {
+			configOutput = output.renderSyncE4lConf(nodeProfile.PtpSettings)
+		} else {
+			configOutput, ifaces = output.renderPtp4lConf()
+			for i := range ifaces {
+				ifaces[i].PhcId = ptpnetwork.GetPhcId(ifaces[i].Name)
+			}
+
 		}
 
 		if configInput != nil {

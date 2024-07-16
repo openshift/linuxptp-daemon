@@ -3,6 +3,7 @@ module github.com/openshift/linuxptp-daemon
 go 1.22
 
 require (
+	github.com/bigkevmcd/go-configparser v0.0.0-20240624060122-ccd05f93a9d2
 	github.com/facebook/time v0.0.0-20230529151911-512b3b30ab23
 	github.com/golang/glog v1.0.0
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
