@@ -4,6 +4,10 @@ github.com/StackExchange/wmi
 # github.com/beorn7/perks v1.0.1
 ## explicit; go 1.11
 github.com/beorn7/perks/quantile
+# github.com/bigkevmcd/go-configparser v0.0.0-20240624060122-ccd05f93a9d2
+## explicit; go 1.21
+github.com/bigkevmcd/go-configparser
+github.com/bigkevmcd/go-configparser/chainmap
 # github.com/cespare/xxhash/v2 v2.2.0
 ## explicit; go 1.11
 github.com/cespare/xxhash/v2

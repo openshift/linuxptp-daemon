@@ -1,6 +1,7 @@
 package intel
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -89,7 +90,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				glog.Error("e810 failed to unmarshal opts: " + err.Error())
 			}
 			if e810Opts.EnableDefaultConfig {
-				stdout, err = exec.Command("/usr/bin/bash", "-c", EnableE810PTPConfig).Output()
+				stdout, _ = exec.Command("/usr/bin/bash", "-c", EnableE810PTPConfig).Output()
 				glog.Infof(string(stdout))
 			}
 			if (*nodeProfile).PtpSettings == nil {
@@ -97,7 +98,15 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			}
 			for device, pins := range e810Opts.DevicePins {
 				dpllClockIdStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getClockIdE810(device), 10)
+				// for unit testing only, PtpSettings may include "unitTest" key. The value is
+				// the path where resulting configuration files will be written, instead of /var/run
+				if _, found := (*nodeProfile).PtpSettings["unitTest"]; found {
+					buf := make([]byte, 8)
+					rand.Read(buf)
+					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(binary.LittleEndian.Uint64(buf), 10)
+				} else {
+					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getClockIdE810(device), 10)
+				}
 				for pin, value := range pins {
 					deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
 					phcs, err := os.ReadDir(deviceDir)
