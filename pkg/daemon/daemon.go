@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openshift/linuxptp-daemon/pkg/synce"
+
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/dpll"
 
@@ -75,7 +77,7 @@ func NewProcessManager() *ProcessManager {
 	}
 }
 
-// SetTestProfile ...
+// SetTestProfileProcess ...
 func (p *ProcessManager) SetTestProfileProcess(name string, ifaces config.IFaces, socketPath,
 	ptp4lConfigPath string, nodeProfile ptpv1.PtpProfile) {
 	p.process = append(p.process, &ptpProcess{
@@ -108,6 +110,26 @@ func (p *ProcessManager) RunProcessPTPMetrics(log string) {
 	p.process[0].processPTPMetrics(log)
 }
 
+// RunSynceParser is used by unit tests
+func (p *ProcessManager) RunSynceParser(log string) {
+	if len(p.process) < 1 || p.process[0] == nil {
+		glog.Error("process is not initialized in RunProcessPTPMetrics()")
+		return
+	}
+	logEntry := synce.ParseLog(log)
+	p.process[0].ProcessSynceEvents(logEntry)
+}
+
+// UpdateSynceConfig is used by unit tests
+func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
+	if len(p.process) < 1 || p.process[0] == nil {
+		glog.Error("process is not initialized in RunProcessPTPMetrics()")
+		return
+	}
+	p.process[0].syncERelations = config
+
+}
+
 type ptpProcess struct {
 	name              string
 	ifaces            config.IFaces
@@ -128,6 +150,7 @@ type ptpProcess struct {
 	clockType         event.ClockType
 	ptpClockThreshold *ptpv1.PtpClockThreshold
 	haProfile         map[string][]string // stores list of interface name for each profile
+	syncERelations    *synce.Relations
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -283,6 +306,9 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 			p.depProcess = nil
 			//cleanup metrics
 			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName)
+			if p.name == syncEProcessName && p.syncERelations != nil {
+				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
+			}
 			p = nil
 		}
 	}
@@ -517,9 +543,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		// This adds the flags needed for monitor
 		addFlagsForMonitor(p, configOpts, output, dn.stdoutToSocket)
 		var configOutput string
+		var relations *synce.Relations
 		var ifaces config.IFaces
 		if pProcess == syncEProcessName {
-			configOutput = output.renderSyncE4lConf(nodeProfile.PtpSettings)
+			configOutput, relations = output.renderSyncE4lConf(nodeProfile.PtpSettings)
 		} else {
 			configOutput, ifaces = output.renderPtp4lConf()
 			for i := range ifaces {
@@ -555,7 +582,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			clockType:         clockType,
 			ptpClockThreshold: getPTPThreshold(nodeProfile),
 			haProfile:         haProfile,
+			syncERelations:    relations,
 		}
+
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
 			if output.gnss_serial_port == "" {
@@ -909,7 +938,16 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 
 // for ts2phc along with processing metrics need to identify event
 func (p *ptpProcess) processPTPMetrics(output string) {
-	if p.name == ts2phcProcessName && (strings.Contains(output, NMEASourceDisabledIndicator) ||
+	if p.name == syncEProcessName {
+		configName := strings.Replace(strings.Replace(p.messageTag, "]", "", 1), "[", "", 1)
+		if configName == "" {
+			return
+		}
+		configName = strings.Split(configName, MessageTagSuffixSeperator)[0] // remove any suffix added to the configName
+		logEntry := synce.ParseLog(output)
+		p.ProcessSynceEvents(logEntry)
+
+	} else if p.name == ts2phcProcessName && (strings.Contains(output, NMEASourceDisabledIndicator) ||
 		strings.Contains(output, InvalidMasterTimestampIndicator) ||
 		strings.Contains(output, NMEASourceDisabledIndicator2)) { //TODO identify which interface lost nmea or 1pps
 		iface := p.ifaces.GetGMInterface().Name
@@ -1180,4 +1218,139 @@ func (p *ptpProcess) updateGMStatusOnProcessDown(process string) {
 		iface := p.ifaces.GetGMInterface().Name
 		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]interface{}{event.PROCESS_STATUS: int64(0)})
 	}
+}
+
+func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
+	//                                          STATE  VALUE  DEVICE   SOURCE EXTSOURCE
+	//------------------------------------------------------------------------------------
+	// synce4l[627685.138]: [synce4l.0.config] LOCKED   0     synce1            GNSS
+	// synce4l[627685.138]: [synce4l.0.config] LOCKED   0     synce1  ens7f0
+	// synce4l[627602.593]: [synce4l.0.config] EXT_QL  255    synce1  ens7f0
+	// synce4l[627602.593]: [synce4l.0.config] QL  255    synce1  ens7f0
+	// synce4l[627602.593]: [synce4l.0.config] CLOCK_QUALITY  PRS    synce1  ens7f0
+	// synce4l[627602.540]: [synce4l.0.config] LOCKED   0     synce1
+
+	extraValue := map[event.ValueType]interface{}{}
+	state := event.PTP_UNKNOWN
+
+	clockQuality := ""
+	iface := ""
+
+	// synce4l[627602.540]: [synce4l.0.config] LOCKED   0     synce1
+	if logEntry.State != nil && logEntry.Source != nil {
+		if sDeviceConfig := p.SyncEDeviceByInterface(*logEntry.Source); sDeviceConfig != nil {
+			extraValue[event.DEVICE] = sDeviceConfig.Name
+			extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
+			iface = *logEntry.Source
+			tState := synce.StringToEECState(strings.ReplaceAll(*logEntry.State, "EEC_LOCKED_HO_ACQ", "EEC_LOCKED"))
+			glog.Infof("STATE %s", tState)
+			state = tState.ToPTPState()
+			sDeviceConfig.LastClockState = state
+			extraValue[event.EEC_STATE] = *logEntry.State
+		}
+	} else if logEntry.State == nil && logEntry.Source != nil && (logEntry.QL != synce.DEFAULT_QL || logEntry.ExtQl != synce.DEFAULT_QL) {
+		if sDeviceConfig := p.SyncEDeviceByInterface(*logEntry.Source); sDeviceConfig != nil {
+			iface = *logEntry.Source
+			// now decide on clock quality
+			if sDeviceConfig.ExtendedTlv == 0 && logEntry.QL != synce.DEFAULT_QL {
+				extraValue[event.DEVICE] = sDeviceConfig.Name
+				extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
+				extraValue[event.QL] = logEntry.QL
+				sDeviceConfig.LastQLState[*logEntry.Source] = &synce.QualityLevelInfo{
+					Priority:    0,
+					SSM:         logEntry.QL,
+					ExtendedSSM: synce.DEFAULT_EXTQL,
+				}
+				clockQuality, _ = sDeviceConfig.ClockQuality(synce.QualityLevelInfo{
+					Priority:    0,
+					SSM:         logEntry.QL,
+					ExtendedSSM: 0,
+				})
+				state = sDeviceConfig.LastClockState
+				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", logEntry.QL)
+				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.DEFAULT_EXTQL)
+				UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.DEFAULT_EXTQL))
+
+			} else if sDeviceConfig.ExtendedTlv == 1 {
+				var lastQLState *synce.QualityLevelInfo
+				var ok bool
+				iface = *logEntry.Source
+				if lastQLState, ok = sDeviceConfig.LastQLState[*logEntry.Source]; !ok {
+					clockQuality, _ = sDeviceConfig.ClockQuality(synce.QualityLevelInfo{
+						Priority:    0,
+						SSM:         logEntry.QL,
+						ExtendedSSM: logEntry.ExtQl,
+					})
+				}
+				if lastQLState.SSM != synce.DEFAULT_QL && logEntry.ExtQl != synce.DEFAULT_QL { // then have both ql
+					extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
+					extraValue[event.DEVICE] = sDeviceConfig.Name
+					extraValue[event.EXT_QL] = logEntry.ExtQl
+					extraValue[event.QL] = lastQLState.SSM
+					sDeviceConfig.LastQLState[*logEntry.Source].ExtendedSSM = logEntry.ExtQl
+					clockQuality, _ = sDeviceConfig.ClockQuality(synce.QualityLevelInfo{
+						SSM:         lastQLState.SSM,
+						ExtendedSSM: lastQLState.ExtendedSSM,
+						Priority:    0,
+					})
+					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", lastQLState.SSM)
+					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", logEntry.ExtQl)
+					UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(lastQLState.SSM)+int(logEntry.ExtQl))
+
+					state = sDeviceConfig.LastClockState
+				} else if logEntry.QL != synce.DEFAULT_QL { //else we have only QL
+					lastQLState.SSM = logEntry.QL // wait for extTlv
+				}
+			}
+			if clockQuality != "" {
+				extraValue[event.CLOCK_QUALITY] = clockQuality
+			}
+		}
+	}
+	if len(extraValue) > 0 {
+		glog.Info(extraValue)
+		select {
+		case p.eventCh <- event.EventChannel{
+			ProcessName: event.SYNCE,
+			State:       state,
+			CfgName:     p.configName,
+			IFace:       iface,
+			Values:      extraValue,
+			Time:        time.Now().UnixMilli(),
+			WriteToLog: func() bool { // only write to log if there is something extra
+				if len(extraValue) > 0 {
+					return true
+				}
+				return false
+			}(),
+			Reset: false,
+		}:
+		default:
+		}
+	}
+
+}
+func (p *ptpProcess) SyncEDeviceByInterface(iface string) *synce.Config {
+	if p.syncERelations != nil {
+		for _, sConfig := range p.syncERelations.Devices {
+			for _, name := range sConfig.Ifaces {
+				if name == iface {
+					return sConfig
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// SyncEDeviceByName ....
+func (p *ptpProcess) SyncEDeviceByName(name string) *synce.Config {
+	if p.syncERelations != nil {
+		for _, sConfig := range p.syncERelations.Devices {
+			if sConfig.Name == name {
+				return sConfig
+			}
+		}
+	}
+	return nil
 }

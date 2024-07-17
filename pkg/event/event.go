@@ -35,6 +35,12 @@ const (
 	PROCESS_STATUS       ValueType = "process_status"
 	PPS_STATUS           ValueType = "pps_status"
 	GM_INTERFACE_UNKNOWN string    = "unknown"
+	DEVICE               ValueType = "device"
+	QL                   ValueType = "ql"
+	EXT_QL               ValueType = "ext_ql"
+	CLOCK_QUALITY        ValueType = "clock_quality"
+	NETWORK_OPTION       ValueType = "network_option"
+	EEC_STATE                      = "eec_state"
 )
 
 var valueTypeHelpTxt = map[ValueType]string{
@@ -104,7 +110,7 @@ const (
 	PTP4l      EventSource = "ptp4l"
 	PHC2SYS    EventSource = "phc2sys"
 	PPS        EventSource = "1pps"
-	SYNCE      EventSource = "syncE"
+	SYNCE      EventSource = "synce4l"
 	MONITORING EventSource = "monitoring"
 )
 
@@ -216,6 +222,8 @@ func (e *EventChannel) GetLogData() string {
 			logData = append(logData, fmt.Sprintf("%s %f", k, val))
 		case string:
 			logData = append(logData, fmt.Sprintf("%s %s", k, val))
+		case byte:
+			logData = append(logData, fmt.Sprintf("%s %#x", k, val))
 		default:
 			continue //ignore string for metrics
 		}
@@ -593,7 +601,6 @@ connect:
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName) // this will delete all index
 					e.clockClass = protocol.ClockClassUninitialized
-
 				} else {
 					// Check if the index is within the slice bounds
 					for indexToRemove, d := range e.data[event.CfgName] {
@@ -611,57 +618,64 @@ connect:
 			}
 			var logOut []string
 			logDataValues := ""
-
-			// Update the in MemData
-			dataDetails := e.addEvent(event)
-			logDataValues = dataDetails.logData
-
-			if event.WriteToLog && logDataValues != "" {
-				logOut = append(logOut, logDataValues)
-			}
-			// Computes GM state
-			gmState := e.updateGMState(event.CfgName)
-
-			if gmState.gmLog != "" && gmState.gmIFace != GM_INTERFACE_UNKNOWN {
-				logOut = append(logOut, gmState.gmLog)
-			}
-
-			// Update the metrics
-			if !e.stdoutToSocket { // if events not enabled
-				eventIface := event.IFace
-				if eventIface != "" {
-					r := []rune(eventIface)
-					eventIface = string(r[:len(r)-1]) + "x"
+			if event.ProcessName == SYNCE {
+				// Update the metrics
+				logDataValues = event.GetLogData()
+				if event.WriteToLog && logDataValues != "" {
+					logOut = append(logOut, logDataValues)
 				}
-				e.UpdateClockStateMetrics(event.State, string(event.ProcessName), eventIface)
-				//  update all metric that was sent to events
-				e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
-				if gmState.gmIFace != GM_INTERFACE_UNKNOWN { // race condition ;
-					gmIface := gmState.gmIFace
-					if gmIface != "" {
-						r := []rune(gmIface)
-						gmIface = string(r[:len(r)-1]) + "x"
-					}
-					e.UpdateClockStateMetrics(gmState.state, string(GM), gmIface)
+				e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
+			} else {
+				// Update the in MemData
+				dataDetails := e.addEvent(event)
+				logDataValues = dataDetails.logData
+
+				if event.WriteToLog && logDataValues != "" {
+					logOut = append(logOut, logDataValues)
 				}
-			}
+				// Computes GM state
+				gmState := e.updateGMState(event.CfgName)
 
-			if uint8(gmState.clockClass) != uint8(e.clockClass) {
-				glog.Infof("clock class change request from %d to %d", uint8(e.clockClass), uint8(gmState.clockClass))
-				go func() {
-					select {
-					case clockClassRequestCh <- ClockClassRequest{
-						cfgName:    event.CfgName,
-						gmState:    gmState.state,
-						clockType:  event.ClockType,
-						clockClass: gmState.clockClass,
-					}:
-					default:
-						glog.Error("clock class request busy updating previous request, will try next event")
+				if gmState.gmLog != "" && gmState.gmIFace != GM_INTERFACE_UNKNOWN {
+					logOut = append(logOut, gmState.gmLog)
+				}
+
+				// Update the metrics
+				if !e.stdoutToSocket { // if events not enabled
+					eventIface := event.IFace
+					if eventIface != "" {
+						r := []rune(eventIface)
+						eventIface = string(r[:len(r)-1]) + "x"
 					}
-				}()
-			}
+					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), eventIface)
+					//  update all metric that was sent to events
+					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
+					if gmState.gmIFace != GM_INTERFACE_UNKNOWN { // race condition ;
+						gmIface := gmState.gmIFace
+						if gmIface != "" {
+							r := []rune(gmIface)
+							gmIface = string(r[:len(r)-1]) + "x"
+						}
+						e.UpdateClockStateMetrics(gmState.state, string(GM), gmIface)
+					}
+				}
 
+				if uint8(gmState.clockClass) != uint8(e.clockClass) {
+					glog.Infof("clock class change request from %d to %d", uint8(e.clockClass), uint8(gmState.clockClass))
+					go func() {
+						select {
+						case clockClassRequestCh <- ClockClassRequest{
+							cfgName:    event.CfgName,
+							gmState:    gmState.state,
+							clockType:  event.ClockType,
+							clockClass: gmState.clockClass,
+						}:
+						default:
+							glog.Error("clock class request busy updating previous request, will try next event")
+						}
+					}()
+				}
+			} // end of GM congition
 			if len(logOut) > 0 {
 				if e.stdoutToSocket {
 					for _, l := range logOut {
@@ -678,6 +692,7 @@ connect:
 					}
 				}
 			}
+
 		case <-e.closeCh:
 			return
 		}
