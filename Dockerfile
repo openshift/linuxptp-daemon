@@ -13,9 +13,12 @@ RUN yum -y update && \
 RUN yum install -y gpsd-minimal
 RUN yum install -y gpsd-minimal-clients
 
-# Test RPM by Miroslav
-COPY ./linuxptp-3.1.1-6.el9_2.5.test1.x86_64.rpm .
-RUN yum install -y ./linuxptp-3.1.1-6.el9_2.5.test1.x86_64.rpm
+# # Test RPM by Miroslav
+# COPY ./linuxptp-3.1.1-6.el9_2.5.test1.x86_64.rpm .
+# RUN yum install -y ./linuxptp-3.1.1-6.el9_2.5.test1.x86_64.rpm
+
+COPY ./linuxptp-3.1.1-6.el9_2.5.x86_64.rpm .
+RUN yum install -y ./linuxptp-3.1.1-6.el9_2.5.x86_64.rpm
 
 # Create symlinks for executables to match references
 RUN ln -s /usr/bin/gpspipe /usr/local/bin/gpspipe
@@ -24,5 +27,6 @@ RUN ln -s /usr/bin/ubxtool /usr/local/bin/ubxtool
 
 COPY --from=builder /go/src/github.com/openshift/linuxptp-daemon/bin/ptp /usr/local/bin/
 COPY ./extra/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
+RUN rpm -q --info linuxptp
 
 CMD ["/usr/local/bin/ptp"]
