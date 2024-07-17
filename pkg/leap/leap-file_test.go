@@ -9,6 +9,9 @@ import (
 	leaphash "github.com/facebook/time/leaphash"
 	"github.com/openshift/linuxptp-daemon/pkg/ublox"
 	"github.com/stretchr/testify/assert"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	fake "k8s.io/client-go/kubernetes/fake"
 )
 
 func Test_AddLeapEvent(t *testing.T) {
@@ -61,4 +64,25 @@ func Test_RenderLeapFile(t *testing.T) {
 	desired, err := os.ReadFile("testdata/leap-seconds.list.rendered")
 	assert.Equal(t, nil, err)
 	assert.True(t, bytes.Equal(l.Bytes(), desired))
+}
+
+func Test_New_Good(t *testing.T) {
+	cm := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "openshift-ptp", Name: "leap-configmap"},
+		Data: map[string]string{
+			"test-node-name": `# Do not edit
+# This file is generated automatically by linuxptp-daemon
+#$	3927775672
+#@	4291747200
+3692217600     37    # 1 Jan 2017`,
+		},
+	}
+	os.Setenv("NODE_NAME", "test-node-name")
+	client := fake.NewSimpleClientset(cm)
+	lm, err := New(client, "openshift-ptp")
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(lm.leapFile.LeapEvents))
+	offset := GetUtcOffset()
+	assert.Equal(t, 37, offset)
 }

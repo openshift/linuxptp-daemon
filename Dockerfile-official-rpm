@@ -1,0 +1,11 @@
+FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.20-openshift-4.15 AS builder
+WORKDIR /go/src/github.com/openshift/linuxptp-daemon
+COPY . .
+RUN make clean && make
+
+# This is a daemon image from ptp-operator.v4.15.0-202407021637
+FROM registry.redhat.io/openshift4/ose-ptp-rhel9@sha256:fdbf7a296ccc5e5fe1e6f06a820bd9bbce4931202f30916dd5ee93168ef8900d
+
+COPY --from=builder /go/src/github.com/openshift/linuxptp-daemon/bin/ptp /usr/local/bin/
+
+CMD ["/usr/local/bin/ptp"]

@@ -7,11 +7,15 @@ FROM registry.ci.openshift.org/ocp/4.15:base-rhel9
 
 RUN yum -y update && \
     yum -y update glibc &&  \
-    yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata && \
+    yum --setopt=skip_missing_names_on_install=False -y install ethtool hwdata && \
     yum clean all
 
 RUN yum install -y gpsd-minimal
 RUN yum install -y gpsd-minimal-clients
+
+# Test RPM by Miroslav
+COPY ./linuxptp-3.1.1-6.el9_2.5.test1.x86_64.rpm .
+RUN yum install -y ./linuxptp-3.1.1-6.el9_2.5.test1.x86_64.rpm
 
 # Create symlinks for executables to match references
 RUN ln -s /usr/bin/gpspipe /usr/local/bin/gpspipe

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang/glog"
@@ -38,12 +39,15 @@ type LeapManager struct {
 	// ts2phc path of leap-seconds.list file
 	LeapFilePath string
 	// client
-	client    *kubernetes.Clientset
+	client    kubernetes.Interface
 	namespace string
 	// Leap file structure
 	leapFile LeapFile
 	// Retry configmap update if failed
 	retryUpdate bool
+	// UTC offset and its event time
+	utcOffset     int
+	utcOffsetTime time.Time
 }
 
 type LeapEvent struct {
@@ -58,19 +62,42 @@ type LeapFile struct {
 	Hash           string      `json:"hash"`
 }
 
-func New(kubeclient *kubernetes.Clientset, namespace string) (*LeapManager, error) {
-	lm := &LeapManager{
-		UbloxLsInd: make(chan ublox.TimeLs, 2),
-		Close:      make(chan bool),
-		client:     kubeclient,
-		namespace:  namespace,
-		leapFile:   LeapFile{},
+var lock = &sync.Mutex{}
+
+var leapManager *LeapManager
+
+func New(kubeclient kubernetes.Interface, namespace string) (*LeapManager, error) {
+	if leapManager == nil {
+		lock.Lock()
+		defer lock.Unlock()
+		if leapManager == nil {
+			lm := &LeapManager{
+				UbloxLsInd: make(chan ublox.TimeLs, 2),
+				Close:      make(chan bool),
+				client:     kubeclient,
+				namespace:  namespace,
+				leapFile:   LeapFile{},
+			}
+			err := lm.PopulateLeapData()
+			if err != nil {
+				return nil, err
+			}
+			leapManager = lm
+		}
 	}
-	err := lm.PopulateLeapData()
-	if err != nil {
-		return nil, err
+	return leapManager, nil
+}
+
+func GetUtcOffset() int {
+	if leapManager != nil {
+		if time.Now().UTC().After(leapManager.utcOffsetTime) {
+			return leapManager.utcOffset
+		} else if len(leapManager.leapFile.LeapEvents) > 1 {
+			return leapManager.leapFile.LeapEvents[len(leapManager.leapFile.LeapEvents)-2].LeapSec
+		}
 	}
-	return lm, nil
+	glog.Fatal("failed to get UTC offser")
+	return 0
 }
 
 func ParseLeapFile(b []byte) (*LeapFile, error) {
@@ -128,6 +155,18 @@ func (l *LeapManager) RenderLeapData() (*bytes.Buffer, error) {
 	return &buf, nil
 }
 
+func (l *LeapManager) setUtcOffset() error {
+	startTime := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
+	lastLeap := l.leapFile.LeapEvents[len(l.leapFile.LeapEvents)-1]
+	lastLeapTime, err := strconv.Atoi(lastLeap.LeapTime)
+	if err != nil {
+		return err
+	}
+	l.utcOffsetTime = startTime.Add(time.Second * time.Duration(lastLeapTime))
+	l.utcOffset = lastLeap.LeapSec
+	return nil
+}
+
 func (l *LeapManager) PopulateLeapData() error {
 	cm, err := l.client.CoreV1().ConfigMaps(l.namespace).Get(context.TODO(), leapConfigMapName, metav1.GetOptions{})
 	nodeName := os.Getenv("NODE_NAME")
@@ -171,6 +210,7 @@ func (l *LeapManager) PopulateLeapData() error {
 		}
 		l.leapFile = *leapData
 	}
+	l.setUtcOffset()
 	return nil
 }
 
@@ -214,7 +254,7 @@ func (l *LeapManager) AddLeapEvent(leapTime time.Time,
 	l.leapFile.LeapEvents = append(l.leapFile.LeapEvents, ev)
 	l.leapFile.UpdateTime = fmt.Sprint(int(currentTime.Sub(startTime).Seconds()))
 	l.RehashLeapData()
-
+	l.setUtcOffset()
 }
 
 func (l *LeapManager) RehashLeapData() {
