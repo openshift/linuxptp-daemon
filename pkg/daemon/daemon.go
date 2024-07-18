@@ -486,6 +486,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				gmInterface: gmInterface,
 				stopped:     false,
 				messageTag:  messageTag,
+				ublxTool:    nil,
 			}
 			gpsDaemon.CmdInit()
 			gpsDaemon.cmdLine = addScheduling(nodeProfile, gpsDaemon.cmdLine)
