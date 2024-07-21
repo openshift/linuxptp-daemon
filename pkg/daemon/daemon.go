@@ -17,7 +17,6 @@ import (
 
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/dpll"
-	"github.com/openshift/linuxptp-daemon/pkg/leap"
 
 	"github.com/openshift/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/openshift/linuxptp-daemon/pkg/network"
@@ -172,8 +171,6 @@ type Daemon struct {
 
 	// Allow vendors to include plugins
 	pluginManager PluginManager
-
-	leapManager *leap.LeapManager
 }
 
 // New LinuxPTP is called by daemon to generate new linuxptp instance
@@ -189,7 +186,6 @@ func New(
 	refreshNodePtpDevice *bool,
 	closeManager chan bool,
 	pmcPollInterval int,
-	leapManager *leap.LeapManager,
 ) *Daemon {
 	if !stdoutToSocket {
 		RegisterMetrics(nodeName)
@@ -213,8 +209,7 @@ func New(
 			eventChannel:    eventChannel,
 			ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics),
 		},
-		leapManager: leapManager,
-		stopCh:      stopCh,
+		stopCh: stopCh,
 	}
 }
 
@@ -582,7 +577,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				gmInterface: gmInterface,
 				stopped:     false,
 				messageTag:  messageTag,
-				leapManager: dn.leapManager,
 				ublxTool:    nil,
 			}
 			gpsDaemon.CmdInit()

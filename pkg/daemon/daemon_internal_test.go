@@ -53,7 +53,6 @@ func applyProfileSyncE(t *testing.T, profile *ptpv1.PtpProfile) {
 		nil,
 		make(chan bool),
 		30,
-		nil,
 	)
 	assert.NotNil(t, dn)
 	err := dn.applyNodePtpProfile(0, profile)
