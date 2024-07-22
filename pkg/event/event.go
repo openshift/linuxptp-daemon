@@ -14,6 +14,7 @@ import (
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
+	"github.com/openshift/linuxptp-daemon/pkg/leap"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -692,15 +693,17 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 	}
 	switch clockType {
 	case GM:
+		g.TimePropertiesDS.TimeTraceable = true
+		g.TimePropertiesDS.PtpTimescale = true
+		g.TimePropertiesDS.FrequencyTraceable = true
+		g.TimePropertiesDS.CurrentUtcOffsetValid = true
+		g.TimePropertiesDS.CurrentUtcOffset = int32(leap.GetUtcOffset())
 		switch clkClass {
 		case fbprotocol.ClockClass6: // T-GM connected to a PRTC in locked mode (e.g., PRTC traceable to GNSS)
 			// update only when ClockClass is changed
 			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass6
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
-				g.TimePropertiesDS.TimeTraceable = true
-				g.TimePropertiesDS.FrequencyTraceable = true
-				g.TimePropertiesDS.CurrentUtcOffsetValid = true
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
@@ -711,9 +714,6 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 				g.ClockQuality.ClockClass = protocol.ClockClassOutOfSpec
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
-				g.TimePropertiesDS.TimeTraceable = false
-				g.TimePropertiesDS.FrequencyTraceable = false
-				g.TimePropertiesDS.CurrentUtcOffsetValid = false
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)
@@ -723,9 +723,6 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass7
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
-				g.TimePropertiesDS.TimeTraceable = true
-				g.TimePropertiesDS.FrequencyTraceable = true
-				g.TimePropertiesDS.CurrentUtcOffsetValid = true
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)
@@ -734,10 +731,7 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 			if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
 				g.ClockQuality.ClockClass = protocol.ClockClassFreerun
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
-				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
-				g.TimePropertiesDS.TimeTraceable = false
-				g.TimePropertiesDS.FrequencyTraceable = false
-				g.TimePropertiesDS.CurrentUtcOffsetValid = false
+				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceNTP
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)

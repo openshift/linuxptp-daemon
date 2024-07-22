@@ -299,3 +299,66 @@ func Test_handleLeapIndication(t *testing.T) {
 	assert.Equal(t, "3928780800", lm.leapFile.LeapEvents[1].LeapTime)
 	assert.Equal(t, "4291747200", lm.leapFile.ExpirationTime)
 }
+
+func Test_New_Good(t *testing.T) {
+	cm := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "openshift-ptp", Name: "leap-configmap"},
+		Data: map[string]string{
+			"test-node-name": `# Do not edit
+# This file is generated automatically by linuxptp-daemon
+#$	3927775672
+#@	4291747200
+3692217600     37    # 1 Jan 2017`,
+		},
+	}
+	os.Setenv("NODE_NAME", "test-node-name")
+	client := fake.NewSimpleClientset(cm)
+	lm, err := New(client, "openshift-ptp")
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(lm.leapFile.LeapEvents))
+	offset := GetUtcOffset()
+	assert.Equal(t, 37, offset)
+	LeapMgr = nil
+}
+
+func Test_Run(t *testing.T) {
+	cm := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "openshift-ptp", Name: "leap-configmap"},
+		Data: map[string]string{
+			"test-node-name": `# Do not edit
+# This file is generated automatically by linuxptp-daemon
+#$	3927775672
+#@	4291747200
+3692217600     37    # 1 Jan 2017`,
+		},
+	}
+	os.Setenv("NODE_NAME", "test-node-name")
+	client := fake.NewSimpleClientset(cm)
+	lm, err := New(client, "openshift-ptp")
+
+	assert.NoError(t, err)
+	go lm.Run()
+	assert.NotNil(t, LeapMgr)
+	var timeLs = &ublox.TimeLs{
+		SrcOfCurrLs:   2,
+		CurrLs:        19,
+		SrcOfLsChange: 2,
+		LsChange:      0,
+		TimeToLsEvent: 0,
+		DateOfLsGpsWn: 0,
+		DateOfLsGpsDn: 0,
+		Valid:         3,
+	}
+	select {
+	case LeapMgr.UbloxLsInd <- *timeLs:
+	case <-time.After(100 * time.Millisecond):
+		assert.FailNow(t, "failed to send event to leap manager")
+	}
+	time.Sleep(100 * time.Millisecond)
+	offset := GetUtcOffset()
+	assert.Equal(t, 38, offset)
+	close(LeapMgr.Close)
+	time.Sleep(100 * time.Millisecond)
+	assert.Nil(t, LeapMgr)
+}
