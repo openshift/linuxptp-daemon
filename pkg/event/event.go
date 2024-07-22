@@ -31,6 +31,7 @@ const (
 	PHASE_STATUS         ValueType = "phase_status"
 	FREQUENCY_STATUS     ValueType = "frequency_status"
 	NMEA_STATUS          ValueType = "nmea_status"
+	PROCESS_STATUS       ValueType = "process_status"
 	PPS_STATUS           ValueType = "pps_status"
 	GM_INTERFACE_UNKNOWN string    = "unknown"
 )
