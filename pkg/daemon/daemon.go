@@ -893,6 +893,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 		} else {
 			processStatus(nil, p.name, p.messageTag, PtpProcessDown)
 		}
+		p.updateGMStatusOnProcessDown(p.name)
 
 		time.Sleep(connectionRetryInterval) // Delay to prevent flooding restarts if startup fails
 		// Don't restart after termination
@@ -1174,4 +1175,15 @@ func (p *ptpProcess) replaceClockID(input string) (output string) {
 	iface := p.ifaces.GetPhcID2IFace(match[0])
 	output = clockIDRegEx.ReplaceAllString(input, iface)
 	return output
+}
+
+// updateGMStatusOnProcessDown send events when  ts2phc process is down by
+// send event to EventHandler
+func (p *ptpProcess) updateGMStatusOnProcessDown(process string) {
+	// need to update GM status for  following process kill for  ts2phc
+	if process == ts2phcProcessName {
+		// ts2phc process dead should update GM-STATUS
+		iface := p.ifaces.GetGMInterface().Name
+		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]interface{}{event.PROCESS_STATUS: int64(0)})
+	}
 }

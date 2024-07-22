@@ -372,7 +372,7 @@ func extractRegularMetrics(configName, processName, output string, ifaces config
 	}
 
 	output = strings.Replace(output, "path", "", 1)
-	replacer := strings.NewReplacer("[", " ", "]", " ", ":", " ", " phc ", " ", " sys ", "")
+	replacer := strings.NewReplacer("[", " ", "]", " ", ":", " ", " phc ", " ", " sys ", " ")
 	output = replacer.Replace(output)
 
 	index := strings.Index(output, configName)
