@@ -1,80 +1,12 @@
 # Snyk (https://snyk.io) policy file, patches or ignores known vulnerabilities.
 version: v1.25.0
+exclude:
+  global:
+    - '**/*_test.go'
+    - bin
+    - hack
+    - pkg/daemon/testdata/**
+    - vendor/**
 # ignores vulnerabilities until expiry date; change duration by modifying expiry date
 ignore:
-  65472633-a1dc-41c2-a6d2-b5c27340596e:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:21:04.060Z
-  81edea41-88fe-47ad-a953-abc36b158838:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:21:21.257Z
-  81416ea5-9354-4951-a50a-0b64c72f3514:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:21:52.696Z
-  9e02c665-b9d8-4044-9ce2-f49e641f3b3a:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:22:23.583Z
-  f07c4b81-8b03-4794-92af-e33c50119b46:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:22:49.316Z
-  41fac790-a939-4626-9345-a539ebc15d2d:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:23:20.279Z
-  924efc44-e041-4c30-b922-921872884837:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:23:51.919Z
-  e1997348-4b80-403c-a1e1-c3b6e4d92398:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:24:26.060Z
-  36037690-ddf9-464b-a692-f72994138903:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:24:53.492Z
-  9c5b0ce4-5bd5-44bc-aa65-03a93fdbd00f:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:25:26.007Z
-  d710e8b4-94f8-4108-80d5-2ddc0bd05672:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:25:58.173Z
-  a81d91b3-dd78-4bac-ae34-c700170a6727:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:26:38.626Z
-  b5023498-0fc0-4975-87a9-9ef4b6ae8672:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:27:11.072Z
-  e72a49ec-f0d7-4293-8dd1-5aa1a580edf1:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:27:40.009Z
-  9037688a-a459-416b-84fd-c5ec66be4e88:
-    - '*':
-        reason: Temporarily ignoring Medium and Low severity issues
-        expires: 2024-02-16T00:00:00.000Z
-        created: 2023-12-16T22:28:08.548Z
 patch: {}
