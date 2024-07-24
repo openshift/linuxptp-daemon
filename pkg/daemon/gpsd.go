@@ -44,7 +44,6 @@ type GPSD struct {
 	subscriber           *GPSDSubscriber
 	monitorCtx           context.Context
 	monitorCancel        context.CancelFunc
-	leapManager          *leap.LeapManager
 }
 
 // GPSDSubscriber ... event subscriber
@@ -278,13 +277,6 @@ retry:
 				} // loop ends
 				g.offset = nOffset
 				g.sourceLost = false
-				if timeLs != nil {
-					select {
-					case g.leapManager.UbloxLsInd <- *timeLs:
-					case <-time.After(100 * time.Millisecond):
-						glog.Infof("failied to send leap event updates")
-					}
-				}
 
 				switch nStatus >= 3 {
 				case true:
@@ -314,6 +306,13 @@ retry:
 				}:
 				default:
 					glog.Error("failed to send gnss terminated event to eventHandler")
+				}
+				if timeLs != nil {
+					select {
+					case leap.LeapMgr.UbloxLsInd <- *timeLs:
+					case <-time.After(100 * time.Millisecond):
+						glog.Infof("failied to send Leap event updates")
+					}
 				}
 			case <-g.monitorCtx.Done():
 				doneFn()
