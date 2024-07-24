@@ -131,7 +131,7 @@ func Test_processLeapIndication_MissedLeapZero(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, res)
 	assert.WithinDuration(t, time.Now().UTC(), res.updateTime, 1*time.Second)
-	assert.WithinDuration(t, res.leapTime, time.Now().UTC(), 1*time.Second)
+	assert.WithinDuration(t, res.leapTime, time.Now().UTC().Add(-60*time.Second), 1*time.Second)
 	assert.Equal(t, int(ind.CurrLs+ind.LsChange+19), res.leapSec)
 }
 
@@ -298,6 +298,50 @@ func Test_handleLeapIndication(t *testing.T) {
 	assert.Equal(t, 38, lm.leapFile.LeapEvents[1].LeapSec)
 	assert.Equal(t, "3928780800", lm.leapFile.LeapEvents[1].LeapTime)
 	assert.Equal(t, "4291747200", lm.leapFile.ExpirationTime)
+}
+
+func Test_IsLeapInWindow_Pos(t *testing.T) {
+	now := time.Now().UTC()
+	startTime := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
+	diff := now.Sub(startTime)
+	leapTime := fmt.Sprintf("%d", int(diff.Seconds()))
+	lm := &LeapManager{
+
+		leapFile: LeapFile{
+			LeapEvents: []LeapEvent{
+				{
+					LeapTime: leapTime,
+				},
+			},
+		},
+	}
+	res := lm.IsLeapInWindow(now, -1*time.Second, time.Second)
+	assert.True(t, res)
+}
+func Test_IsLeapInWindow_Neg(t *testing.T) {
+	now := time.Now().UTC()
+	startTime := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
+	diff := now.Sub(startTime)
+	leapTime := fmt.Sprintf("%d", int(diff.Seconds())-1)
+	lm := &LeapManager{
+
+		leapFile: LeapFile{
+			LeapEvents: []LeapEvent{
+				{
+					LeapTime: leapTime,
+				},
+			},
+		},
+	}
+	res := lm.IsLeapInWindow(now, -1*time.Second, time.Second)
+	assert.False(t, res)
+}
+
+func Test_SetPtp4lConfigPath(t *testing.T) {
+	path := "test"
+	lm := &LeapManager{}
+	lm.SetPtp4lConfigPath(path)
+	assert.Equal(t, path, lm.ptp4lConfigPath)
 }
 
 func Test_New_Good(t *testing.T) {
