@@ -17,6 +17,7 @@ import (
 
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/dpll"
+	"github.com/openshift/linuxptp-daemon/pkg/leap"
 
 	"github.com/openshift/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/openshift/linuxptp-daemon/pkg/network"
@@ -464,6 +465,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configFile = fmt.Sprintf("ts2phc.%d.config", runID)
 			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 			messageTag = fmt.Sprintf("[ts2phc.%d.config:{level}]", runID)
+			leap.LeapMgr.SetPtp4lConfigPath(fmt.Sprintf("ptp4l.%d.config", runID))
 		case syncEProcessName:
 			configOpts = nodeProfile.Synce4lOpts
 			configInput = nodeProfile.Synce4lConf
@@ -911,7 +913,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 func (p *ptpProcess) processPTPMetrics(output string) {
 	if p.name == ts2phcProcessName && (strings.Contains(output, NMEASourceDisabledIndicator) ||
 		strings.Contains(output, InvalidMasterTimestampIndicator) ||
-		strings.Contains(output, NMEASourceDisabledIndicator2)) { //TODO identify which interface lost nmea or 1pps
+		(strings.Contains(output, NMEASourceDisabledIndicator2) &&
+			(!leap.LeapMgr.IsLeapInWindow(time.Now().UTC(), -2*time.Second, time.Second)))) { //TODO identify which interface lost nmea or 1pps
 		iface := p.ifaces.GetGMInterface().Name
 		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]interface{}{event.NMEA_STATUS: int64(0)})
 		glog.Error("nmea string lost") //TODO: add for 1pps lost

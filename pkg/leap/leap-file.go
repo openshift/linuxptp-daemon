@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/openshift/linuxptp-daemon/pkg/pmc"
 	"github.com/openshift/linuxptp-daemon/pkg/ublox"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -29,6 +30,8 @@ const (
 	leapSourceGps          = 2
 	leapConfigMapName      = "leap-configmap"
 	MaintenancePeriod      = time.Minute * 1
+	pmcWindowStartHours    = 12
+	pmcWindowEndSeconds    = 60
 )
 
 type LeapManager struct {
@@ -49,8 +52,10 @@ type LeapManager struct {
 	leapFilePath string
 	leapFileName string
 	// UTC offset and its validity time
-	utcOffset     int
-	utcOffsetTime time.Time
+	utcOffset       int
+	utcOffsetTime   time.Time
+	ptp4lConfigPath string
+	pmcLeapSent     bool
 }
 
 type LeapEvent struct {
@@ -91,27 +96,6 @@ func New(kubeclient kubernetes.Interface, namespace string) (*LeapManager, error
 		}
 	}
 	return LeapMgr, nil
-}
-
-func (l *LeapManager) Run() {
-	glog.Info("starting Leap file manager")
-	ticker := time.NewTicker(MaintenancePeriod)
-	defer ticker.Stop()
-	for {
-		select {
-		case v := <-l.UbloxLsInd:
-			l.handleLeapIndication(&v)
-		case <-l.Close:
-			LeapMgr = nil
-			return
-		case <-ticker.C:
-			if l.retryUpdate {
-				l.updateLeapConfigmap()
-			}
-			// TODO: if current time is within -12h ... +60s from leap event:
-			// Send PMC command
-		}
-	}
 }
 
 func GetUtcOffset() int {
@@ -170,6 +154,11 @@ func parseLeapFile(b []byte) (*LeapFile, error) {
 		}
 	}
 	return &l, nil
+}
+
+func (l *LeapManager) SetPtp4lConfigPath(path string) {
+	glog.Info("set Leap manager ptp4l config file name to ", path)
+	l.ptp4lConfigPath = path
 }
 
 func (l *LeapManager) renderLeapData() (*bytes.Buffer, error) {
@@ -244,6 +233,55 @@ func (l *LeapManager) populateLeapData() error {
 	glog.Info("Leap file expiration is set to ", l.leapFile.ExpirationTime)
 	l.setUtcOffset()
 	return nil
+}
+
+func (l *LeapManager) Run() {
+	glog.Info("starting Leap file manager")
+	ticker := time.NewTicker(MaintenancePeriod)
+	for {
+		select {
+		case v := <-l.UbloxLsInd:
+			l.handleLeapIndication(&v)
+		case <-l.Close:
+			LeapMgr = nil
+			return
+		case <-ticker.C:
+			if l.retryUpdate {
+				l.updateLeapConfigmap()
+			}
+			if l.IsLeapInWindow(time.Now().UTC(), -pmcWindowStartHours*time.Hour, pmcWindowEndSeconds*time.Second) {
+				if !l.pmcLeapSent {
+					g, err := pmc.RunPMCExpGetGMSettings(l.ptp4lConfigPath)
+					if err != nil {
+						glog.Error("error in Leap:", err)
+						continue
+					}
+					leapDiff := l.leapFile.LeapEvents[len(l.leapFile.LeapEvents)-1].LeapSec - int(g.TimePropertiesDS.CurrentUtcOffset)
+					if leapDiff > 0 {
+						g.TimePropertiesDS.Leap59 = false
+						g.TimePropertiesDS.Leap61 = true
+					} else if leapDiff < 0 {
+						g.TimePropertiesDS.Leap59 = true
+						g.TimePropertiesDS.Leap61 = false
+					} else {
+						// No actual change in leap seconds, don't send anything
+						l.pmcLeapSent = true
+						continue
+					}
+					glog.Info("Sending PMC command in Leap window")
+					glog.Infof("Leap time properties: %++v", g.TimePropertiesDS)
+					err = pmc.RunPMCExpSetGMSettings(l.ptp4lConfigPath, g)
+					if err != nil {
+						glog.Error("failed to send PMC for Leap: ", err)
+						continue
+					}
+					l.pmcLeapSent = true
+				}
+			} else {
+				l.pmcLeapSent = false
+			}
+		}
+	}
 }
 
 // updateLeapFile updates a new leap event to the list of leap events, if provided
@@ -366,7 +404,8 @@ func (l *LeapManager) processLeapIndication(data *ublox.TimeLs) (*leapIndResult,
 				return nil, fmt.Errorf("failed to parse time duration: Leap: %v", err)
 			}
 			if data.LsChange == 0 && data.TimeToLsEvent >= 0 {
-				result.leapTime = currentTime
+				// shift leap date out of pmc window, so no pmc commands will be sent
+				result.leapTime = currentTime.Add(-pmcWindowEndSeconds * time.Second)
 			} else {
 				result.leapTime = gpsStartTime.Add(deltaHours)
 			}
@@ -376,4 +415,22 @@ func (l *LeapManager) processLeapIndication(data *ublox.TimeLs) (*leapIndResult,
 		}
 	}
 	return nil, nil
+}
+
+// IsLeapInWindow() returns whether a leap event is occuring within the specified time window from now
+func (l *LeapManager) IsLeapInWindow(now time.Time, startOffset, endOffset time.Duration) bool {
+	startTime := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
+	lastLeap := l.leapFile.LeapEvents[len(l.leapFile.LeapEvents)-1]
+	lastLeapTime, err := strconv.Atoi(lastLeap.LeapTime)
+	if err != nil {
+		return false
+	}
+	leapTime := startTime.Add(time.Second * time.Duration(lastLeapTime))
+	leapWindowStart := leapTime.Add(startOffset)
+	leapWindowEnd := leapTime.Add(endOffset)
+	if now.After(leapWindowStart) && now.Before(leapWindowEnd) {
+		glog.Info("Leap in window: ", startOffset, " ", endOffset)
+		return true
+	}
+	return false
 }
