@@ -249,7 +249,7 @@ func (l *LeapManager) Run() {
 			if l.retryUpdate {
 				l.updateLeapConfigmap()
 			}
-			if l.IsLeapInWindow(time.Now().UTC(), -pmcWindowStartHours*time.Hour, pmcWindowEndSeconds*time.Second) {
+			if l.IsLeapInWindow(time.Now().UTC(), -pmcWindowStartHours*time.Hour, -pmcWindowEndSeconds*time.Second) {
 				if !l.pmcLeapSent {
 					g, err := pmc.RunPMCExpGetGMSettings(l.ptp4lConfigPath)
 					if err != nil {
