@@ -1,12 +1,12 @@
 FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.22-openshift-4.17 AS builder
 WORKDIR /go/src/github.com/openshift/linuxptp-daemon
-ENV GOTOOLCHAIN=local
 COPY . .
 RUN make clean && make
 
 FROM registry.ci.openshift.org/ocp/4.17:base-rhel9
 
 RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata synce4l && yum clean all
+
 
 RUN yum install -y gpsd-minimal
 RUN yum install -y gpsd-minimal-clients

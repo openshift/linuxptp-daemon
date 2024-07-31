@@ -3,7 +3,10 @@ package daemon_test
 import (
 	"flag"
 	"fmt"
+	"github.com/openshift/linuxptp-daemon/pkg/event"
+	"github.com/openshift/linuxptp-daemon/pkg/synce"
 	ptpv1 "github.com/openshift/ptp-operator/api/v1"
+	"github.com/sirupsen/logrus"
 	"k8s.io/utils/pointer"
 	"os"
 	"strings"
@@ -28,6 +31,7 @@ const (
 
 var pm *daemon.ProcessManager
 var registry *prometheus.Registry
+var logTestCases []synceLogTestCase
 
 type TestCase struct {
 	MessageTag                  string
@@ -308,4 +312,151 @@ func TestDaemon_ApplyHaProfiles(t *testing.T) {
 	assert.NotEmpty(t, cmdLine, "cmdLine is not empty")
 	assert.Equal(t, len(haProfiles), 2, "ha has two profiles")
 	assert.Equal(t, cmdLine, "-z socket1 -z socket2", "CmdLine is empty")
+}
+
+var (
+	option1 = synce.GetQualityLevelInfoOption1()
+	option2 = synce.GetQualityLevelInfoOption2()
+)
+
+type synceLogTestCase struct {
+	output               string
+	expectedState        event.PTPState
+	expectedDevice       *string
+	expectedSource       *string
+	expectedClockQuality string
+	expectedQL           byte
+	expectedExtendedQL   byte
+	extendedTvl          int
+	networkOption        int
+	expectedDescription  string
+}
+
+func InitSynceLogTestCase() {
+	logTestCases = []synceLogTestCase{
+		{
+			output:               "synce4l[1225226.278]: [synce4l.0.config] tx_rebuild_tlv: attached new TLV, QL=0x1 on ens7f0",
+			expectedState:        "",
+			expectedDevice:       pointer.String("synce1"),
+			expectedQL:           option2[synce.PRTC].SSM,
+			expectedExtendedQL:   synce.DEFAULT_EXTQL, //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
+			expectedSource:       pointer.String("ens7f0"),
+			extendedTvl:          0,
+			networkOption:        2,
+			expectedClockQuality: synce.PRS.String(),
+			expectedDescription:  " initial state with nPRTCo ext_ql should set ClockQuality for networkOption1 ",
+		},
+
+		{
+			output:               fmt.Sprintf("synce4l[622796.479]: [synce4l.0.config] tx_rebuild_tlv: attached new TLV, QL=%#x on ens7f0", option1[synce.PRC].SSM),
+			expectedState:        "",
+			expectedDevice:       pointer.String("synce1"),
+			expectedQL:           option1[synce.PRC].SSM,
+			expectedExtendedQL:   synce.DEFAULT_EXTQL, //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
+			expectedSource:       pointer.String("ens7f0"),
+			extendedTvl:          0,
+			networkOption:        1,
+			expectedClockQuality: synce.PRC.String(),
+			expectedDescription:  " initial state with no ext_ql should set ClockQuality for networkOption1 ",
+		},
+		{
+			output:               fmt.Sprintf("synce4l[622796.479]: [synce4l.0.config] tx_rebuild_tlv: attached new extended TLV, EXT_QL=%#x on ens7f0", option1[synce.PRTC].ExtendedSSM),
+			expectedState:        "",
+			expectedDevice:       pointer.String("synce1"),
+			expectedSource:       pointer.String("ens7f0"),
+			expectedQL:           option1[synce.PRTC].SSM,
+			expectedExtendedQL:   option1[synce.PRTC].ExtendedSSM,
+			extendedTvl:          1,
+			networkOption:        1,
+			expectedClockQuality: synce.PRTC.String(),
+			expectedDescription:  "With extended QL enabled for network option 2 but have previously captured QL for network option 1,the Clock quality should be reported  ",
+		},
+		{
+			output:               fmt.Sprintf("synce4l[622796.479]: [synce4l.0.config] tx_rebuild_tlv: attached new TLV, QL=%#x on ens7f0", option2[synce.PRTC].SSM),
+			expectedState:        "",
+			expectedDevice:       pointer.String("synce1"),
+			expectedSource:       pointer.String("ens7f0"),
+			expectedQL:           option2[synce.PRTC].SSM,
+			expectedExtendedQL:   option1[synce.PRTC].ExtendedSSM, //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
+			extendedTvl:          1,
+			networkOption:        2,
+			expectedClockQuality: synce.PRTC.String(),
+			expectedDescription:  " initial state with no ext_ql should set ClockQuality for networkOption1 ",
+		},
+		{
+			output:               fmt.Sprintf("synce4l[622796.479]: [synce4l.0.config] tx_rebuild_tlv: attached new extended TLV, EXT_QL=%#x on ens7f0", option1[synce.PRTC].ExtendedSSM),
+			expectedState:        "",
+			expectedDevice:       pointer.String("synce1"),
+			expectedSource:       pointer.String("ens7f0"),
+			expectedQL:           option2[synce.PRTC].SSM,
+			expectedExtendedQL:   option2[synce.PRTC].ExtendedSSM,
+			extendedTvl:          1,
+			networkOption:        2,
+			expectedClockQuality: synce.PRTC.String(),
+			expectedDescription:  " Extended tlv enabled should not report clock quality yet for just QL ",
+		},
+		{
+			output:               "synce4l[627602.540]: [synce4l.0.config] EEC_LOCKED/EEC_LOCKED_HO_ACQ for ens7f0",
+			expectedState:        event.PTP_LOCKED,
+			expectedDevice:       pointer.String("synce1"),
+			expectedSource:       nil,
+			expectedQL:           option2[synce.PRTC].SSM,
+			expectedExtendedQL:   option2[synce.PRTC].ExtendedSSM,
+			networkOption:        2,
+			extendedTvl:          1,
+			expectedClockQuality: synce.PRTC.String(),
+			expectedDescription:  "LOCKED ",
+		},
+		{
+			output:               "synce4l[627602.540]: [synce4l.0.config] EEC_LOCKED/EEC_LOCKED_HO_ACQ on synce1",
+			expectedState:        event.PTP_LOCKED,
+			expectedDevice:       pointer.String("synce1"),
+			expectedSource:       nil,
+			expectedQL:           option2[synce.PRTC].SSM,
+			expectedExtendedQL:   option2[synce.PRTC].ExtendedSSM,
+			networkOption:        2,
+			extendedTvl:          1,
+			expectedClockQuality: synce.PRTC.String(),
+			expectedDescription:  "Will not produce any output;will use last data ",
+		},
+	}
+
+}
+
+func TestDaemon_ProcessSynceLogs(t *testing.T) {
+	// Printing results
+	InitSynceLogTestCase()
+	pm = daemon.NewProcessManager()
+	relations := synce.Relations{Devices: make([]*synce.Config, 1)}
+	relations.Devices[0] = &synce.Config{
+		Name:           "synce1",
+		Ifaces:         []string{"ens7f0"},
+		ClockId:        "1",
+		NetworkOption:  1,
+		ExtendedTlv:    0,
+		ExternalSource: "",
+		LastQLState:    make(map[string]*synce.QualityLevelInfo),
+		LastClockState: "",
+	}
+	pm.UpdateSynceConfig(&relations)
+
+	for _, l := range logTestCases {
+		relations.Devices[0].NetworkOption = l.networkOption
+		relations.Devices[0].ExtendedTlv = l.extendedTvl
+
+		pm.RunSynceParser(l.output)
+		if l.expectedSource != nil {
+			cq, _ := relations.Devices[0].ClockQuality(*relations.Devices[0].LastQLState[*l.expectedSource])
+			actualQuality := relations.Devices[0].LastQLState[*l.expectedSource]
+			logrus.Infof("%s last QL %#x last ExtQL %#x ClockQuality %v state %s", l.output, actualQuality.SSM, actualQuality.ExtendedSSM, cq, relations.Devices[0].LastClockState)
+			assert.Equal(t, l.expectedClockQuality, cq, l.output)
+			assert.Equal(t, l.expectedState, relations.Devices[0].LastClockState, l.output)
+			assert.Equal(t, l.expectedQL, actualQuality.SSM, l.output)
+			assert.Equal(t, l.expectedExtendedQL, actualQuality.ExtendedSSM, l.output)
+		}
+
+		assert.Equal(t, *l.expectedDevice, relations.Devices[0].Name, l.output)
+		assert.Equal(t, l.expectedState, relations.Devices[0].LastClockState, l.output)
+
+	}
 }

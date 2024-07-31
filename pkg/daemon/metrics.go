@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"github.com/openshift/linuxptp-daemon/pkg/synce"
 	"net/http"
 	"strconv"
 	"strings"
@@ -170,6 +171,25 @@ var (
 			Name:      "ha_profile_status",
 			Help:      "0 = INACTIVE 1 = ACTIVE",
 		}, []string{"process", "node", "profile"})
+
+	// SynceClockQL  metrics to show current synce Clock Qulity
+	SynceClockQL = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: PTPNamespace,
+			Subsystem: PTPSubsystem,
+			Name:      "synce_clock_quality",
+			Help:      "network_option1: ePRTC = 32 PRTC = 34 PRC =257  SSU-A = 259 SSU-B = 263 EEC1 = 266 network_option2: ePRTC = 34 PRTC = 33 PRS =256 STU = 255 ST2 = 262 TNC = 259 ST3E =268 EEC2 =265 PROV =269",
+		}, []string{"process", "node", "profile", "network_option", "iface", "device"})
+
+	// SynceQLInfo metrics to show current QL values
+	SynceQLInfo = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: PTPNamespace,
+			Subsystem: PTPSubsystem,
+			Name:      "synce_ssm_ql",
+			Help: "network_option1: ePRTC: {0, 0x2, 0x21}, PRTC:  {1, 0x2, 0x20}, PRC:   {2, 0x2, 0xFF}, SSUA:  {3, 0x4, 0xFF}, SSUB:  {4, 0x8, 0xFF}, EEC1:  {5, 0xB, 0xFF},\n " +
+				"   network_option2 ePRTC: {0, 0x1, 0x21}, PRTC:  {1, 0x1, 0x20}, PRS:   {2, 0x1, 0xFF}, STU:   {3, 0x0, 0xFF}, ST2:   {4, 0x7, 0xFF}, TNC:   {5, 0x4, 0xFF}, ST3E:  {6, 0xD, 0xFF}, EEC2:  {7, 0xA, 0xFF}, PROV:  {8, 0xE, 0xFF}",
+		}, []string{"process", "node", "profile", "network_option", "iface", "device", "ql_type"})
 )
 
 var registerMetrics sync.Once
@@ -186,6 +206,8 @@ func RegisterMetrics(nodeName string) {
 		prometheus.MustRegister(ProcessRestartCount)
 		prometheus.MustRegister(ClockClassMetrics)
 		prometheus.MustRegister(PTPHAMetrics)
+		prometheus.MustRegister(SynceQLInfo)
+		prometheus.MustRegister(SynceClockQL)
 
 		// Including these stats kills performance when Prometheus polls with multiple targets
 		prometheus.Unregister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
@@ -516,6 +538,34 @@ func UpdatePTPHAMetrics(profile string, inActiveProfiles []string, state int64) 
 	for _, inActive := range inActiveProfiles {
 		PTPHAMetrics.With(prometheus.Labels{
 			"process": phc2sysProcessName, "node": NodeName, "profile": inActive}).Set(0)
+	}
+}
+
+func UpdateSynceClockQlMetrics(process, cfgName string, iface string, network_option int, device string, value int) {
+	SynceClockQL.With(prometheus.Labels{
+		"process": process, "node": NodeName, "profile": cfgName, "network_option": strconv.Itoa(network_option), "iface": iface, "device": device}).Set(float64(value))
+}
+
+func UpdateSynceQLMetrics(process, cfgName string, iface string, network_option int, device string, qlType string, value byte) {
+	SynceQLInfo.With(prometheus.Labels{
+		"process": process, "node": NodeName, "profile": cfgName, "iface": iface,
+		"network_option": strconv.Itoa(network_option), "device": device, "ql_type": qlType}).Set(float64(value))
+
+}
+func deleteSyncEMetrics(process, configName string, relations *synce.Relations) {
+	for _, device := range relations.Devices {
+		for _, iface := range device.Ifaces {
+			SynceQLInfo.Delete(prometheus.Labels{
+				"process": process, "node": NodeName, "profile": configName, "iface": iface, "device": device.Name, "network_option": strconv.Itoa(device.NetworkOption), "ql_type": "SSM"})
+			SynceQLInfo.Delete(prometheus.Labels{
+				"process": process, "node": NodeName, "profile": configName, "iface": iface, "device": device.Name, "network_option": strconv.Itoa(device.NetworkOption), "ql_type": "Extended SSM"})
+
+			SynceClockQL.Delete(prometheus.Labels{
+				"process": process, "node": NodeName, "profile": configName, "iface": iface, "device": device.Name, "network_option": strconv.Itoa(device.NetworkOption)})
+
+			ClockState.Delete(prometheus.Labels{
+				"process": process, "node": NodeName, "iface": iface})
+		}
 	}
 }
 

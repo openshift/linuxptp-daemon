@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/openshift/linuxptp-daemon/pkg/synce"
+
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/event"
 
@@ -185,26 +187,6 @@ func getSource(isTs2phcMaster string) event.EventSource {
 	return event.PPS
 }
 
-type synceToIfaceRelation struct {
-	synceDevice string
-	ifaceNames  []string
-	clockId     string
-}
-
-type synceRelations struct {
-	devices []*synceToIfaceRelation
-}
-
-func (r *synceRelations) appendDevice(ifaces []string, devName string) {
-	if len(ifaces) > 0 {
-		binding := synceToIfaceRelation{
-			synceDevice: devName,
-			ifaceNames:  ifaces,
-		}
-		r.devices = append(r.devices, &binding)
-	}
-}
-
 // extractSynceRelations extracts relation of synce device to interfaces
 // The sections are ordered in the following way:
 //  1. Device section specifies the configuration of a one logical device e.g. 'synce1'.
@@ -213,62 +195,76 @@ func (r *synceRelations) appendDevice(ifaces []string, devName string) {
 //     (UNTIL next device section).
 //  2. Port section - any other section not starting with < (e.g. [eth0]) is the port section.
 //     Multiple port sections are allowed. Each port participates in SyncE communication.
-func (conf *ptp4lConf) extractSynceRelations() *synceRelations {
-	var deviceName string
-	r := &synceRelations{
-		devices: []*synceToIfaceRelation{},
+func (conf *ptp4lConf) extractSynceRelations() *synce.Relations {
+	var err error
+	r := &synce.Relations{
+		Devices: []*synce.Config{},
 	}
+
 	ifaces := []string{}
 	re, _ := regexp.Compile(`[{}<>\[\] ]+`)
+	synceRelationInfo := synce.Config{}
 
+	var extendedTlv, networkOption int = 0, 1
 	for _, section := range conf.sections {
 		if strings.HasPrefix(section.sectionName, "[<") {
-			deviceName = re.ReplaceAllString(section.sectionName, "")
-			r.appendDevice(ifaces, deviceName)
-			ifaces = []string{}
+			if synceRelationInfo.Name != "" {
+				if len(ifaces) > 0 {
+					synceRelationInfo.Ifaces = ifaces
+				}
+				r.AddDeviceConfig(synceRelationInfo)
+			}
+			synceRelationInfo = synce.Config{
+				Name:           "",
+				Ifaces:         nil,
+				ClockId:        "",
+				NetworkOption:  1,
+				ExtendedTlv:    0,
+				ExternalSource: "",
+				LastQLState:    make(map[string]*synce.QualityLevelInfo),
+				LastClockState: "",
+			}
+			extendedTlv, networkOption = 0, 1
+
+			synceRelationInfo.Name = re.ReplaceAllString(section.sectionName, "")
+			if networkOptionStr, ok := section.options["network_option"]; ok {
+				if networkOption, err = strconv.Atoi(strings.TrimSpace(networkOptionStr)); err != nil {
+					glog.Errorf("error parsing `network_option`, setting network_option to default 1 : %s", err)
+				}
+			}
+			if extendedTlvStr, ok := section.options["extended_tlv"]; ok {
+				if extendedTlv, err = strconv.Atoi(strings.TrimSpace(extendedTlvStr)); err != nil {
+					glog.Errorf("error parsing `extended_tlv`, setting extended_tlv to default 1 : %s", err)
+				}
+			}
+			synceRelationInfo.NetworkOption = networkOption
+			synceRelationInfo.ExtendedTlv = extendedTlv
+		} else if strings.HasPrefix(section.sectionName, "[{") {
+			synceRelationInfo.ExternalSource = re.ReplaceAllString(section.sectionName, "")
 		} else if strings.HasPrefix(section.sectionName, "[") && section.sectionName != "[global]" {
 			iface := re.ReplaceAllString(section.sectionName, "")
 			ifaces = append(ifaces, iface)
 		}
 	}
 	if len(ifaces) > 0 {
-		r.appendDevice(ifaces, deviceName)
+		synceRelationInfo.Ifaces = ifaces
+	}
+	if synceRelationInfo.Name != "" {
+		r.AddDeviceConfig(synceRelationInfo)
 	}
 	return r
 }
 
-func (r *synceRelations) addClockIds(ptpSettings map[string]string) {
-	for k, v := range ptpSettings {
-		glog.Info(k, " ", v)
-		if strings.HasPrefix(k, "clockId") {
-			iface := strings.ReplaceAll(k, "clockId[", "")
-			iface = strings.ReplaceAll(iface, "]", "")
-			for _, d := range r.devices {
-				for _, i := range d.ifaceNames {
-					if i == iface {
-						d.clockId = v
-						goto found
-					}
-				}
-				glog.Errorf("clock ID not found for syncE device %s - no interfaces provided. Check synce4lConf section",
-					d.synceDevice)
-			}
-		}
-	found:
-	}
-}
-
-func (conf *ptp4lConf) renderSyncE4lConf(ptpSettings map[string]string) (configOut string) {
+func (conf *ptp4lConf) renderSyncE4lConf(ptpSettings map[string]string) (configOut string, relations *synce.Relations) {
 	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
-	rel := conf.extractSynceRelations()
-	rel.addClockIds(ptpSettings)
+	relations = conf.extractSynceRelations()
+	relations.AddClockIds(ptpSettings)
 	deviceIdx := 0
 	for _, section := range conf.sections {
 		configOut = fmt.Sprintf("%s\n%s", configOut, section.sectionName)
 		if strings.HasPrefix(section.sectionName, "[<") {
-			_, found := section.options["clock_id"]
-			if !found {
-				section.options["clock_id"] = rel.devices[deviceIdx].clockId
+			if _, found := section.options["clock_id"]; !found {
+				section.options["clock_id"] = relations.Devices[deviceIdx].ClockId
 				deviceIdx++
 			}
 		}
