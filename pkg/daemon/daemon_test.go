@@ -3,14 +3,15 @@ package daemon_test
 import (
 	"flag"
 	"fmt"
+	"os"
+	"strings"
+	"testing"
+
 	"github.com/openshift/linuxptp-daemon/pkg/event"
 	"github.com/openshift/linuxptp-daemon/pkg/synce"
 	ptpv1 "github.com/openshift/ptp-operator/api/v1"
 	"github.com/sirupsen/logrus"
 	"k8s.io/utils/pointer"
-	"os"
-	"strings"
-	"testing"
 
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/daemon"
@@ -334,16 +335,17 @@ type synceLogTestCase struct {
 
 func InitSynceLogTestCase() {
 	logTestCases = []synceLogTestCase{
+
 		{
-			output:               "synce4l[1225226.278]: [synce4l.0.config] tx_rebuild_tlv: attached new TLV, QL=0x1 on ens7f0",
+			output:               "synce4l[1225226.279]: [synce4l.0.config] tx_rebuild_tlv: attached new TLV, QL=0x1 on ens7f0",
 			expectedState:        "",
 			expectedDevice:       pointer.String("synce1"),
 			expectedQL:           option2[synce.PRTC].SSM,
-			expectedExtendedQL:   synce.DEFAULT_EXTQL, //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
+			expectedExtendedQL:   synce.QL_DEFAULT_SSM, //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
 			expectedSource:       pointer.String("ens7f0"),
-			extendedTvl:          0,
+			extendedTvl:          1,
 			networkOption:        2,
-			expectedClockQuality: synce.PRS.String(),
+			expectedClockQuality: "",
 			expectedDescription:  " initial state with nPRTCo ext_ql should set ClockQuality for networkOption1 ",
 		},
 
@@ -352,7 +354,7 @@ func InitSynceLogTestCase() {
 			expectedState:        "",
 			expectedDevice:       pointer.String("synce1"),
 			expectedQL:           option1[synce.PRC].SSM,
-			expectedExtendedQL:   synce.DEFAULT_EXTQL, //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
+			expectedExtendedQL:   synce.QL_DEFAULT_ENHSSM, //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
 			expectedSource:       pointer.String("ens7f0"),
 			extendedTvl:          0,
 			networkOption:        1,
@@ -432,8 +434,8 @@ func TestDaemon_ProcessSynceLogs(t *testing.T) {
 		Name:           "synce1",
 		Ifaces:         []string{"ens7f0"},
 		ClockId:        "1",
-		NetworkOption:  1,
-		ExtendedTlv:    0,
+		NetworkOption:  synce.SYNCE_NETWORK_OPT_1,
+		ExtendedTlv:    synce.ExtendedTLV_DISABLED,
 		ExternalSource: "",
 		LastQLState:    make(map[string]*synce.QualityLevelInfo),
 		LastClockState: "",

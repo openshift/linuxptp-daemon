@@ -205,7 +205,7 @@ func (conf *ptp4lConf) extractSynceRelations() *synce.Relations {
 	re, _ := regexp.Compile(`[{}<>\[\] ]+`)
 	synceRelationInfo := synce.Config{}
 
-	var extendedTlv, networkOption int = 0, 1
+	var extendedTlv, networkOption int = synce.ExtendedTLV_DISABLED, synce.SYNCE_NETWORK_OPT_1
 	for _, section := range conf.sections {
 		if strings.HasPrefix(section.sectionName, "[<") {
 			if synceRelationInfo.Name != "" {
@@ -218,13 +218,13 @@ func (conf *ptp4lConf) extractSynceRelations() *synce.Relations {
 				Name:           "",
 				Ifaces:         nil,
 				ClockId:        "",
-				NetworkOption:  1,
-				ExtendedTlv:    0,
+				NetworkOption:  synce.SYNCE_NETWORK_OPT_1,
+				ExtendedTlv:    synce.ExtendedTLV_DISABLED,
 				ExternalSource: "",
 				LastQLState:    make(map[string]*synce.QualityLevelInfo),
 				LastClockState: "",
 			}
-			extendedTlv, networkOption = 0, 1
+			extendedTlv, networkOption = synce.ExtendedTLV_DISABLED, synce.SYNCE_NETWORK_OPT_1
 
 			synceRelationInfo.Name = re.ReplaceAllString(section.sectionName, "")
 			if networkOptionStr, ok := section.options["network_option"]; ok {

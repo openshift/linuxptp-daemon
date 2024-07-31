@@ -11,8 +11,17 @@ import (
 )
 
 const (
-	DEFAULT_QL    = 0xF
-	DEFAULT_EXTQL = 0xff //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
+	QL_DEFAULT_SSM    = 0x3  // This is not used in SSM so using this as default to find initial value
+	QL_DEFAULT_ENHSSM = 0xFF //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
+
+	QL_DNU_SSM           = 0xF
+	QL_DUS_SSM           = 0xF
+	QL_DNU_ENHSSM        = 0xFF
+	QL_DUS_ENHSSM        = 0xFF
+	SYNCE_NETWORK_OPT_1  = 1
+	SYNCE_NETWORK_OPT_2  = 2
+	ExtendedTLV_ENABLED  = 1
+	ExtendedTLV_DISABLED = 0
 )
 
 type LogType int
@@ -98,6 +107,7 @@ func (e EECState) String() string {
 	}
 }
 
+// ToPTPState ... covert EEC state to PTPState
 func (e EECState) ToPTPState() event.PTPState {
 	switch e {
 	//	EEC_UNKNOWN
@@ -158,9 +168,11 @@ const (
 	ST3E
 	EEC2
 	PROV
-	UNKNOWN
+	DNU
+	DUS
 )
 
+// String ... get string for qualityLevel
 func (q QualityLevel) String() string {
 	switch q {
 	//	EPRTC
@@ -199,8 +211,12 @@ func (q QualityLevel) String() string {
 	//	PROV
 	case PROV:
 		return "PROV"
-	case UNKNOWN:
-		return "UNKNOWN"
+	// DNU .. do not use
+	case DNU:
+		return "DNU"
+	// DUS ... do not use for synchronization
+	case DUS:
+		return "DUS"
 
 	default:
 		return "UNKNOWN"
@@ -222,12 +238,13 @@ var qualityLevelInfoOption1 = map[QualityLevel]QualityLevelInfo{
 	SSUA:  {3, 0x4, 0xFF},
 	SSUB:  {4, 0x8, 0xFF},
 	EEC1:  {5, 0xB, 0xFF},
+	DNU:   {6, 0xF, 0xFF},
 }
 
 // Compare compares two QualityLevelInfo objects based on their SSM and ExtendedSSM fields.
 // It returns true if both fields are equal, otherwise false.
 func (q *QualityLevelInfo) Compare(other QualityLevelInfo) bool {
-	return q.SSM == other.SSM && (other.ExtendedSSM == DEFAULT_QL || q.ExtendedSSM == other.ExtendedSSM)
+	return q.SSM == other.SSM && (other.ExtendedSSM == QL_DEFAULT_SSM || q.ExtendedSSM == other.ExtendedSSM)
 }
 
 // Mapping of QualityLevel to its information in option 2 networks
@@ -241,8 +258,10 @@ var qualityLevelInfoOption2 = map[QualityLevel]QualityLevelInfo{
 	ST3E:  {6, 0xD, 0xFF},
 	EEC2:  {7, 0xA, 0xFF},
 	PROV:  {8, 0xE, 0xFF},
+	DUS:   {9, 0xF, 0xFF},
 }
 
+// Config  ... synce config
 type Config struct {
 	Name           string
 	Ifaces         []string
@@ -254,16 +273,19 @@ type Config struct {
 	LastClockState event.PTPState
 }
 
+// Relations ... synce config object relations
 type Relations struct {
 	Devices []*Config
 }
 
+// AddDeviceConfig .. add device config
 func (r *Relations) AddDeviceConfig(config Config) {
 	r.Devices = append(r.Devices, &config)
 }
+
+// AddClockIds  .. add clockIds
 func (r *Relations) AddClockIds(ptpSettings map[string]string) {
 	for k, v := range ptpSettings {
-		glog.Info(k, " ", v)
 		if strings.HasPrefix(k, "clockId") {
 			iface := strings.ReplaceAll(k, "clockId[", "")
 			iface = strings.ReplaceAll(iface, "]", "")
@@ -271,16 +293,18 @@ func (r *Relations) AddClockIds(ptpSettings map[string]string) {
 				for _, i := range d.Ifaces {
 					if i == iface {
 						d.ClockId = v
-						goto found
+						return
 					}
 				}
 				glog.Errorf("clock ID not found for syncE device %s - no interfaces provided. Check synce4lConf section",
 					d.Name)
 			}
 		}
-	found:
+		return
 	}
 }
+
+// AppendDeviceConfig ... add device
 func (r *Relations) AppendDeviceConfig(ifaces []string, devName string, networkOption int, extendedTlv int) {
 	if len(ifaces) > 0 {
 		binding := Config{
@@ -293,6 +317,7 @@ func (r *Relations) AppendDeviceConfig(ifaces []string, devName string, networkO
 	}
 }
 
+// GetSyncERelation ... get child objects
 func (r *Relations) GetSyncERelation(deviceName, extSourceName, iface string) (networkOption, extTvlEnabled int, device, extSource string, ifaces []string) {
 	if len(r.Devices) == 0 {
 		return
@@ -320,9 +345,12 @@ func (r *Relations) GetSyncERelation(deviceName, extSourceName, iface string) (n
 	return
 }
 
+// GetQualityLevelInfoOption2 ...
 func GetQualityLevelInfoOption2() map[QualityLevel]QualityLevelInfo {
 	return deepCopyQualityLevelMap(qualityLevelInfoOption2)
 }
+
+// GetQualityLevelInfoOption1 ...
 func GetQualityLevelInfoOption1() map[QualityLevel]QualityLevelInfo {
 	return deepCopyQualityLevelMap(qualityLevelInfoOption1)
 }
@@ -338,6 +366,7 @@ func deepCopyQualityLevelMap(original map[QualityLevel]QualityLevelInfo) map[Qua
 	return copyMap
 }
 
+// PrintOption1Networks ..
 func PrintOption1Networks() {
 	fmt.Println("Option 1 Networks:")
 	for ql, info := range qualityLevelInfoOption1 {
@@ -345,6 +374,7 @@ func PrintOption1Networks() {
 	}
 }
 
+// PrintOption2Networks ... print network options
 func PrintOption2Networks() {
 	fmt.Println("\nOption 2 Networks:")
 	for ql, info := range qualityLevelInfoOption2 {
@@ -354,38 +384,44 @@ func PrintOption2Networks() {
 
 // ClockQuality ... return ClockQuality details
 func (c *Config) ClockQuality(qualityInfo QualityLevelInfo) (clock string, ql QualityLevelInfo) {
-	if c.ExtendedTlv == 0 {
-		qualityInfo.ExtendedSSM = 0xFF //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
+
+	if c.ExtendedTlv == ExtendedTLV_DISABLED {
+		qualityInfo.ExtendedSSM = QL_DEFAULT_ENHSSM //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
+	} else if c.ExtendedTlv == ExtendedTLV_ENABLED && qualityInfo.ExtendedSSM == QL_DEFAULT_SSM { // extQL is nto read
+		return "", qualityInfo
 	}
-	if c.NetworkOption == 1 {
+	if c.NetworkOption == SYNCE_NETWORK_OPT_1 {
 		for q, info := range qualityLevelInfoOption1 {
 			if info.Compare(qualityInfo) {
 				return q.String(), info
 			}
 		}
-	} else if c.NetworkOption == 2 {
+		clock = DNU.String()
+		ql.SSM = QL_DNU_SSM
+		ql.ExtendedSSM = QL_DNU_ENHSSM
+	} else if c.NetworkOption == SYNCE_NETWORK_OPT_2 {
 		for q, info := range qualityLevelInfoOption2 {
 			if info.Compare(qualityInfo) {
 				return q.String(), info
 			}
 		}
+		clock = DUS.String()
+		ql.SSM = QL_DUS_SSM
+		ql.ExtendedSSM = QL_DUS_ENHSSM
 	}
 
-	return UNKNOWN.String(), QualityLevelInfo{
-		Priority:    0,
-		SSM:         DEFAULT_QL,
-		ExtendedSSM: DEFAULT_QL,
-	}
+	return
 }
 
+// ParseLog .. parse synce4l logs
 func ParseLog(output string) LogEntry {
 	// Regular expressions for extracting data
 
 	// Slices to store extracted data
 	logEntry := LogEntry{
 		State:     nil,
-		QL:        DEFAULT_QL,
-		ExtQl:     DEFAULT_QL,
+		QL:        QL_DEFAULT_SSM,
+		ExtQl:     QL_DEFAULT_SSM,
 		ExtSource: nil,
 		Device:    nil,
 		Source:    nil,
@@ -432,7 +468,7 @@ func ParseLog(output string) LogEntry {
 		if len(match) > 2 {
 			qLValue, err := strconv.ParseUint(match[1], 16, 8) // Parse as 8-bit unsigned int
 			if err == nil {
-				return LogEntry{ExtQl: DEFAULT_QL, QL: byte(qLValue), Source: strPtr(match[2]), LogType: QL_STATE}
+				return LogEntry{ExtQl: QL_DEFAULT_SSM, QL: byte(qLValue), Source: strPtr(match[2]), LogType: QL_STATE}
 			}
 		}
 	}
