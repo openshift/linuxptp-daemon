@@ -36,10 +36,10 @@ var (
 var testCases = []testCase{
 	{
 		sms:              option2[synce.PRTC].SSM,
-		smsExtended:      synce.DEFAULT_EXTQL,
+		smsExtended:      synce.QL_DEFAULT_ENHSSM,
 		expectedPriority: option2[synce.PRTC].Priority,
 		expectedClock:    synce.PRS.String(),
-		networkOption:    2,
+		networkOption:    synce.SYNCE_NETWORK_OPT_2,
 		enabledExtQl:     0,
 	},
 	{
@@ -70,7 +70,7 @@ var testCases = []testCase{
 		sms:              option2[synce.PRS].SSM,
 		smsExtended:      option2[synce.PRS].ExtendedSSM,
 		expectedPriority: option2[synce.PRS].Priority,
-		expectedClock:    synce.UNKNOWN.String(),
+		expectedClock:    synce.DNU.String(),
 		networkOption:    1,
 		enabledExtQl:     1,
 	},
@@ -78,7 +78,7 @@ var testCases = []testCase{
 		sms:              option2[synce.PRS].SSM,
 		smsExtended:      option2[synce.EEC1].ExtendedSSM,
 		expectedPriority: 0,
-		expectedClock:    synce.UNKNOWN.String(),
+		expectedClock:    synce.DUS.String(),
 		networkOption:    2,
 		enabledExtQl:     1,
 	},
@@ -89,8 +89,8 @@ func Test_GetClockQuality(t *testing.T) {
 		Name:           "synce1",
 		Ifaces:         nil,
 		ClockId:        "",
-		NetworkOption:  2,
-		ExtendedTlv:    1,
+		NetworkOption:  synce.SYNCE_NETWORK_OPT_2,
+		ExtendedTlv:    synce.ExtendedTLV_ENABLED,
 		ExternalSource: "",
 	}
 	synce.PrintOption1Networks()
@@ -129,7 +129,7 @@ func InitLogTestCase() {
 			expectedSource:     pointer.String("ens7f0"),
 			expectedDevice:     nil,
 			expectedQL:         option1[synce.PRTC].SSM,
-			expectedExtendedQL: synce.DEFAULT_QL,
+			expectedExtendedQL: synce.QL_DEFAULT_SSM,
 			enabledExtQl:       false,
 		},
 		{
@@ -138,7 +138,7 @@ func InitLogTestCase() {
 			expectedSource:     pointer.String("ens7f0"),
 			expectedDevice:     nil,
 			expectedQL:         option1[synce.PRTC].SSM,
-			expectedExtendedQL: synce.DEFAULT_QL,
+			expectedExtendedQL: synce.QL_DEFAULT_SSM,
 			enabledExtQl:       false,
 		},
 		{
@@ -147,7 +147,7 @@ func InitLogTestCase() {
 			expectedDevice:     nil,
 			expectedSource:     pointer.String("ens7f0"),
 			expectedExtSource:  nil,
-			expectedQL:         synce.DEFAULT_QL,
+			expectedQL:         synce.QL_DEFAULT_SSM,
 			expectedExtendedQL: 0xff,
 			enabledExtQl:       true,
 		},
@@ -157,8 +157,8 @@ func InitLogTestCase() {
 			expectedDevice:     pointer.String("synce1"),
 			expectedExtSource:  pointer.String("GNSS"),
 			expectedSource:     nil,
-			expectedQL:         synce.DEFAULT_QL,
-			expectedExtendedQL: synce.DEFAULT_QL,
+			expectedQL:         synce.QL_DEFAULT_SSM,
+			expectedExtendedQL: synce.QL_DEFAULT_SSM,
 		},
 		{
 			output:             "synce4l[627602.540]: [synce4l.0.config] EEC_HOLDOVER on synce1",
@@ -166,8 +166,8 @@ func InitLogTestCase() {
 			expectedExtSource:  nil,
 			expectedDevice:     pointer.String("synce1"),
 			expectedSource:     nil,
-			expectedQL:         synce.DEFAULT_QL,
-			expectedExtendedQL: synce.DEFAULT_QL,
+			expectedQL:         synce.QL_DEFAULT_SSM,
+			expectedExtendedQL: synce.QL_DEFAULT_SSM,
 		},
 		{
 			output:             "synce4l[627602.593]: [synce4l.0.config] tx_rebuild_tlv: attached new TLV, QL=0x1 on ens7f0",
@@ -176,7 +176,7 @@ func InitLogTestCase() {
 			expectedSource:     pointer.String("ens7f0"),
 			expectedExtSource:  nil,
 			expectedQL:         0x1,
-			expectedExtendedQL: synce.DEFAULT_QL,
+			expectedExtendedQL: synce.QL_DEFAULT_SSM,
 		},
 		{
 			output:             "synce4l[627602.593]: [synce4l.0.config] tx_rebuild_tlv: attached new extended TLV, EXT_QL=0xff on ens7f0",
@@ -184,7 +184,7 @@ func InitLogTestCase() {
 			expectedDevice:     nil,
 			expectedSource:     pointer.String("ens7f0"),
 			expectedExtSource:  nil,
-			expectedQL:         synce.DEFAULT_QL,
+			expectedQL:         synce.QL_DEFAULT_SSM,
 			expectedExtendedQL: 0xff,
 		},
 		{
@@ -193,8 +193,8 @@ func InitLogTestCase() {
 			expectedDevice:     pointer.String("synce1"),
 			expectedExtSource:  pointer.String("GNSS"),
 			expectedSource:     nil,
-			expectedQL:         synce.DEFAULT_QL,
-			expectedExtendedQL: synce.DEFAULT_QL,
+			expectedQL:         synce.QL_DEFAULT_SSM,
+			expectedExtendedQL: synce.QL_DEFAULT_SSM,
 		},
 		{
 			output:             "synce4l[627685.138]: [synce4l.0.config] act on EEC_LOCKED/EEC_LOCKED_HO_ACQ for ens7f0",
@@ -202,8 +202,8 @@ func InitLogTestCase() {
 			expectedExtSource:  nil,
 			expectedDevice:     nil,
 			expectedSource:     pointer.String("ens7f0"),
-			expectedQL:         synce.DEFAULT_QL,
-			expectedExtendedQL: synce.DEFAULT_QL,
+			expectedQL:         synce.QL_DEFAULT_SSM,
+			expectedExtendedQL: synce.QL_DEFAULT_SSM,
 		},
 	}
 

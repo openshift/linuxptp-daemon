@@ -1251,18 +1251,18 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 			sDeviceConfig.LastClockState = state
 			extraValue[event.EEC_STATE] = *logEntry.State
 		}
-	} else if logEntry.State == nil && logEntry.Source != nil && (logEntry.QL != synce.DEFAULT_QL || logEntry.ExtQl != synce.DEFAULT_QL) {
+	} else if logEntry.State == nil && logEntry.Source != nil && (logEntry.QL != synce.QL_DEFAULT_SSM || logEntry.ExtQl != synce.QL_DEFAULT_SSM) {
 		if sDeviceConfig := p.SyncEDeviceByInterface(*logEntry.Source); sDeviceConfig != nil {
 			iface = *logEntry.Source
 			// now decide on clock quality
-			if sDeviceConfig.ExtendedTlv == 0 && logEntry.QL != synce.DEFAULT_QL {
+			if sDeviceConfig.ExtendedTlv == synce.ExtendedTLV_DISABLED && logEntry.QL != synce.QL_DEFAULT_SSM {
 				extraValue[event.DEVICE] = sDeviceConfig.Name
 				extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
 				extraValue[event.QL] = logEntry.QL
 				sDeviceConfig.LastQLState[*logEntry.Source] = &synce.QualityLevelInfo{
 					Priority:    0,
 					SSM:         logEntry.QL,
-					ExtendedSSM: synce.DEFAULT_EXTQL,
+					ExtendedSSM: synce.QL_DEFAULT_ENHSSM,
 				}
 				clockQuality, _ = sDeviceConfig.ClockQuality(synce.QualityLevelInfo{
 					Priority:    0,
@@ -1271,21 +1271,22 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 				})
 				state = sDeviceConfig.LastClockState
 				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", logEntry.QL)
-				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.DEFAULT_EXTQL)
-				UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.DEFAULT_EXTQL))
+				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.QL_DEFAULT_ENHSSM)
+				UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.QL_DEFAULT_ENHSSM))
 
-			} else if sDeviceConfig.ExtendedTlv == 1 {
+			} else if sDeviceConfig.ExtendedTlv == synce.ExtendedTLV_ENABLED {
 				var lastQLState *synce.QualityLevelInfo
 				var ok bool
 				iface = *logEntry.Source
-				if lastQLState, ok = sDeviceConfig.LastQLState[*logEntry.Source]; !ok {
-					clockQuality, _ = sDeviceConfig.ClockQuality(synce.QualityLevelInfo{
+				if lastQLState, ok = sDeviceConfig.LastQLState[*logEntry.Source]; !ok || lastQLState == nil {
+					lastQLState = &synce.QualityLevelInfo{
 						Priority:    0,
 						SSM:         logEntry.QL,
 						ExtendedSSM: logEntry.ExtQl,
-					})
+					}
+					sDeviceConfig.LastQLState[*logEntry.Source] = lastQLState
 				}
-				if lastQLState.SSM != synce.DEFAULT_QL && logEntry.ExtQl != synce.DEFAULT_QL { // then have both ql
+				if lastQLState.SSM != synce.QL_DEFAULT_SSM && logEntry.ExtQl != synce.QL_DEFAULT_SSM { // then have both ql
 					extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
 					extraValue[event.DEVICE] = sDeviceConfig.Name
 					extraValue[event.EXT_QL] = logEntry.ExtQl
@@ -1301,7 +1302,7 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 					UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(lastQLState.SSM)+int(logEntry.ExtQl))
 
 					state = sDeviceConfig.LastClockState
-				} else if logEntry.QL != synce.DEFAULT_QL { //else we have only QL
+				} else if logEntry.QL != synce.QL_DEFAULT_SSM { //else we have only QL
 					lastQLState.SSM = logEntry.QL // wait for extTlv
 				}
 			}
