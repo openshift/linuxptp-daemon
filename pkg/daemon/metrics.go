@@ -178,7 +178,7 @@ var (
 			Namespace: PTPNamespace,
 			Subsystem: PTPSubsystem,
 			Name:      "synce_clock_quality",
-			Help:      "network_option1: ePRTC = 32 PRTC = 34 PRC =257  SSU-A = 259 SSU-B = 263 EEC1 = 266 network_option2: ePRTC = 34 PRTC = 33 PRS =256 STU = 255 ST2 = 262 TNC = 259 ST3E =268 EEC2 =265 PROV =269",
+			Help:      "Help: network_option1: ePRTC = 32 PRTC = 34 PRC =257  SSU-A = 259 SSU-B = 263 EEC1 = 266 QL-DNU =270 network_option2: ePRTC = 34 PRTC = 33 PRS =256 STU = 255 ST2 = 262 TNC = 259 ST3E =268 EEC2 =265 PROV =269 QL-DUS =270",
 		}, []string{"process", "node", "profile", "network_option", "iface", "device"})
 
 	// SynceQLInfo metrics to show current QL values
@@ -187,8 +187,8 @@ var (
 			Namespace: PTPNamespace,
 			Subsystem: PTPSubsystem,
 			Name:      "synce_ssm_ql",
-			Help: "network_option1: ePRTC: {0, 0x2, 0x21}, PRTC:  {1, 0x2, 0x20}, PRC:   {2, 0x2, 0xFF}, SSUA:  {3, 0x4, 0xFF}, SSUB:  {4, 0x8, 0xFF}, EEC1:  {5, 0xB, 0xFF},\n " +
-				"   network_option2 ePRTC: {0, 0x1, 0x21}, PRTC:  {1, 0x1, 0x20}, PRS:   {2, 0x1, 0xFF}, STU:   {3, 0x0, 0xFF}, ST2:   {4, 0x7, 0xFF}, TNC:   {5, 0x4, 0xFF}, ST3E:  {6, 0xD, 0xFF}, EEC2:  {7, 0xA, 0xFF}, PROV:  {8, 0xE, 0xFF}",
+			Help: "network_option1: ePRTC: {0, 0x2, 0x21}, PRTC:  {1, 0x2, 0x20}, PRC:   {2, 0x2, 0xFF}, SSUA:  {3, 0x4, 0xFF}, SSUB:  {4, 0x8, 0xFF}, EEC1:  {5, 0xB, 0xFF},QL-DNU: {6,0xF,0xFF}\n " +
+				"   network_option2 ePRTC: {0, 0x1, 0x21}, PRTC:  {1, 0x1, 0x20}, PRS:   {2, 0x1, 0xFF}, STU:   {3, 0x0, 0xFF}, ST2:   {4, 0x7, 0xFF}, TNC:   {5, 0x4, 0xFF}, ST3E:  {6, 0xD, 0xFF}, EEC2:  {7, 0xA, 0xFF}, PROV:  {8, 0xE, 0xFF}, QL-DUS: {9,0xF,0xFF}",
 		}, []string{"process", "node", "profile", "network_option", "iface", "device", "ql_type"})
 )
 

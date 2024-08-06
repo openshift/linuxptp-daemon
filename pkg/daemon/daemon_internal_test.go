@@ -79,6 +79,7 @@ func testRequirements(t *testing.T, profile *ptpv1.PtpProfile) {
 				assert.NotEqual(t, id, clk)
 			} else {
 				assert.NotEqual(t, "0", clk)
+				assert.NotEqual(t, "", clk)
 			}
 		}
 	}
@@ -90,6 +91,7 @@ func Test_applyProfile_synce(t *testing.T) {
 		"testdata/synce-profile-custom-id.yaml",
 		"testdata/synce-profile-bad-order.yaml",
 		"testdata/synce-profile-no-ifaces.yaml",
+		"testdata/synce-follower-profile.yaml",
 	}
 	for i := range len(testDataFiles) {
 		mkPath(t)
