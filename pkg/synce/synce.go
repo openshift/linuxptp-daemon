@@ -300,7 +300,6 @@ func (r *Relations) AddClockIds(ptpSettings map[string]string) {
 					d.Name)
 			}
 		}
-		return
 	}
 }
 

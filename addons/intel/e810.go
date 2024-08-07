@@ -79,6 +79,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	var err error
 	var optsByteArray []byte
 	var stdout []byte
+	var pinPath string
 
 	e810Opts.EnableDefaultConfig = false
 
@@ -114,8 +115,13 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 						glog.Error("e810 failed to read " + deviceDir + ": " + err.Error())
 						continue
 					}
+
 					for _, phc := range phcs {
-						pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
+						if strings.HasPrefix(pin, "SDP") {
+							pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/period", device, phc.Name())
+						} else {
+							pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
+						}
 						glog.Infof("echo %s > %s", value, pinPath)
 						err = os.WriteFile(pinPath, []byte(value), 0666)
 						if err != nil {
