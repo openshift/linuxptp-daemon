@@ -130,7 +130,6 @@ func main() {
 		&refreshNodePtpDevice,
 		closeProcessManager,
 		cp.pmcPollInterval,
-		lm,
 	).Run()
 
 	tickerPull := time.NewTicker(time.Second * time.Duration(cp.updateInterval))
