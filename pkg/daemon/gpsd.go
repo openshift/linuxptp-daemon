@@ -13,6 +13,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/event"
+	"github.com/openshift/linuxptp-daemon/pkg/leap"
 	"github.com/openshift/linuxptp-daemon/pkg/ublox"
 	gpsdlib "github.com/stratoberry/go-gpsd"
 )
@@ -43,6 +44,7 @@ type GPSD struct {
 	subscriber           *GPSDSubscriber
 	monitorCtx           context.Context
 	monitorCancel        context.CancelFunc
+	leapManager          *leap.LeapManager
 }
 
 // GPSDSubscriber ... event subscriber
@@ -202,6 +204,7 @@ func (g *GPSD) CmdRun(stdoutToSocket bool) {
 // MonitorGNSSEventsWithUblox ... monitor GNSS events with ublox
 func (g *GPSD) MonitorGNSSEventsWithUblox() {
 	//var ublx *ublox.UBlox
+	const timeLsResultLines = 4
 	g.state = event.PTP_FREERUN
 	ticker := time.NewTicker(GNSSMONITOR_INTERVAL)
 	doneFn := func() {
@@ -230,10 +233,12 @@ retry:
 		nStatus := int64(0)
 		nOffset := int64(99999999)
 		missedTickers := 0
+		var timeLs *ublox.TimeLs
 		for {
 			select {
 			case <-ticker.C:
 				emptyCount := 0
+				timeLs = nil
 				for {
 					//UbloxPollInit only initializes if not running
 					ublx.UbloxPollInit()
@@ -250,6 +255,15 @@ retry:
 						nStatus = ublox.ExtractNavStatus(nextLine)
 						emptyCount = 0
 						missedTickers = 0
+					} else if strings.Contains(output, "UBX-NAV-TIMELS") {
+						emptyCount = 0
+						missedTickers = 0
+						var lines []string
+						for i := 0; i < timeLsResultLines; i++ {
+							line := ublx.UbloxPollPull()
+							lines = append(lines, line)
+						}
+						timeLs = ublox.ExtractLeapSec(lines)
 					} else if len(output) == 0 {
 						emptyCount++
 					}
@@ -261,9 +275,17 @@ retry:
 						}
 						break
 					}
-				}
+				} // loop ends
 				g.offset = nOffset
 				g.sourceLost = false
+				if timeLs != nil {
+					select {
+					case g.leapManager.UbloxLsInd <- *timeLs:
+					case <-time.After(100 * time.Millisecond):
+						glog.Infof("failied to send leap event updates")
+					}
+				}
+
 				switch nStatus >= 3 {
 				case true:
 					g.state = event.PTP_LOCKED
