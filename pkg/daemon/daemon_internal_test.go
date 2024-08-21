@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bigkevmcd/go-configparser"
 	"github.com/openshift/linuxptp-daemon/pkg/leap"
@@ -42,7 +43,8 @@ func clean(t *testing.T) {
 func applyProfileSyncE(t *testing.T, profile *ptpv1.PtpProfile) {
 
 	stopCh := make(<-chan struct{})
-	mockLeap()
+	err := mockLeap()
+	assert.NoError(t, err)
 	dn := New(
 		"test-node-name",
 		"openshift-ptp",
@@ -60,8 +62,9 @@ func applyProfileSyncE(t *testing.T, profile *ptpv1.PtpProfile) {
 		30,
 	)
 	assert.NotNil(t, dn)
-	err := dn.applyNodePtpProfile(0, profile)
+	err = dn.applyNodePtpProfile(0, profile)
 	assert.NoError(t, err)
+	time.Sleep(time.Second)
 	close(leap.LeapMgr.Close)
 
 }

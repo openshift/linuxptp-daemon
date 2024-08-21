@@ -12,6 +12,7 @@ require (
 	github.com/mdlayher/netlink v1.7.2
 	github.com/openshift/ptp-operator v0.0.0-20240623153039-2f8235d2dad8
 	github.com/prometheus/client_golang v1.16.0
+	github.com/sirupsen/logrus v1.9.0
 	github.com/stratoberry/go-gpsd v1.1.0
 	github.com/stretchr/testify v1.8.2
 	golang.org/x/sync v0.2.0
@@ -62,7 +63,6 @@ require (
 	github.com/prometheus/client_model v0.4.0 // indirect
 	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
-	github.com/sirupsen/logrus v1.9.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/crypto v0.17.0 // indirect
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
