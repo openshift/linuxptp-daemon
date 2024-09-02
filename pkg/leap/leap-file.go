@@ -17,8 +17,10 @@ import (
 	"github.com/golang/glog"
 	"github.com/openshift/linuxptp-daemon/pkg/pmc"
 	"github.com/openshift/linuxptp-daemon/pkg/ublox"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	fake "k8s.io/client-go/kubernetes/fake"
 )
 
 const (
@@ -433,4 +435,25 @@ func (l *LeapManager) IsLeapInWindow(now time.Time, startOffset, endOffset time.
 		return true
 	}
 	return false
+}
+
+func MockLeapFile() error {
+	cm := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "openshift-ptp", Name: "leap-configmap"},
+		Data: map[string]string{
+			"test-node-name": `# Do not edit
+# This file is generated automatically by linuxptp-daemon
+#$	3927775672
+#@	4291747200
+3692217600     37    # 1 Jan 2017`,
+		},
+	}
+	os.Setenv("NODE_NAME", "test-node-name")
+	client := fake.NewSimpleClientset(cm)
+	lm, err := New(client, "openshift-ptp")
+	if err != nil {
+		return err
+	}
+	go lm.Run()
+	return nil
 }
