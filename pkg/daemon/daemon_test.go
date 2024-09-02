@@ -9,6 +9,7 @@ import (
 
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/daemon"
+	"github.com/openshift/linuxptp-daemon/pkg/leap"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -204,7 +205,8 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 func Test_ProcessPTPMetrics(t *testing.T) {
-
+	assert.NoError(t, leap.MockLeapFile())
+	defer close(leap.LeapMgr.Close)
 	assert := assert.New(t)
 	for _, tc := range testCases {
 		tc.node = MYNODE
