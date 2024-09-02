@@ -5,6 +5,7 @@ go 1.21
 require github.com/openshift/ptp-operator v0.0.0-20230207052655-ede9197d99ca
 
 require (
+	github.com/bigkevmcd/go-configparser v0.0.0-20240808124832-fc81059ea0bd
 	github.com/facebook/time v0.0.0-20230529151911-512b3b30ab23
 	github.com/golang/glog v1.0.0
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
@@ -19,6 +20,7 @@ require (
 	k8s.io/apimachinery v0.25.4
 	k8s.io/client-go v0.25.4
 	k8s.io/utils v0.0.0-20221012122500-cfd413dd9e85
+	sigs.k8s.io/yaml v1.3.0
 )
 
 require (
@@ -88,5 +90,4 @@ require (
 	sigs.k8s.io/controller-runtime v0.13.0 // indirect
 	sigs.k8s.io/json v0.0.0-20220713155537-f223a00ba0e2 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.2.3 // indirect
-	sigs.k8s.io/yaml v1.3.0 // indirect
 )
