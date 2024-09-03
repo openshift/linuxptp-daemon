@@ -96,7 +96,7 @@ spec:
             reportOutput: true
           - args:
               - "-p"
-              - "CFG-MSG,1,38,300"
+              - "CFG-MSG,1,38,248"
             reportOutput: true
     ts2phcOpts: " "
     ts2phcConf: |
