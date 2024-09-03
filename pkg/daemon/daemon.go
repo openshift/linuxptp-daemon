@@ -431,6 +431,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					output.gnss_serial_port = strings.TrimSpace(gnssSerialPort)
 					section.options["ts2phc.nmea_serialport"] = GPSPIPE_SERIALPORT
 				}
+				if _, ok := section.options["leapfile"]; ok || pProcess == ts2phcProcessName { // not required to check process if leapfile is always included
+					section.options["leapfile"] = fmt.Sprintf("%s/%s", config.DefaultLeapConfigPath, os.Getenv("NODE_NAME"))
+				}
 				output.sections[index] = section
 			}
 		}
@@ -477,6 +480,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			if e := mkFifo(); e != nil {
 				glog.Errorf("Error creating named pipe, GNSS monitoring will not work as expected %s", e.Error())
 			}
+
 			gpsDaemon := &GPSD{
 				name:        GPSD_PROCESSNAME,
 				execMutex:   sync.Mutex{},

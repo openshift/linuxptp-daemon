@@ -18,6 +18,7 @@ import (
 
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/daemon"
+	"github.com/openshift/linuxptp-daemon/pkg/leap"
 	ptpv1 "github.com/openshift/ptp-operator/api/v1"
 	ptpclient "github.com/openshift/ptp-operator/pkg/client/clientset/versioned"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -109,6 +110,14 @@ func main() {
 	hwconfigs := []ptpv1.HwConfig{}
 	refreshNodePtpDevice := true
 	closeProcessManager := make(chan bool)
+	lm, err := leap.New(kubeClient, daemon.PtpNamespace)
+	if err != nil {
+		glog.Error("failed to initialize Leap manager, ", err)
+		return
+	}
+	go lm.Run()
+
+	defer close(lm.Close)
 	go daemon.New(
 		nodeName,
 		daemon.PtpNamespace,

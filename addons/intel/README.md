@@ -94,6 +94,10 @@ spec:
               - "-p"
               - "MON-HW"
             reportOutput: true
+          - args:
+              - "-p"
+              - "CFG-MSG,1,38,248"
+            reportOutput: true
     ts2phcOpts: " "
     ts2phcConf: |
       [nmea]
@@ -103,8 +107,7 @@ spec:
       verbose 1
       logging_level 7
       ts2phc.pulsewidth 100000000
-      ts2phc.nmea_serialport  /dev/ttyGNSS_1700_0
-      leapfile  /usr/share/zoneinfo/leap-seconds.list
+      ts2phc.nmea_serialport  /dev/gnss0
       [ens2f0]
       ts2phc.extts_polarity rising
       ts2phc.extts_correction 0
