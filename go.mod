@@ -5,13 +5,14 @@ go 1.22
 require (
 	github.com/bigkevmcd/go-configparser v0.0.0-20240624060122-ccd05f93a9d2
 	github.com/facebook/time v0.0.0-20230529151911-512b3b30ab23
-	github.com/golang/glog v1.0.0
+	github.com/golang/glog v1.1.0
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
 	github.com/jaypipes/ghw v0.12.0
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
 	github.com/openshift/ptp-operator v0.0.0-20240623153039-2f8235d2dad8
 	github.com/prometheus/client_golang v1.16.0
+	github.com/sirupsen/logrus v1.9.0
 	github.com/stratoberry/go-gpsd v1.1.0
 	github.com/stretchr/testify v1.8.2
 	golang.org/x/sync v0.2.0
@@ -62,7 +63,6 @@ require (
 	github.com/prometheus/client_model v0.4.0 // indirect
 	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
-	github.com/sirupsen/logrus v1.9.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/crypto v0.17.0 // indirect
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
@@ -75,7 +75,7 @@ require (
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20230525234030-28d5490b6b19 // indirect
-	google.golang.org/grpc v1.54.0 // indirect
+	google.golang.org/grpc v1.56.3 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
