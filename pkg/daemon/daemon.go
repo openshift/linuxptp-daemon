@@ -18,6 +18,7 @@ import (
 	"github.com/openshift/linuxptp-daemon/pkg/synce"
 
 	"github.com/openshift/linuxptp-daemon/pkg/config"
+
 	"github.com/openshift/linuxptp-daemon/pkg/dpll"
 	"github.com/openshift/linuxptp-daemon/pkg/leap"
 
@@ -492,6 +493,22 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 			messageTag = fmt.Sprintf("[ts2phc.%d.config:{level}]", runID)
 			leap.LeapMgr.SetPtp4lConfigPath(fmt.Sprintf("ptp4l.%d.config", runID))
+			//DPLL is considered to be running along with ts2phc
+			localMaxDpllHoldoverOffSet, timer := dpll.CalculateTimer(nodeProfile)
+			// update ts2phcOpts with the new config
+			if configOpts != nil && *configOpts != "" {
+				if !strings.Contains(*configOpts, "--ts2phc.holdover") {
+					*configOpts += " --ts2phc.holdover " + strconv.FormatInt(timer, 10)
+				}
+				if !strings.Contains(*configOpts, "--servo_offset_threshold") {
+					*configOpts += " --servo_offset_threshold " + strconv.FormatInt(localMaxDpllHoldoverOffSet, 10) // infinite threshold to prevent servo from running in s3 state when holdover is enabled
+					// there is a 5s delay in the NMEA driver, accepting pulses 5s after the last valid NMEA message, so that might need to be subtracted from that value
+					// need more testing to confirm
+				}
+				if !strings.Contains(*configOpts, "--servo_num_offset_values") { //if consecutive smaller offsets (less than the threshold) are not observed, the system stays in S2
+					*configOpts += " --servo_num_offset_values 10"
+				}
+			}
 		case syncEProcessName:
 			configOpts = nodeProfile.Synce4lOpts
 			configInput = nodeProfile.Synce4lConf
@@ -554,7 +571,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			for i := range ifaces {
 				ifaces[i].PhcId = ptpnetwork.GetPhcId(ifaces[i].Name)
 			}
-
 		}
 
 		if configInput != nil {
@@ -677,15 +693,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					// pass array of ifaces which has source + clockId -
 					// here we have multiple dpll objects identified by clock id
 					// depends on will be either PPS or  GNSS,
-					// ONLY the one with GNSS dependcy will go to HOLDOVER
+					// ONLY the one with GNSS dependency will go to HOLDOVER
 					dpllDaemon := dpll.NewDpll(clockId, localMaxHoldoverOffSet, localHoldoverTimeout,
 						maxInSpecOffset, iface.Name, eventSource, dpll.NONE, dn.GetPhaseOffsetPinFilter(nodeProfile))
 					glog.Infof("depending on %s", dpllDaemon.DependsOn())
 					dpllDaemon.CmdInit()
 					dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
 				}
-
 			}
+
 		}
 		err = os.WriteFile(configPath, []byte(configOutput), 0644)
 		if err != nil {
@@ -940,6 +956,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 
 // for ts2phc along with processing metrics need to identify event
 func (p *ptpProcess) processPTPMetrics(output string) {
+	state := event.PTP_FREERUN
 	if p.name == syncEProcessName {
 		configName := strings.Replace(strings.Replace(p.messageTag, "]", "", 1), "[", "", 1)
 		if configName == "" {
@@ -954,10 +971,10 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 		(strings.Contains(output, NMEASourceDisabledIndicator2) &&
 			(!leap.LeapMgr.IsLeapInWindow(time.Now().UTC(), -2*time.Second, time.Second)))) { //TODO identify which interface lost nmea or 1pps
 		iface := p.ifaces.GetGMInterface().Name
-		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]interface{}{event.NMEA_STATUS: int64(0)})
+		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, state, map[event.ValueType]interface{}{event.NMEA_STATUS: int64(0)})
 		glog.Error("nmea string lost") //TODO: add for 1pps lost
 	} else {
-		configName, source, ptpOffset, _, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
+		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
 			var values map[event.ValueType]interface{}
 			ifaceName := masterOffsetIface.getByAlias(configName, iface).name
@@ -967,7 +984,18 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 					values = map[event.ValueType]interface{}{event.NMEA_STATUS: int64(1)}
 				}
 			}
-			p.ProcessTs2PhcEvents(ptpOffset, source, ifaceName, values)
+			// ts2phc has to be handled differently since it announce holdover state when gnss is lost
+			//TODO: verify how 1pps is handled when lost
+			switch clockState {
+			case FREERUN:
+				state = event.PTP_FREERUN
+			case LOCKED:
+				state = event.PTP_LOCKED
+			case HOLDOVER:
+				state = event.PTP_HOLDOVER // consider s1 state as holdover,this passed to event to create metrics and events
+			}
+
+			p.ProcessTs2PhcEvents(ptpOffset, source, ifaceName, state, values)
 		}
 	}
 }
@@ -1019,14 +1047,16 @@ func (p *ptpProcess) MonitorEvent(offset float64, clockState string) {
 	// not implemented
 }
 
-func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string, extraValue map[event.ValueType]interface{}) {
+func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string, state event.PTPState, extraValue map[event.ValueType]interface{}) {
 	var ptpState event.PTPState
-	ptpState = event.PTP_FREERUN
+	ptpState = state
 	ptpOffsetInt64 := int64(ptpOffset)
-	if ptpOffsetInt64 <= p.ptpClockThreshold.MaxOffsetThreshold &&
+	// if state is HOLDOVER do not update the state
+	if state != event.PTP_HOLDOVER && state != event.PTP_FREERUN && ptpOffsetInt64 <= p.ptpClockThreshold.MaxOffsetThreshold &&
 		ptpOffsetInt64 >= p.ptpClockThreshold.MinOffsetThreshold {
 		ptpState = event.PTP_LOCKED
 	}
+
 	if source == ts2phcProcessName { // for ts2phc send it to event to create metrics and events
 		var values = make(map[event.ValueType]interface{})
 
@@ -1053,15 +1083,19 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 		}:
 		default:
 		}
+
 	} else {
 		if iface != "" && iface != clockRealTime {
 			r := []rune(iface)
 			iface = string(r[:len(r)-1]) + "x"
 		}
-		if ptpState == event.PTP_LOCKED {
+		switch ptpState {
+		case event.PTP_LOCKED:
 			updateClockStateMetrics(p.name, iface, LOCKED)
-		} else {
+		case event.PTP_FREERUN:
 			updateClockStateMetrics(p.name, iface, FREERUN)
+		case event.PTP_HOLDOVER:
+			updateClockStateMetrics(p.name, iface, HOLDOVER)
 		}
 	}
 }
@@ -1219,7 +1253,7 @@ func (p *ptpProcess) updateGMStatusOnProcessDown(process string) {
 	if process == ts2phcProcessName {
 		// ts2phc process dead should update GM-STATUS
 		iface := p.ifaces.GetGMInterface().Name
-		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]interface{}{event.PROCESS_STATUS: int64(0)})
+		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, event.PTP_FREERUN, map[event.ValueType]interface{}{event.PROCESS_STATUS: int64(0)})
 	}
 }
 

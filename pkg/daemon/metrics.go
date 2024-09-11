@@ -47,6 +47,8 @@ const (
 	LOCKED string = "LOCKED"
 	//FREERUN ...
 	FREERUN = "FREERUN"
+	// HOLDOVER
+	HOLDOVER = "HOLDOVER"
 )
 
 const (
@@ -412,6 +414,7 @@ func extractRegularMetrics(configName, processName, output string, ifaces config
 	// ts2phc.0.cfg  /dev/ptp0  master    offset          0 s2 freq      -0
 	// ts2phc.0.cfg  /dev/ptp4  master    offset          0 s2 freq      -0
 	// ts2phc.0.cfg  /dev/ptp4 offset          0 s2 freq      -0
+	// ts2phc.0.config /dev/ptp6 offset    0    s3 freq      +0 holdover
 	// (ts2phc.0.cfg  master  offset      0    s2 freq     -0)
 	if len(fields) < 7 {
 		return
@@ -472,10 +475,14 @@ func extractRegularMetrics(configName, processName, output string, ifaces config
 		clockState = FREERUN
 	case "s1":
 		clockState = FREERUN
-	case "s2":
+	case "s2", "s3":
 		clockState = LOCKED
 	default:
 		clockState = FREERUN
+	}
+	// TS@PHC has holdover state when it is out of sync
+	if processName == ts2phcProcessName && strings.Contains(output, "holdover") {
+		clockState = HOLDOVER
 	}
 
 	frequencyAdjustment, err = strconv.ParseFloat(fields[6], 64)

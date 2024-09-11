@@ -3,6 +3,7 @@ package dpll
 import (
 	"context"
 	"fmt"
+	ptpv1 "github.com/openshift/ptp-operator/api/v1"
 	"math"
 	"os"
 	"strconv"
@@ -734,7 +735,7 @@ func (d *DpllConfig) sendDpllEvent() {
 func (d *DpllConfig) MonitorDpllSysfs() {
 	defer func() {
 		if r := recover(); r != nil {
-			glog.Warning("Recovered from panic from MonitorDpll: ", r)
+			glog.Warning("Recovered from panic from Monitor DPLL: ", r)
 			// Handle the closed channel panic if necessary
 		}
 	}()
@@ -817,12 +818,16 @@ func (d *DpllConfig) holdover() {
 		select {
 		case <-ticker.C:
 			//calculate offset
+			// TODO: should we stop calculation if source is returned during holdover but not in spec (meaning offset are not within threshold and state is not locked)
+			// Ans : continue to calculate offset here and if source is returned and actual offset is within threshold then go to locked state and cancel this timer
 			d.phaseOffset = int64(math.Round((d.slope / 1000) * float64(time.Since(start).Seconds())))
 			glog.Infof("(%s) time since holdover start %f, offset %d nanosecond holdover %s", d.iface, float64(time.Since(start).Seconds()), d.phaseOffset, strconv.FormatBool(d.onHoldover))
 			d.sendDpllEvent()
 			if !d.isLocalOffsetInRange() { // when holdover verify with local max holdover not with regular threshold
 				glog.Infof("offset is out of range: %v, max %v",
 					d.phaseOffset, d.LocalMaxHoldoverOffSet)
+				//TODO: Vitaly what should be the state here? should we go to freerun or stay in holdover
+				// I  think this is outof spec so we should go to freerun
 				return
 			}
 		case <-timeout:
@@ -904,4 +909,29 @@ func (d *DpllConfig) sysfs(iface string) (phaseState, frequencyState, phaseOffse
 		phaseOffset /= 100 // Convert to nanoseconds from tens of picoseconds (divide by 100)
 	}
 	return phaseState, frequencyState, phaseOffset
+}
+
+func CalculateTimer(nodeProfile *ptpv1.PtpProfile) (int64, int64) {
+	var localMaxHoldoverOffSet uint64 = LocalMaxHoldoverOffSet
+	var localHoldoverTimeout uint64 = LocalHoldoverTimeout
+	var maxInSpecOffset uint64 = MaxInSpecOffset
+
+	for k, v := range (*nodeProfile).PtpSettings {
+		i, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			continue
+		}
+		if k == LocalMaxHoldoverOffSetStr {
+			localMaxHoldoverOffSet = i
+		}
+		if k == LocalHoldoverTimeoutStr {
+			localHoldoverTimeout = i
+		}
+		if k == MaxInSpecOffsetStr {
+			maxInSpecOffset = i
+		}
+	}
+	slope := float64(localMaxHoldoverOffSet) / float64(localHoldoverTimeout) * 1000.0
+	timer := int64(math.Round(float64(maxInSpecOffset) * 1000 / slope))
+	return int64(localMaxHoldoverOffSet), timer
 }
