@@ -2,6 +2,7 @@ package event
 
 import (
 	"fmt"
+	"github.com/openshift/linuxptp-daemon/pkg/debug"
 	"net"
 	"sort"
 	"strconv"
@@ -117,6 +118,11 @@ const (
 // PTPState ...
 type PTPState string
 
+// Summary of States:
+// State	Description	Action Taken	Synchronization Status
+// S0	Unlocked	The clock is not synchronized to any source	Free-running, no sync
+// S1	Clock Step	A large time step is applied to synchronize	Large time offset detected, step adjustment made
+// S2/s3	Locked	The clock is synchronized and making small frequency adjustments to stay aligned	Synchronized, making small adjustments
 const (
 
 	// PTP_FREERUN ...
@@ -368,12 +374,18 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 				e.gmSyncState[cfgName].state = PTP_LOCKED
 				// T-GM connected to a PRTC in locked mode (e.g., PRTC traceable to GNSS)
 				e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass6
+			case PTP_HOLDOVER:
+				e.gmSyncState[cfgName].state = PTP_HOLDOVER
+				e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass7
 			}
 		case PTP_FREERUN:
 			if gnssSrcLost {
 				switch ts2phcState {
 				case PTP_LOCKED, PTP_FREERUN:
-					// stay with last GM state and wait for DPLL to move to HOLDOVER
+				// stay with last GM state and wait for DPLL to move to HOLDOVER
+				case PTP_HOLDOVER:
+					e.gmSyncState[cfgName].state = PTP_HOLDOVER
+					e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass7
 				}
 			} else {
 				switch ts2phcState {
@@ -396,14 +408,20 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 				e.gmSyncState[cfgName].state = PTP_LOCKED
 				// T-GM connected to a PRTC in locked mode (e.g., PRTC traceable to GNSS)
 				e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass6
+			case PTP_HOLDOVER:
+				e.gmSyncState[cfgName].state = PTP_HOLDOVER
+				e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass7 //TODO: check if this is correct
 			}
 		case PTP_FREERUN:
 			switch ts2phcState {
-			case PTP_FREERUN, PTP_LOCKED:
+			case PTP_FREERUN, PTP_LOCKED, PTP_UNKNOWN, PTP_NOTSET: // when GNSS is lost ts2phc will stop printng and will wait to move to HOLDOVER
 				e.gmSyncState[cfgName].state = PTP_FREERUN
 				e.gmSyncState[cfgName].clockClass = protocol.ClockClassFreerun
+			case PTP_HOLDOVER: // if holdover is detected then wait for ts2phc to move to HOLDOVER
+				e.gmSyncState[cfgName].state = PTP_HOLDOVER
+				e.gmSyncState[cfgName].clockClass = fbprotocol.ClockClass7 //TODO: check if this is correct
 			}
-		default:
+		default: // bad case
 			e.gmSyncState[cfgName].state = ts2phcState
 			switch ts2phcState {
 			case PTP_FREERUN:
@@ -597,6 +615,7 @@ connect:
 			// ts2phc[123455]:[ts2phc.0.config] 12345 s0 offset/gps
 			// replace ts2phc logs here
 			if event.Reset { // clean up
+				debug.ClearState() // clear any state data used for debug
 				if event.ProcessName == TS2PHC {
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName) // this will delete all index
@@ -629,12 +648,25 @@ connect:
 				// Update the in MemData
 				dataDetails := e.addEvent(event)
 				logDataValues = dataDetails.logData
-
 				if event.WriteToLog && logDataValues != "" {
 					logOut = append(logOut, logDataValues)
 				}
 				// Computes GM state
 				gmState := e.updateGMState(event.CfgName)
+				// only if config has this special name
+				d := e.GetData(event.CfgName, event.ProcessName)
+
+				switch event.ProcessName {
+				case GNSS:
+					debug.UpdateGNSSState(string(event.State), event.Values[OFFSET])
+				case DPLL:
+					debug.UpdateDPLLState(string(event.State), event.Values[OFFSET], event.IFace)
+					debug.UpdateDPLLState(string(d.State), 0, debug.OverallDpllKey)
+				case TS2PHC:
+					debug.UpdateTs2phcState(string(event.State), event.Values[OFFSET], event.IFace)
+					debug.UpdateTs2phcState(string(d.State), 0, debug.OverallTs2phcKey)
+				}
+				debug.UpdateGMState(string(gmState.state))
 
 				if gmState.gmLog != "" && gmState.gmIFace != GM_INTERFACE_UNKNOWN {
 					logOut = append(logOut, gmState.gmLog)
@@ -662,6 +694,7 @@ connect:
 
 				if uint8(gmState.clockClass) != uint8(e.clockClass) {
 					glog.Infof("clock class change request from %d to %d", uint8(e.clockClass), uint8(gmState.clockClass))
+					debug.UpdateClockClass(uint8(gmState.clockClass))
 					go func() {
 						select {
 						case clockClassRequestCh <- ClockClassRequest{
