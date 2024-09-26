@@ -144,13 +144,12 @@ func ParseDeviceReplies(msgs []genetlink.Message) ([]*DoDeviceGetReply, error) {
 			case DPLL_A_MODE:
 				//reply.Mode = ad.Uint32()
 			case DPLL_A_MODE_SUPPORTED:
-				// do we need it? if yes, ModeSupported should be a slice
-				// reply.ModeSupported = ad.Uint32()
+				// reply.ModeSupported = append(reply.ModeSupported, ad.Uint32())
 			case DPLL_A_LOCK_STATUS:
 				reply.LockStatus = ad.Uint32()
 			case DPLL_A_PAD:
 			case DPLL_A_TEMP:
-				// TODO: field "reply.Temp", type "s32"
+				reply.Temp = ad.Int32()
 			case DPLL_A_CLOCK_ID:
 				reply.ClockId = ad.Uint64()
 			case DPLL_A_TYPE:
@@ -458,4 +457,35 @@ type PinParentDevice struct {
 type PinParentPin struct {
 	ParentId uint32
 	State    uint32
+}
+
+// PinPhaseAdjustRequest is used with PinPhaseAdjust method.
+type PinPhaseAdjustRequest struct {
+	Id          uint32
+	PhaseAdjust int32
+}
+
+// PinPhaseAdjust wraps the "pin-set" operation:
+// Set PhaseAdjust of a target pin
+func (c *Conn) PinPhaseAdjust(req PinPhaseAdjustRequest) error {
+	ae := netlink.NewAttributeEncoder()
+	ae.Uint32(DPLL_A_PIN_ID, req.Id)
+	ae.Int32(DPLL_A_PIN_PHASE_ADJUST, req.PhaseAdjust)
+
+	b, err := ae.Encode()
+	if err != nil {
+		return err
+	}
+
+	msg := genetlink.Message{
+		Header: genetlink.Header{
+			Command: DPLL_CMD_PIN_SET,
+			Version: c.f.Version,
+		},
+		Data: b,
+	}
+
+	// No replies.
+	_, err = c.c.Send(msg, c.f.ID, netlink.Request)
+	return err
 }

@@ -23,6 +23,7 @@ type E810Opts struct {
 	DevicePins          map[string]map[string]string `json:"pins"`
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
+	InputDelays         []InputPhaseDelays           `json:"interconnections"`
 }
 
 type E810UblxCmds struct {
@@ -100,6 +101,9 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			if err != nil {
 				glog.Error("e810 failed to unmarshal opts: " + err.Error())
 			}
+			// for unit testing only, PtpSettings may include "unitTest" key. The value is
+			// the path where resulting configuration files will be written, instead of /var/run
+			_, unitTest := (*nodeProfile).PtpSettings["unitTest"]
 			if e810Opts.EnableDefaultConfig {
 				stdout, _ = exec.Command("/usr/bin/bash", "-c", EnableE810PTPConfig).Output()
 				glog.Infof(string(stdout))
@@ -109,37 +113,45 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			}
 			for device, pins := range e810Opts.DevicePins {
 				dpllClockIdStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				// for unit testing only, PtpSettings may include "unitTest" key. The value is
-				// the path where resulting configuration files will be written, instead of /var/run
-				if _, found := (*nodeProfile).PtpSettings["unitTest"]; found {
+				if unitTest {
 					buf := make([]byte, 8)
 					rand.Read(buf)
 					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(binary.LittleEndian.Uint64(buf), 10)
 				} else {
 					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getClockIdE810(device), 10)
-				}
-				for pin, value := range pins {
-					deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
-					phcs, err := os.ReadDir(deviceDir)
-					if err != nil {
-						glog.Error("e810 failed to read " + deviceDir + ": " + err.Error())
-						continue
-					}
-
-					for _, phc := range phcs {
-						if strings.HasPrefix(pin, "SDP") {
-							pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/period", device, phc.Name())
-						} else {
-							pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
-						}
-						glog.Infof("echo %s > %s", value, pinPath)
-						err = os.WriteFile(pinPath, []byte(value), 0666)
+					for pin, value := range pins {
+						deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
+						phcs, err := os.ReadDir(deviceDir)
 						if err != nil {
-							glog.Error("e810 failed to write " + value + " to " + pinPath + ": " + err.Error())
+							glog.Error("e810 failed to read " + deviceDir + ": " + err.Error())
+							continue
+						}
+
+						for _, phc := range phcs {
+							if strings.HasPrefix(pin, "SDP") {
+								pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/period", device, phc.Name())
+							} else {
+								pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
+							}
+							glog.Infof("echo %s > %s", value, pinPath)
+							err = os.WriteFile(pinPath, []byte(value), 0666)
+							if err != nil {
+								glog.Error("e810 failed to write " + value + " to " + pinPath + ": " + err.Error())
+							}
 						}
 					}
 				}
 			}
+
+			comps, err := findDelayCompensation(e810Opts, nodeProfile)
+			if err != nil {
+				glog.Errorf("fail to get delay compensations, %s", err)
+			}
+			err = sendDelayCompensation(comps)
+			if err != nil {
+				glog.Errorf("fail to send delay compensations, %s", err)
+			}
+
 			for k, v := range e810Opts.DpllSettings {
 				if _, ok := (*nodeProfile).PtpSettings[k]; !ok {
 					(*nodeProfile).PtpSettings[k] = strconv.FormatUint(v, 10)
