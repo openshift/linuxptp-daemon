@@ -217,9 +217,9 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 	}
 	StateRegisterer = NewStateNotifier()
 	return ptpEvent
-
 }
 
+// GetLogData ... get log data for event
 func (e *EventChannel) GetLogData() string {
 	logData := make([]string, 0, len(e.Values))
 	for k, v := range e.Values {
@@ -507,7 +507,7 @@ func (e *EventHandler) toString() string {
 	// update if DPLL holdover is out of spec
 	out := strings.Builder{}
 	for cfgName, eData := range e.data {
-		out.WriteString("  data key : " + string(cfgName) + "\r\n")
+		out.WriteString("  data key : " + cfgName + "\r\n")
 		for _, data := range eData {
 			out.WriteString("  state: " + string(data.State) + "\r\n")
 			out.WriteString("  process name: " + string(data.ProcessName) + "\r\n")
@@ -519,8 +519,8 @@ func (e *EventHandler) toString() string {
 				}
 				out.WriteString("  signal source: " + string(dataDetails.signalSource) + "\r\n")
 				out.WriteString("  details state: " + string(dataDetails.State) + "\r\n")
-				out.WriteString("  log: " + string(dataDetails.logData) + "\r\n")
-				out.WriteString("  iface: " + string(dataDetails.IFace) + "\r\n")
+				out.WriteString("  log: " + dataDetails.logData + "\r\n")
+				out.WriteString("  iface: " + dataDetails.IFace + "\r\n")
 				out.WriteString("  source lost : " + strconv.FormatBool(dataDetails.sourceLost) + "\r\n")
 			}
 			out.WriteString("-----\r\n")
@@ -825,8 +825,7 @@ func (e *EventHandler) GetPTPState(source EventSource, cfgName string) PTPState 
 
 // UpdateClockStateMetrics ...
 func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace string) {
-	labels := prometheus.Labels{}
-	labels = prometheus.Labels{
+	labels := prometheus.Labels{
 		"process": process, "node": e.nodeName, "iface": iFace}
 	if state == PTP_LOCKED {
 		e.clockMetric.With(labels).Set(1)
@@ -908,10 +907,9 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 			s.Labels = map[string]string{"from": pName, "node": e.nodeName,
 				"process": string(process), "iface": iface}
 			s.Value = dataValue
-			d.Metrics[dataType].GaugeMetric.With(s.Labels).Set(dataValue)
+			d.Metrics[dataType].GaugeMetric.With(s.Labels).Set(s.Value)
 		}
 	}
-
 }
 
 func registerMetrics(m *prometheus.GaugeVec) {

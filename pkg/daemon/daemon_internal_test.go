@@ -3,6 +3,10 @@ package daemon
 // This tests daemon private functions
 
 import (
+	"fmt"
+	"github.com/openshift/linuxptp-daemon/pkg/config"
+	"github.com/openshift/linuxptp-daemon/pkg/dpll"
+	"github.com/openshift/linuxptp-daemon/pkg/event"
 	"os"
 	"strings"
 	"testing"
@@ -125,4 +129,22 @@ func mockLeap() error {
 	}
 	go lm.Run()
 	return nil
+}
+func TestDependencyMapWithGnssOrPpsSources(t *testing.T) {
+	ifaces := config.IFaces{
+		{Name: "eth0", Source: event.GNSS},
+		{Name: "eth1", Source: event.PPS},
+	}
+	ptpProfile := &ptpv1.PtpProfile{
+		PtpSettings: map[string]string{
+			fmt.Sprintf("%s[%s]", dpll.ClockIdStr, "eth0"): "12345",
+			fmt.Sprintf("%s[%s]", dpll.ClockIdStr, "eth1"): "67890",
+		},
+	}
+	process := &ptpProcess{name: ts2phcProcessName, ifaces: ifaces}
+	deps := process.BuildDependencyMap(ptpProfile)
+
+	if !deps[GPSD_PROCESSNAME] || !deps[GPSPIPE_PROCESSNAME] {
+		t.Errorf("Expected GPSD and GPSPIPE processes to be dependencies")
+	}
 }

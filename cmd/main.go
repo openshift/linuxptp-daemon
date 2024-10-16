@@ -80,7 +80,7 @@ func main() {
 	// The name of NodePtpDevice CR for this node is equal to the node name
 	var stdoutToSocket = false
 	if val, ok := os.LookupEnv("LOGS_TO_SOCKET"); ok && val != "" {
-		if ret, err := strconv.ParseBool(val); err == nil {
+		if ret, err2 := strconv.ParseBool(val); err2 == nil {
 			stdoutToSocket = ret
 		}
 	}
@@ -154,12 +154,12 @@ func main() {
 			}
 
 			nodeProfile := filepath.Join(cp.profileDir, nodeName)
-			if _, err := os.Stat(nodeProfile); err != nil {
-				if os.IsNotExist(err) {
+			if _, err2 := os.Stat(nodeProfile); err2 != nil {
+				if os.IsNotExist(err2) {
 					glog.Infof("ptp profile doesn't exist for node: %v", nodeName)
 					continue
 				} else {
-					glog.Errorf("error stating node profile %v: %v", nodeName, err)
+					glog.Errorf("error stating node profile %v: %v", nodeName, err2)
 					continue
 				}
 			}

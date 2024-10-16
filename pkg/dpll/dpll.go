@@ -20,13 +20,13 @@ import (
 )
 
 const (
-	DPLL_UNKNOWN       = -1
-	DPLL_INVALID       = 0
-	DPLL_FREERUN       = 1
-	DPLL_LOCKED        = 2
-	DPLL_LOCKED_HO_ACQ = 3
-	DPLL_HOLDOVER      = 4
-
+	DPLL_UNKNOWN           = -1
+	DPLL_INVALID           = 0
+	DPLL_FREERUN           = 1
+	DPLL_LOCKED            = 2
+	DPLL_LOCKED_HO_ACQ     = 3
+	DPLL_HOLDOVER          = 4
+	DPLL_PROCESSNAME       = "dpll"
 	LocalMaxHoldoverOffSet = 1500  //ns
 	LocalHoldoverTimeout   = 14400 //secs
 	MaxInSpecOffset        = 100   //ns
@@ -232,18 +232,12 @@ func (d *DpllConfig) ExitCh() chan struct{} {
 
 // ExitCh ... exit channel
 func (d *DpllConfig) hasGNSSAsSource() bool {
-	if d.dependsOn[0] == event.GNSS {
-		return true
-	}
-	return false
+	return d.dependsOn[0] == event.GNSS
 }
 
 // ExitCh ... exit channel
 func (d *DpllConfig) hasPPSAsSource() bool {
-	if d.dependsOn[0] == event.PPS {
-		return true
-	}
-	return false
+	return d.dependsOn[0] == event.PPS
 }
 
 // CmdStop ... stop command
@@ -820,8 +814,8 @@ func (d *DpllConfig) holdover() {
 			//calculate offset
 			// TODO: should we stop calculation if source is returned during holdover but not in spec (meaning offset are not within threshold and state is not locked)
 			// Ans : continue to calculate offset here and if source is returned and actual offset is within threshold then go to locked state and cancel this timer
-			d.phaseOffset = int64(math.Round((d.slope / 1000) * float64(time.Since(start).Seconds())))
-			glog.Infof("(%s) time since holdover start %f, offset %d nanosecond holdover %s", d.iface, float64(time.Since(start).Seconds()), d.phaseOffset, strconv.FormatBool(d.onHoldover))
+			d.phaseOffset = int64(math.Round((d.slope / 1000) * time.Since(start).Seconds()))
+			glog.Infof("(%s) time since holdover start %f, offset %d nanosecond holdover %s", d.iface, time.Since(start).Seconds(), d.phaseOffset, strconv.FormatBool(d.onHoldover))
 			d.sendDpllEvent()
 			if !d.isLocalOffsetInRange() { // when holdover verify with local max holdover not with regular threshold
 				glog.Infof("offset is out of range: %v, max %v",
@@ -934,4 +928,22 @@ func CalculateTimer(nodeProfile *ptpv1.PtpProfile) (int64, int64) {
 	slope := float64(localMaxHoldoverOffSet) / float64(localHoldoverTimeout) * 1000.0
 	timer := int64(math.Round(float64(maxInSpecOffset) * 1000 / slope))
 	return int64(localMaxHoldoverOffSet), timer
+}
+
+// CheckDpllAvailable checks if DPLL is available
+func CheckDpllAvailable(clockId uint64) bool {
+	if conn, dialErr := nl.Dial(nil); dialErr == nil {
+		if devices, err := conn.DumpDeviceGet(); err == nil {
+			defer func(conn *nl.Conn) {
+				_ = conn.Close()
+			}(conn)
+			// add to check clock id
+			for _, reply := range devices {
+				if reply.ClockId == clockId {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

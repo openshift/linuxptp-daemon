@@ -1,6 +1,6 @@
 // Description: DPLL subsystem.
 
-package dpll_netlink
+package dpllnetlink
 
 import (
 	"errors"
@@ -88,9 +88,9 @@ func (c *Conn) DoDeviceIdGet(req DoDeviceIdGetRequest) (*DoDeviceIdGetReply, err
 
 	replies := make([]*DoDeviceIdGetReply, 0, len(msgs))
 	for _, m := range msgs {
-		ad, err := netlink.NewAttributeDecoder(m.Data)
-		if err != nil {
-			return nil, err
+		ad, err2 := netlink.NewAttributeDecoder(m.Data)
+		if err2 != nil {
+			return nil, err2
 		}
 
 		var reply DoDeviceIdGetReply
@@ -101,8 +101,8 @@ func (c *Conn) DoDeviceIdGet(req DoDeviceIdGetRequest) (*DoDeviceIdGetReply, err
 			}
 		}
 
-		if err := ad.Err(); err != nil {
-			return nil, err
+		if err3 := ad.Err(); err3 != nil {
+			return nil, err3
 		}
 
 		replies = append(replies, &reply)
@@ -127,6 +127,7 @@ type DoDeviceIdGetReply struct {
 	Id uint32
 }
 
+// ParseDeviceReplies  parses netlink messages into DoDeviceGetReply structs.
 func ParseDeviceReplies(msgs []genetlink.Message) ([]*DoDeviceGetReply, error) {
 	replies := make([]*DoDeviceGetReply, 0, len(msgs))
 	for _, m := range msgs {
@@ -159,8 +160,8 @@ func ParseDeviceReplies(msgs []genetlink.Message) ([]*DoDeviceGetReply, error) {
 			}
 		}
 
-		if err := ad.Err(); err != nil {
-			return nil, err
+		if err2 := ad.Err(); err2 != nil {
+			return nil, err2
 		}
 
 		replies = append(replies, &reply)
@@ -209,7 +210,6 @@ func (c *Conn) DoDeviceGet(req DoDeviceGetRequest) (*DoDeviceGetReply, error) {
 
 // DumpDeviceGet wraps the "device-get" operation:
 // Get list of DPLL devices (dump) or attributes of a single dpll device
-
 func (c *Conn) DumpDeviceGet() ([]*DoDeviceGetReply, error) {
 	// No attribute arguments.
 	var b []byte
@@ -252,6 +252,7 @@ type DoDeviceGetReply struct {
 	Type          uint32
 }
 
+// ParsePinReplies parses netlink messages into DoPinGetReply structs.
 func ParsePinReplies(msgs []genetlink.Message) ([]*DoPinGetReply, error) {
 	replies := make([]*DoPinGetReply, 0, len(msgs))
 
@@ -341,8 +342,8 @@ func ParsePinReplies(msgs []genetlink.Message) ([]*DoPinGetReply, error) {
 				log.Println(ad.Bytes())
 			}
 		}
-		if err := ad.Err(); err != nil {
-			return nil, err
+		if err2 := ad.Err(); err2 != nil {
+			return nil, err2
 		}
 		replies = append(replies, &reply)
 	}
@@ -384,6 +385,7 @@ func (c *Conn) DoPinGet(req DoPinGetRequest) (*DoPinGetReply, error) {
 	return replies[0], nil
 }
 
+// DumpPinGet wraps the "pin-get" operation:
 func (c *Conn) DumpPinGet() ([]*DoPinGetReply, error) {
 	ae := netlink.NewAttributeEncoder()
 

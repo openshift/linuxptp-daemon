@@ -9,6 +9,7 @@ type OnPTPConfigChange func(*interface{}, *ptpv1.PtpProfile) error
 type PopulateHwConfig func(*interface{}, *[]ptpv1.HwConfig) error
 type AfterRunPTPCommand func(*interface{}, *ptpv1.PtpProfile, string) error
 
+// Plugin is a struct to hold the plugin data
 type Plugin struct {
 	Name               string
 	Options            interface{}

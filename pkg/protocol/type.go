@@ -2,9 +2,10 @@ package protocol
 
 import (
 	"fmt"
-	"github.com/golang/glog"
 	"strconv"
 	"strings"
+
+	"github.com/golang/glog"
 
 	"github.com/facebook/time/ptp/protocol"
 )
@@ -36,7 +37,6 @@ func (g *GrandmasterSettings) String() string {
 	if g == nil {
 		glog.Error("returned empty grandmasterSettings")
 		return ""
-
 	}
 	result := fmt.Sprintf(" clockClass              %d\n", g.ClockQuality.ClockClass)
 	result += fmt.Sprintf(" clockAccuracy           0x%x\n", g.ClockQuality.ClockAccuracy)
@@ -118,10 +118,7 @@ func btoi(b bool) uint8 {
 }
 
 func stob(s string) bool {
-	if s == "1" {
-		return true
-	}
-	return false
+	return s == "1"
 }
 
 func stou8(s string) uint8 {

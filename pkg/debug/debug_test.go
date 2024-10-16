@@ -1,8 +1,9 @@
 package debug_test
 
 import (
-	"github.com/openshift/linuxptp-daemon/pkg/debug"
 	"testing"
+
+	"github.com/openshift/linuxptp-daemon/pkg/debug"
 )
 
 func TestPrintALLState_ChangesStateAndSetsResetGM(t *testing.T) {

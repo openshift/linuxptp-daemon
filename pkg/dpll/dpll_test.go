@@ -88,7 +88,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 				Mode:          1,
 				ModeSupported: 0,
 				LockStatus: func() uint32 {
-					if pinType == 2 {
+					if pinType == 2 { //TODO: This always return 4 ????
 						return 4 // holdover
 					} else {
 						return 4 // locked

@@ -2,15 +2,18 @@ package generic
 
 import (
 	"encoding/json"
+
 	"github.com/golang/glog"
 	"github.com/openshift/linuxptp-daemon/pkg/plugin"
 	ptpv1 "github.com/openshift/ptp-operator/api/v1"
 )
 
+// GenericPluginData is a struct to hold the reference string
 type GenericPluginData struct {
 	referenceString *string
 }
 
+// OnPTPConfigChangeGeneric is a generic function to handle PTPConfigChange
 func OnPTPConfigChangeGeneric(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	var pluginOpts string = ""
 	var err error
@@ -25,14 +28,13 @@ func OnPTPConfigChangeGeneric(data *interface{}, nodeProfile *ptpv1.PtpProfile) 
 
 	if data != nil && pluginOpts != "" {
 		_data := *data
-		glog.Infof("Saving status to hwconfig: %s", string(pluginOpts))
-		var pluginData *GenericPluginData = _data.(*GenericPluginData)
+		glog.Infof("Saving status to hwconfig: %s", pluginOpts)
+		var pluginData = _data.(*GenericPluginData)
 		_pluginData := *pluginData
 		*_pluginData.referenceString = pluginOpts
 	}
 	glog.Infof("OnPTPConfigChangeGeneric: (%s)", pluginOpts)
 	return err
-
 }
 
 func PopulateHwConfigGeneric(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error {
@@ -40,7 +42,7 @@ func PopulateHwConfigGeneric(data *interface{}, hwconfigs *[]ptpv1.HwConfig) err
 	var referenceString string = ""
 	if data != nil {
 		_data := *data
-		var pluginData *GenericPluginData = _data.(*GenericPluginData)
+		var pluginData = _data.(*GenericPluginData)
 		_pluginData := *pluginData
 		if _pluginData.referenceString != nil {
 			referenceString = *_pluginData.referenceString

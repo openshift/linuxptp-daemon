@@ -38,9 +38,7 @@ func (n *StateNotifier) Unregister(s Subscriber) {
 	id := fmt.Sprintf("%s_%s", s.Topic(), s.ID())
 	n.Lock()
 	defer n.Unlock()
-	if _, ok := n.Subscribers[id]; ok {
-		delete(n.Subscribers, id)
-	}
+	delete(n.Subscribers, id)
 }
 
 func (n *StateNotifier) monitor() {
@@ -74,5 +72,4 @@ func NewStateNotifier() *StateNotifier {
 	return &StateNotifier{
 		Subscribers: make(map[string]Subscriber),
 	}
-
 }

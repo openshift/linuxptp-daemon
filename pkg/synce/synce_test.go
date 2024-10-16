@@ -105,11 +105,9 @@ func Test_GetClockQuality(t *testing.T) {
 		})
 		assert.Equal(t, tt.expectedClock, clock)
 	}
-
 }
 
 func TestParseLog(t *testing.T) {
-
 	// Printing results
 	InitLogTestCase()
 	for _, l := range logTestCases {
@@ -117,7 +115,6 @@ func TestParseLog(t *testing.T) {
 		assert.Equal(t, l.expectedDevice, entry.Device, entry.String())
 		assert.Equal(t, l.expectedExtSource, entry.ExtSource, entry.String())
 		assert.Equal(t, l.expectedSource, entry.Source, entry.String())
-
 	}
 }
 

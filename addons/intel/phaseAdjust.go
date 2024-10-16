@@ -106,7 +106,6 @@ func sendDelayCompensation(comp *[]delayCompensation) error {
 		return fmt.Errorf("failed to dump DPLL pins: %v", err)
 	}
 	for _, pin := range pinReplies {
-
 		for _, dc := range *comp {
 			desiredClockId, err := strconv.ParseUint(dc.clockId, 10, 64)
 			if err != nil {
@@ -145,9 +144,9 @@ func findDelayCompensation(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*[
 
 			pinLabel = link.Pin
 			internalDelay = link.DelayPs
-			clockId, err := addClockId(card.Id, nodeProfile)
-			if err != nil {
-				return nil, err
+			clockId, err2 := addClockId(card.Id, nodeProfile)
+			if err2 != nil {
+				return nil, err2
 			}
 			compensations = append(compensations, delayCompensation{
 				DelayPs:   int32(externalDelay) + internalDelay,
@@ -159,12 +158,12 @@ func findDelayCompensation(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*[
 		}
 		if card.GnssInput {
 			gnssLink := &delays.GnssInput
-			if gnssLink == nil {
+			if gnssLink.Connector == "" && gnssLink.Pin == "" && gnssLink.DelayPs == 0 && gnssLink.DelayVariationPs == 0 {
 				return nil, fmt.Errorf("plugin E810 error: can't identify GNSS link in the %s data", card.Part)
 			}
-			clockId, err := addClockId(card.Id, nodeProfile)
-			if err != nil {
-				return nil, err
+			clockId, err2 := addClockId(card.Id, nodeProfile)
+			if err2 != nil {
+				return nil, err2
 			}
 			compensations = append(compensations, delayCompensation{
 				DelayPs:   gnssLink.DelayPs,
@@ -179,9 +178,9 @@ func findDelayCompensation(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*[
 			if link == nil {
 				return nil, fmt.Errorf("plugin E810 error: can't find connector %s in the card %s spec", outputConn, card.Part)
 			}
-			clockId, err := addClockId(card.Id, nodeProfile)
-			if err != nil {
-				return nil, err
+			clockId, err2 := addClockId(card.Id, nodeProfile)
+			if err2 != nil {
+				return nil, err2
 			}
 			compensations = append(compensations, delayCompensation{
 				DelayPs:   link.DelayPs,
@@ -290,7 +289,7 @@ func parseVpdBlock(block []byte) *map[string]string {
 // matching to the correct internal delay profile
 // Currently the fingerprint is extracted from the "Vendor Information V1"
 // in the hardware Vital Product Data (VPD). With more cards with different
-// delay profiles are avaliable, this function might need to change depending on
+// delay profiles are available, this function might need to change depending on
 // how manufacturers expose data relevant for delay profiles in the VPD file
 func GetHardwareFingerprint(device string) string {
 	b, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/device/vpd", device))
