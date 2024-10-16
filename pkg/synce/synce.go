@@ -383,10 +383,9 @@ func PrintOption2Networks() {
 
 // ClockQuality ... return ClockQuality details
 func (c *Config) ClockQuality(qualityInfo QualityLevelInfo) (clock string, ql QualityLevelInfo) {
-
 	if c.ExtendedTlv == ExtendedTLV_DISABLED {
 		qualityInfo.ExtendedSSM = QL_DEFAULT_ENHSSM //**If extended SSM is not enabled, it's implicitly assumed as 0xFF
-	} else if c.ExtendedTlv == ExtendedTLV_ENABLED && qualityInfo.ExtendedSSM == QL_DEFAULT_SSM { // extQL is nto read
+	} else if c.ExtendedTlv == ExtendedTLV_ENABLED && qualityInfo.ExtendedSSM == QL_DEFAULT_SSM { // extQL is not read
 		return "", qualityInfo
 	}
 	if c.NetworkOption == SYNCE_NETWORK_OPT_1 {

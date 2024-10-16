@@ -711,6 +711,10 @@ func addFlagsForMonitor(process string, configOpts *string, conf *ptp4lConf, std
 			}
 		}
 	case "ts2phc":
+		if !strings.Contains(*configOpts, "-m") {
+			glog.Info("adding -m to print messages to stdout for ts2phcS to use prometheus exporter")
+			*configOpts = fmt.Sprintf("%s -m", *configOpts)
+		}
 	}
 
 }

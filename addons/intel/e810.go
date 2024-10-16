@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	hwplugin "github.com/openshift/linuxptp-daemon/addons/plugin"
 	"os"
 	"os/exec"
 	"reflect"
@@ -95,7 +96,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	e810Opts.EnableDefaultConfig = false
 
 	for name, opts := range (*nodeProfile).Plugins {
-		if name == "e810" {
+		if name == hwplugin.E810 {
 			optsByteArray, _ = json.Marshal(opts)
 			err = json.Unmarshal(optsByteArray, &e810Opts)
 			if err != nil {
@@ -121,9 +122,9 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getClockIdE810(device), 10)
 					for pin, value := range pins {
 						deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
-						phcs, err := os.ReadDir(deviceDir)
-						if err != nil {
-							glog.Error("e810 failed to read " + deviceDir + ": " + err.Error())
+						phcs, err2 := os.ReadDir(deviceDir)
+						if err2 != nil {
+							glog.Error("e810 failed to read " + deviceDir + ": " + err2.Error())
 							continue
 						}
 
@@ -134,22 +135,22 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 								pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
 							}
 							glog.Infof("echo %s > %s", value, pinPath)
-							err = os.WriteFile(pinPath, []byte(value), 0666)
-							if err != nil {
-								glog.Error("e810 failed to write " + value + " to " + pinPath + ": " + err.Error())
+							err2 = os.WriteFile(pinPath, []byte(value), 0666)
+							if err2 != nil {
+								glog.Error("e810 failed to write " + value + " to " + pinPath + ": " + err2.Error())
 							}
 						}
 					}
 				}
 			}
 
-			comps, err := findDelayCompensation(e810Opts, nodeProfile)
-			if err != nil {
-				glog.Errorf("fail to get delay compensations, %s", err)
+			comps, err2 := findDelayCompensation(e810Opts, nodeProfile)
+			if err2 != nil {
+				glog.Errorf("fail to get delay compensations, %s", err2)
 			}
-			err = sendDelayCompensation(comps)
-			if err != nil {
-				glog.Errorf("fail to send delay compensations, %s", err)
+			err2 = sendDelayCompensation(comps)
+			if err2 != nil {
+				glog.Errorf("fail to send delay compensations, %s", err2)
 			}
 
 			for k, v := range e810Opts.DpllSettings {
@@ -190,7 +191,7 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 	e810Opts.EnableDefaultConfig = false
 
 	for name, opts := range (*nodeProfile).Plugins {
-		if name == "e810" {
+		if name == hwplugin.E810 {
 			optsByteArray, _ = json.Marshal(opts)
 			err = json.Unmarshal(optsByteArray, &e810Opts)
 			if err != nil {
@@ -201,17 +202,19 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 				for _, ublxOpt := range append(e810Opts.UblxCmds, getDefaultUblxCmds()...) {
 					ublxArgs := ublxOpt.Args
 					glog.Infof("Running /usr/bin/ubxtool with args %s", strings.Join(ublxArgs, ", "))
-					stdout, err = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput()
-					//stdout, err = exec.Command("/usr/local/bin/ubxtool", "-p", "STATUS").CombinedOutput()
-					_data := *data
-					if data != nil && ublxOpt.ReportOutput {
-						glog.Infof("Saving status to hwconfig: %s", string(stdout))
-						var pluginData *E810PluginData = _data.(*E810PluginData)
-						_pluginData := *pluginData
-						statusString := fmt.Sprintf("ublx data: %s", string(stdout))
-						*_pluginData.hwplugins = append(*_pluginData.hwplugins, statusString)
+					if stdout, err = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput(); err == nil {
+						if data != nil && ublxOpt.ReportOutput {
+							_data := *data
+							glog.Infof("Saving status to hwconfig: %s", string(stdout))
+							var pluginData *E810PluginData = _data.(*E810PluginData)
+							_pluginData := *pluginData
+							statusString := fmt.Sprintf("ublx data: %s", string(stdout))
+							*_pluginData.hwplugins = append(*_pluginData.hwplugins, statusString)
+						} else {
+							glog.Infof("Not saving status to hwconfig: %s", string(stdout))
+						}
 					} else {
-						glog.Infof("Not saving status to hwconfig: %s", string(stdout))
+						glog.Errorf("Failed to run ubxtool with args %s: %s", strings.Join(ublxArgs, ", "), err)
 					}
 				}
 			} else {
@@ -243,14 +246,14 @@ func PopulateHwConfigE810(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error 
 }
 
 func E810(name string) (*plugin.Plugin, *interface{}) {
-	if name != "e810" {
+	if name != hwplugin.E810 {
 		glog.Errorf("Plugin must be initialized as 'e810'")
 		return nil, nil
 	}
-	glog.Infof("registering e810 plugin")
+	glog.Infof("registering all hw plugins")
 	hwplugins := []string{}
 	pluginData := E810PluginData{hwplugins: &hwplugins}
-	_plugin := plugin.Plugin{Name: "e810",
+	_plugin := plugin.Plugin{Name: hwplugin.E810,
 		OnPTPConfigChange:  OnPTPConfigChangeE810,
 		AfterRunPTPCommand: AfterRunPTPCommandE810,
 		PopulateHwConfig:   PopulateHwConfigE810,

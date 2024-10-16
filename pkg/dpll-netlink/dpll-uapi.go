@@ -1,7 +1,7 @@
 // Port definitions from <kernel-root>/include/uapi/linux/dpll.h and
 // tools/net/ynl/generated/dpll-user.h
 
-package dpll_netlink
+package dpllnetlink
 
 import (
 	"encoding/json"

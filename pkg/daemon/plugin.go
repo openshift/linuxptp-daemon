@@ -40,18 +40,18 @@ func registerPlugin(name string) (*plugin.Plugin, *interface{}) {
 
 func (pm *PluginManager) OnPTPConfigChange(nodeProfile *ptpv1.PtpProfile) {
 	for pluginName, pluginObject := range pm.plugins {
-		pluginObject.OnPTPConfigChange(pm.data[pluginName], nodeProfile)
+		_ = pluginObject.OnPTPConfigChange(pm.data[pluginName], nodeProfile)
 	}
 }
 
 func (pm *PluginManager) AfterRunPTPCommand(nodeProfile *ptpv1.PtpProfile, command string) {
 	for pluginName, pluginObject := range pm.plugins {
-		pluginObject.AfterRunPTPCommand(pm.data[pluginName], nodeProfile, command)
+		_ = pluginObject.AfterRunPTPCommand(pm.data[pluginName], nodeProfile, command)
 	}
 }
 
 func (pm *PluginManager) PopulateHwConfig(hwconfigs *[]ptpv1.HwConfig) {
 	for pluginName, pluginObject := range pm.plugins {
-		pluginObject.PopulateHwConfig(pm.data[pluginName], hwconfigs)
+		_ = pluginObject.PopulateHwConfig(pm.data[pluginName], hwconfigs)
 	}
 }

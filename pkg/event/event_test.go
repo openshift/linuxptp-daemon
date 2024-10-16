@@ -25,9 +25,7 @@ var (
 )
 
 func monkeyPatch() {
-
 	event.PMCGMGetter = func(cfgName string) (protocol.GrandmasterSettings, error) {
-		cfgName = strings.Replace(cfgName, event.TS2PHCProcessName, event.PTP4lProcessName, 1)
 		return protocol.GrandmasterSettings{
 			ClockQuality: fbprotocol.ClockQuality{
 				ClockClass:              0,
@@ -47,7 +45,6 @@ func monkeyPatch() {
 		}, nil
 	}
 	event.PMCGMSetter = func(cfgName string, g protocol.GrandmasterSettings) error {
-		cfgName = strings.Replace(cfgName, event.TS2PHCProcessName, event.PTP4lProcessName, 1)
 		return nil
 	}
 }

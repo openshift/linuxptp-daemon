@@ -79,6 +79,13 @@ func NewProcessManager() *ProcessManager {
 	}
 }
 
+type DependencyMap struct {
+	Dpll    bool
+	GNSS    bool
+	GPSPipe bool
+	Ublox   bool
+}
+
 // SetTestProfileProcess ...
 func (p *ProcessManager) SetTestProfileProcess(name string, ifaces config.IFaces, socketPath,
 	ptp4lConfigPath string, nodeProfile ptpv1.PtpProfile) {
@@ -458,6 +465,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	var pProcess string
 	var haProfile map[string][]string
 
+	offsetThreshold := getPTPThreshold(nodeProfile)
 	ptpHAEnabled := len(listHaProfiles(nodeProfile)) > 0
 
 	for _, p := range ptpProcesses {
@@ -493,22 +501,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 			messageTag = fmt.Sprintf("[ts2phc.%d.config:{level}]", runID)
 			leap.LeapMgr.SetPtp4lConfigPath(fmt.Sprintf("ptp4l.%d.config", runID))
-			//DPLL is considered to be running along with ts2phc
-			localMaxDpllHoldoverOffSet, timer := dpll.CalculateTimer(nodeProfile)
-			// update ts2phcOpts with the new config
-			if configOpts != nil && *configOpts != "" {
-				if !strings.Contains(*configOpts, "--ts2phc.holdover") {
-					*configOpts += " --ts2phc.holdover " + strconv.FormatInt(timer, 10)
-				}
-				if !strings.Contains(*configOpts, "--servo_offset_threshold") {
-					*configOpts += " --servo_offset_threshold " + strconv.FormatInt(localMaxDpllHoldoverOffSet, 10) // infinite threshold to prevent servo from running in s3 state when holdover is enabled
-					// there is a 5s delay in the NMEA driver, accepting pulses 5s after the last valid NMEA message, so that might need to be subtracted from that value
-					// need more testing to confirm
-				}
-				if !strings.Contains(*configOpts, "--servo_num_offset_values") { //if consecutive smaller offsets (less than the threshold) are not observed, the system stays in S2
-					*configOpts += " --servo_num_offset_values 10"
-				}
-			}
+
 		case syncEProcessName:
 			configOpts = nodeProfile.Synce4lOpts
 			configInput = nodeProfile.Synce4lConf
@@ -518,6 +511,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			messageTag = fmt.Sprintf("[synce4l.%d.config]", runID)
 		}
 
+		// if configOpts is empty, skip the process
 		if configOpts == nil || *configOpts == "" {
 			glog.Infof("configOpts empty, skipping: %s", pProcess)
 			continue
@@ -598,110 +592,114 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			depProcess:        []process{},
 			nodeProfile:       *nodeProfile,
 			clockType:         clockType,
-			ptpClockThreshold: getPTPThreshold(nodeProfile),
+			ptpClockThreshold: offsetThreshold,
 			haProfile:         haProfile,
 			syncERelations:    relations,
 		}
-
+		deps := dprocess.BuildDependencyMap(nodeProfile)
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
-			if output.gnss_serial_port == "" {
+			if _, ok := deps[GPSD_PROCESSNAME]; ok && output.gnss_serial_port == "" {
 				output.gnss_serial_port = GPSPIPE_SERIALPORT
 			}
 			// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
-			gmInterface := dprocess.ifaces.GetGMInterface().Name
+			if _, ok := deps[GPSD_PROCESSNAME]; ok {
+				gmInterface := dprocess.ifaces.GetGMInterface().Name
 
-			if e := mkFifo(); e != nil {
-				glog.Errorf("Error creating named pipe, GNSS monitoring will not work as expected %s", e.Error())
-			}
+				if e := mkFifo(); e != nil {
+					glog.Errorf("Error creating named pipe, GNSS monitoring will not work as expected %s", e.Error())
+				}
 
-			gpsDaemon := &GPSD{
-				name:        GPSD_PROCESSNAME,
-				execMutex:   sync.Mutex{},
-				cmd:         nil,
-				serialPort:  output.gnss_serial_port,
-				exitCh:      make(chan struct{}),
-				gmInterface: gmInterface,
-				stopped:     false,
-				messageTag:  messageTag,
-				ublxTool:    nil,
-			}
-			gpsDaemon.CmdInit()
-			gpsDaemon.cmdLine = addScheduling(nodeProfile, gpsDaemon.cmdLine)
-			args = strings.Split(gpsDaemon.cmdLine, " ")
-			gpsDaemon.cmd = exec.Command(args[0], args[1:]...)
-			dprocess.depProcess = append(dprocess.depProcess, gpsDaemon)
+				gpsDaemon := &GPSD{
+					name:        GPSD_PROCESSNAME,
+					execMutex:   sync.Mutex{},
+					cmd:         nil,
+					serialPort:  output.gnss_serial_port,
+					exitCh:      make(chan struct{}),
+					gmInterface: gmInterface,
+					stopped:     false,
+					messageTag:  messageTag,
+					ublxTool:    nil,
+				}
+				gpsDaemon.CmdInit()
+				gpsDaemon.cmdLine = addScheduling(nodeProfile, gpsDaemon.cmdLine)
+				args = strings.Split(gpsDaemon.cmdLine, " ")
+				gpsDaemon.cmd = exec.Command(args[0], args[1:]...)
+				dprocess.depProcess = append(dprocess.depProcess, gpsDaemon)
 
-			// init gpspipe
-			gpsPipeDaemon := &gpspipe{
-				name:       GPSPIPE_PROCESSNAME,
-				execMutex:  sync.Mutex{},
-				cmd:        nil,
-				serialPort: GPSPIPE_SERIALPORT,
-				exitCh:     make(chan struct{}),
-				stopped:    false,
-				messageTag: messageTag,
+				// init gpspipe
+				gpsPipeDaemon := &gpspipe{
+					name:       GPSPIPE_PROCESSNAME,
+					execMutex:  sync.Mutex{},
+					cmd:        nil,
+					serialPort: GPSPIPE_SERIALPORT,
+					exitCh:     make(chan struct{}),
+					stopped:    false,
+					messageTag: messageTag,
+				}
+				gpsPipeDaemon.CmdInit()
+				gpsPipeDaemon.cmdLine = addScheduling(nodeProfile, gpsPipeDaemon.cmdLine)
+				args = strings.Split(gpsPipeDaemon.cmdLine, " ")
+				gpsPipeDaemon.cmd = exec.Command(args[0], args[1:]...)
+				dprocess.depProcess = append(dprocess.depProcess, gpsPipeDaemon)
 			}
-			gpsPipeDaemon.CmdInit()
-			gpsPipeDaemon.cmdLine = addScheduling(nodeProfile, gpsPipeDaemon.cmdLine)
-			args = strings.Split(gpsPipeDaemon.cmdLine, " ")
-			gpsPipeDaemon.cmd = exec.Command(args[0], args[1:]...)
-			dprocess.depProcess = append(dprocess.depProcess, gpsPipeDaemon)
 
 			// init dpll
 			// TODO: Try to inject DPLL depProcess via plugin ?
-			var localMaxHoldoverOffSet uint64 = dpll.LocalMaxHoldoverOffSet
-			var localHoldoverTimeout uint64 = dpll.LocalHoldoverTimeout
-			var maxInSpecOffset uint64 = dpll.MaxInSpecOffset
-			var clockId uint64
-			phaseOffsetPinFilter := map[string]string{}
-			for _, iface := range dprocess.ifaces {
-				var eventSource []event.EventSource
-				if iface.Source == event.GNSS || iface.Source == event.PPS {
-					glog.Info("Init dpll: ptp settings ", (*nodeProfile).PtpSettings)
-					for k, v := range (*nodeProfile).PtpSettings {
-						glog.Info("Init dpll: ptp kv ", k, " ", v)
-						if strings.Contains(k, strings.Join([]string{iface.Name, "phaseOffset"}, ".")) {
-							filterKey := strings.Split(k, ".")
-							property := filterKey[len(filterKey)-1]
-							phaseOffsetPinFilter[property] = v
-							glog.Infof("dpll phase offset filter property: %s[%s]=%s", iface.Name, property, v)
-							continue
+			if _, ok := deps[dpll.DPLL_PROCESSNAME]; ok {
+				dprocess.addHoldover2Ts2Phc(configOpts, nodeProfile, offsetThreshold.MaxOffsetThreshold)
+				var localMaxHoldoverOffSet uint64 = dpll.LocalMaxHoldoverOffSet
+				var localHoldoverTimeout uint64 = dpll.LocalHoldoverTimeout
+				var maxInSpecOffset uint64 = dpll.MaxInSpecOffset
+				var clockId uint64
+				phaseOffsetPinFilter := map[string]string{}
+				for _, iface := range dprocess.ifaces {
+					var eventSource []event.EventSource
+					if iface.Source == event.GNSS || iface.Source == event.PPS {
+						glog.Info("Init dpll: ptp settings ", (*nodeProfile).PtpSettings)
+						for k, v := range (*nodeProfile).PtpSettings {
+							glog.Info("Init dpll: ptp kv ", k, " ", v)
+							if strings.Contains(k, strings.Join([]string{iface.Name, "phaseOffset"}, ".")) {
+								filterKey := strings.Split(k, ".")
+								property := filterKey[len(filterKey)-1]
+								phaseOffsetPinFilter[property] = v
+								glog.Infof("dpll phase offset filter property: %s[%s]=%s", iface.Name, property, v)
+								continue
+							}
+							i, err := strconv.ParseUint(v, 10, 64)
+							if err != nil {
+								continue
+							}
+							if k == dpll.LocalMaxHoldoverOffSetStr {
+								localMaxHoldoverOffSet = i
+							}
+							if k == dpll.LocalHoldoverTimeoutStr {
+								localHoldoverTimeout = i
+							}
+							if k == dpll.MaxInSpecOffsetStr {
+								maxInSpecOffset = i
+							}
+							if k == fmt.Sprintf("%s[%s]", dpll.ClockIdStr, iface.Name) {
+								clockId = i
+							}
 						}
-						i, err := strconv.ParseUint(v, 10, 64)
-						if err != nil {
-							continue
+						if iface.Source == event.PPS {
+							eventSource = []event.EventSource{event.PPS}
+						} else {
+							eventSource = []event.EventSource{event.GNSS}
 						}
-						if k == dpll.LocalMaxHoldoverOffSetStr {
-							localMaxHoldoverOffSet = i
-						}
-						if k == dpll.LocalHoldoverTimeoutStr {
-							localHoldoverTimeout = i
-						}
-						if k == dpll.MaxInSpecOffsetStr {
-							maxInSpecOffset = i
-						}
-						if k == fmt.Sprintf("%s[%s]", dpll.ClockIdStr, iface.Name) {
-							clockId = i
-						}
+						// pass array of ifaces which has source + clockId -
+						// here we have multiple dpll objects identified by clock id
+						// depends on will be either PPS or  GNSS,
+						// ONLY the one with GNSS dependency will go to HOLDOVER
+						dpllDaemon := dpll.NewDpll(clockId, localMaxHoldoverOffSet, localHoldoverTimeout,
+							maxInSpecOffset, iface.Name, eventSource, dpll.NONE, dn.GetPhaseOffsetPinFilter(nodeProfile))
+						glog.Infof("depending on %s", dpllDaemon.DependsOn())
+						dpllDaemon.CmdInit()
+						dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
 					}
-					if iface.Source == event.PPS {
-						eventSource = []event.EventSource{event.PPS}
-					} else {
-						eventSource = []event.EventSource{event.GNSS}
-					}
-					// pass array of ifaces which has source + clockId -
-					// here we have multiple dpll objects identified by clock id
-					// depends on will be either PPS or  GNSS,
-					// ONLY the one with GNSS dependency will go to HOLDOVER
-					dpllDaemon := dpll.NewDpll(clockId, localMaxHoldoverOffSet, localHoldoverTimeout,
-						maxInSpecOffset, iface.Name, eventSource, dpll.NONE, dn.GetPhaseOffsetPinFilter(nodeProfile))
-					glog.Infof("depending on %s", dpllDaemon.DependsOn())
-					dpllDaemon.CmdInit()
-					dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
 				}
 			}
-
 		}
 		err = os.WriteFile(configPath, []byte(configOutput), 0644)
 		if err != nil {
@@ -1391,4 +1389,54 @@ func (p *ptpProcess) SyncEDeviceByName(name string) *synce.Config {
 		}
 	}
 	return nil
+}
+
+func (p *ptpProcess) BuildDependencyMap(nodeProfile *ptpv1.PtpProfile) (deps map[string]bool) {
+	var clockId uint64
+	deps = map[string]bool{}
+	for _, iface := range p.ifaces {
+		// dpll required if has GNSS or PPS input
+		if (iface.Source == event.GNSS || iface.Source == event.PPS) && p.name == ts2phcProcessName {
+			for k, v := range (*nodeProfile).PtpSettings {
+				if i, err := strconv.ParseUint(v, 10, 64); err == nil {
+					if k == fmt.Sprintf("%s[%s]", dpll.ClockIdStr, iface.Name) {
+						clockId = i
+						if dpll.CheckDpllAvailable(clockId) {
+							deps[dpll.DPLL_PROCESSNAME] = true
+						}
+					}
+				}
+			}
+		}
+		if iface.Source == event.GNSS && p.name == ts2phcProcessName { // only for ts2phc
+			deps[GPSD_PROCESSNAME] = true
+			deps[GPSPIPE_PROCESSNAME] = true
+		}
+	}
+	return
+}
+
+func (p *ptpProcess) addHoldover2Ts2Phc(configOpts *string, nodeProfile *ptpv1.PtpProfile, maxThreshold int64) {
+	//DPLL is considered to be running along with ts2phc, if not there will no holdover
+	// check if dpll is available ? if not, ts2phc will be started without holdover functionality
+	_, timer := dpll.CalculateTimer(nodeProfile)
+	// update ts2phcOpts with the new config
+	if configOpts != nil && *configOpts != "" { // if ts2phcOpts is not empty else ignore ts2phc process
+		if !strings.Contains(*configOpts, "--ts2phc.holdover") {
+			*configOpts += " --ts2phc.holdover " + strconv.FormatInt(timer, 10)
+		}
+		if !strings.Contains(*configOpts, "--servo_offset_threshold") {
+			*configOpts += " --servo_offset_threshold " + strconv.FormatInt(maxThreshold, 10) // infinite threshold to prevent servo from running in s3 state when holdover is enabled
+			// there is a 5s delay in the NMEA driver, accepting pulses 5s after the last valid NMEA message, so that might need to be subtracted from that value
+			// need more testing to confirm
+		}
+		if !strings.Contains(*configOpts, "--servo_num_offset_values") { //if consecutive smaller offsets (less than the threshold) are not observed, the system stays in S2
+			*configOpts += " --servo_num_offset_values 10"
+		}
+
+		cmdLine := fmt.Sprintf("/usr/sbin/%s -f %s  %s ", p.name, p.ptp4lConfigPath, *configOpts)
+		cmdLine = addScheduling(nodeProfile, cmdLine)
+		args := strings.Split(cmdLine, " ")
+		p.cmd = exec.Command(args[0], args[1:]...)
+	}
 }

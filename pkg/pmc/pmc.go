@@ -1,6 +1,7 @@
 package pmc
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -84,13 +85,14 @@ func RunPMCExpGetGMSettings(configFileName string) (g protocol.GrandmasterSettin
 
 	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
-			result, matches, err := e.Expect(regexp.MustCompile(g.RegEx()), cmdTimeout)
-			if err != nil {
-				if _, ok := err.(expect.TimeoutError); ok {
+			result, matches, err2 := e.Expect(regexp.MustCompile(g.RegEx()), cmdTimeout)
+			if err2 != nil {
+				var timeoutError expect.TimeoutError
+				if errors.As(err2, &timeoutError) {
 					continue
 				}
-				glog.Errorf("pmc result match error %v", err)
-				return g, err
+				glog.Errorf("pmc result match error %v", err2)
+				return g, err2
 			}
 			glog.Infof("pmc result: %s", result)
 			for i, m := range matches[1:] {
@@ -127,10 +129,10 @@ func RunPMCExpSetGMSettings(configFileName string, g protocol.GrandmasterSetting
 	}()
 
 	if err = e.Send(cmdStr + "\n"); err == nil {
-		result, _, err := e.Expect(regexp.MustCompile(g.RegEx()), cmdTimeout)
-		if err != nil {
-			glog.Errorf("pmc result match error %v", err)
-			return err
+		result, _, err2 := e.Expect(regexp.MustCompile(g.RegEx()), cmdTimeout)
+		if err2 != nil {
+			glog.Errorf("pmc result match error %v", err2)
+			return err2
 		}
 		glog.Infof("pmc result: %s", result)
 	}

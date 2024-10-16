@@ -119,9 +119,9 @@ func (u *UBlox) queryVersion(command string, promptRE *regexp.Regexp) (result st
 		return
 	}
 	defer func(e *expect.GExpect) {
-		err := e.Close()
-		if err != nil {
-			glog.Errorf("error closing expect %s", err)
+		err2 := e.Close()
+		if err2 != nil {
+			glog.Errorf("error closing expect %s", err2)
 		}
 	}(e)
 	if err = e.Send(fmt.Sprintf("%s -p %s", UBXCommand, command) + "\n"); err == nil {
@@ -142,9 +142,9 @@ func (u *UBlox) Query(command string, promptRE *regexp.Regexp) (result string, m
 		return
 	}
 	defer func(e *expect.GExpect) {
-		err := e.Close()
-		if err != nil {
-			glog.Errorf("error closing expect %s", err)
+		err2 := e.Close()
+		if err2 != nil {
+			glog.Errorf("error closing expect %s", err2)
 		}
 	}(e)
 	if err = e.Send(fmt.Sprintf("%s %s", UBXCommand, command) + "\n"); err == nil {
@@ -174,7 +174,7 @@ func (u *UBlox) Query(command string, promptRE *regexp.Regexp) (result string, m
 // TODO: Should read ACK-ACK to confirm right and read the item
 func (u *UBlox) EnableDisableVoltageController(command string, value int) ([]byte, error) {
 	if u.protoVersion == nil {
-		return []byte{}, fmt.Errorf("Cannot query UBlox without protocol version ")
+		return []byte{}, fmt.Errorf("cannot query UBlox without protocol version ")
 	}
 	commandArgs := []string{"/usr/bin/bash", "-c", fmt.Sprintf("\"%s  -v 1 -P %s  -p %s,%d\"", UBXCommand, *u.protoVersion, command, value)}
 
@@ -197,11 +197,10 @@ func (u *UBlox) query(command string, promptRE *regexp.Regexp) (string, error) {
 	}
 	glog.Infof("Ublox cmd %s returned\n %s", fmt.Sprintf("ubxtool %s", command), stdBuffer.String())
 	return match(stdBuffer.String(), promptRE)
-
 }
 
 func match(stdout string, ubLoxRegex *regexp.Regexp) (string, error) {
-	match := ubLoxRegex.FindStringSubmatch(string(stdout))
+	match := ubLoxRegex.FindStringSubmatch(stdout)
 	if len(match) > 0 {
 		return match[1], nil
 	}
@@ -318,6 +317,7 @@ func (u *UBlox) EnableNMEA() {
 	}
 }
 
+// ExtractOffset ...
 func ExtractOffset(output string) int64 {
 	// Find the line that contains "tAcc"
 	lines := strings.Split(output, "\n")
@@ -337,6 +337,7 @@ func ExtractOffset(output string) int64 {
 	return -1
 }
 
+// ExtractAntennaStatus ...
 func ExtractNavStatus(output string) int64 {
 	// Find the line that contains "gpsFix"
 	lines := strings.Split(output, "\n")

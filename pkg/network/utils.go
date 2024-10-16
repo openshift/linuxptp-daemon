@@ -47,6 +47,7 @@ func netParseEthtoolTimeStampFeature(cmdOut *bytes.Buffer) bool {
 	return hardRxEnabled && hardTxEnabled && hardRawEnabled
 }
 
+// DiscoverPTPDevices returns a list of NICs that have PTP timestamping capabilities
 func DiscoverPTPDevices() ([]string, error) {
 	var out bytes.Buffer
 	nics := make([]string, 0)
@@ -66,18 +67,18 @@ func DiscoverPTPDevices() ([]string, error) {
 		glog.Infof("grabbing NIC timestamp capability for %v", dev.Name)
 		cmd := exec.Command(ethtoolPath, "-T", dev.Name)
 		cmd.Stdout = &out
-		err := cmd.Run()
-		if err != nil {
-			glog.Infof("could not grab NIC timestamp capability for %v: %v", dev.Name, err)
+		err2 := cmd.Run()
+		if err2 != nil {
+			glog.Infof("could not grab NIC timestamp capability for %v: %v", dev.Name, err2)
 		}
 
 		if !netParseEthtoolTimeStampFeature(&out) {
 			continue
 		}
 
-		link, err := os.Readlink(fmt.Sprintf("/sys/class/net/%s", dev.Name))
-		if err != nil {
-			glog.Infof("could not grab NIC PCI address for %v: %v", dev.Name, err)
+		link, err2 := os.Readlink(fmt.Sprintf("/sys/class/net/%s", dev.Name))
+		if err2 != nil {
+			glog.Infof("could not grab NIC PCI address for %v: %v", dev.Name, err2)
 			continue
 		}
 
@@ -92,19 +93,20 @@ func DiscoverPTPDevices() ([]string, error) {
 		// sysfs address looks like: /sys/devices/pci0000:17/0000:17:02.0/0000:19:00.5/net/eno1
 		PCIAddr = pathSegments[len(pathSegments)-3]
 
-		if _, err := os.Stat(fmt.Sprintf("/sys/bus/pci/devices/%s", PCIAddr)); os.IsNotExist(err) {
-			glog.Infof("unexpected device address for device name %s PCI %s: %v", dev.Name, PCIAddr, err)
+		if _, err3 := os.Stat(fmt.Sprintf("/sys/bus/pci/devices/%s", PCIAddr)); os.IsNotExist(err3) {
+			glog.Infof("unexpected device address for device name %s PCI %s: %v", dev.Name, PCIAddr, err3)
 			continue
 		}
 
 		// If the physfn doesn't exist this means the interface is not a virtual function so we ca add it to the list
-		if _, err := os.Stat(fmt.Sprintf("/sys/bus/pci/devices/%s/physfn", PCIAddr)); os.IsNotExist(err) {
+		if _, err3 := os.Stat(fmt.Sprintf("/sys/bus/pci/devices/%s/physfn", PCIAddr)); os.IsNotExist(err3) {
 			nics = append(nics, dev.Name)
 		}
 	}
 	return nics, nil
 }
 
+// GetPhcId returns the PTP clock device ID for a given NIC
 func GetPhcId(iface string) string {
 	var err error
 	var id int

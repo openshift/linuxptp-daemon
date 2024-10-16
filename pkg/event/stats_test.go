@@ -133,9 +133,6 @@ func Test_updateStats(t *testing.T) {
 				dd.UpdateState()
 				assert.Equal(t, test.wantedState, dd.State, test.desc)
 			}
-
 		}
-
 	}
-
 }

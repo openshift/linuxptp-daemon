@@ -142,8 +142,8 @@ func parseLeapFile(b []byte) (*LeapFile, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse Leap seconds %s value: %s", fields[1], err)
 			}
-			if _, err := strconv.ParseInt(fields[0], 10, 64); err != nil {
-				return nil, fmt.Errorf("failed to parse Leap event time %s: %s", fields[0], err)
+			if _, err2 := strconv.ParseInt(fields[0], 10, 64); err2 != nil {
+				return nil, fmt.Errorf("failed to parse Leap event time %s: %s", fields[0], err2)
 			}
 			ev := LeapEvent{
 				LeapTime: fields[0],
@@ -194,13 +194,13 @@ func (l *LeapManager) populateLeapData() error {
 	lf, found := cm.Data[nodeName]
 	if !found {
 		glog.Info("Populate Leap data from file")
-		b, err := os.ReadFile(filepath.Join(l.leapFilePath, l.leapFileName))
-		if err != nil {
-			return err
+		b, err2 := os.ReadFile(filepath.Join(l.leapFilePath, l.leapFileName))
+		if err2 != nil {
+			return err2
 		}
-		leapData, err := parseLeapFile(b)
-		if err != nil {
-			return err
+		leapData, err2 := parseLeapFile(b)
+		if err2 != nil {
+			return err2
 		}
 		l.leapFile = *leapData
 		// Set expiration time to 2036
@@ -209,29 +209,29 @@ func (l *LeapManager) populateLeapData() error {
 		expSec := int(exp.Sub(start).Seconds())
 		l.leapFile.ExpirationTime = fmt.Sprint(expSec)
 		l.rehashLeapData()
-		data, err := l.renderLeapData()
-		if err != nil {
-			return err
+		data, err2 := l.renderLeapData()
+		if err2 != nil {
+			return err2
 		}
 		if len(cm.Data) == 0 {
 			cm.Data = map[string]string{}
 		}
 		cm.Data[nodeName] = data.String()
-		_, err = l.client.CoreV1().ConfigMaps(l.namespace).Update(context.TODO(), cm, metav1.UpdateOptions{})
-		if err != nil {
+		_, err2 = l.client.CoreV1().ConfigMaps(l.namespace).Update(context.TODO(), cm, metav1.UpdateOptions{})
+		if err2 != nil {
 			l.retryUpdate = true
-			return err
+			return err2
 		}
 	} else {
 		glog.Info("Populate Leap data from configmap")
-		leapData, err := parseLeapFile([]byte(lf))
-		if err != nil {
-			return err
+		leapData, err2 := parseLeapFile([]byte(lf))
+		if err2 != nil {
+			return err2
 		}
 		l.leapFile = *leapData
 	}
 	glog.Info("Leap file expiration is set to ", l.leapFile.ExpirationTime)
-	l.setUtcOffset()
+	_ = l.setUtcOffset()
 	return nil
 }
 
@@ -287,7 +287,6 @@ func (l *LeapManager) Run() {
 // updateLeapFile updates a new leap event to the list of leap events, if provided
 func (l *LeapManager) updateLeapFile(leapTime time.Time,
 	leapSec int, currentTime time.Time) {
-
 	startTime := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
 	if leapSec != 0 {
 		leapTimeTai := int(leapTime.Sub(startTime).Seconds())
@@ -371,7 +370,6 @@ type leapIndResult struct {
 // processLeapIndication handles NAV-TIMELS indication
 // and updates the leapseconds.list file
 func (l *LeapManager) processLeapIndication(data *ublox.TimeLs) (*leapIndResult, error) {
-
 	glog.Infof("Leap indication: %+v", data)
 	if data.SrcOfCurrLs != leapSourceGps {
 		glog.Info("Discarding Leap event not originating from GPS")
@@ -398,10 +396,10 @@ func (l *LeapManager) processLeapIndication(data *ublox.TimeLs) (*leapIndResult,
 			glog.Infof("Leap Seconds on file outdated: %d on file, %d + %d + %d in GNSS data",
 				leapSecOnFile, int(data.CurrLs), gpsToTaiDiff, int(data.LsChange))
 			gpsStartTime := time.Date(1980, time.January, 6, 0, 0, 0, 0, time.UTC)
-			deltaHours, err := time.ParseDuration(fmt.Sprintf("%dh",
+			deltaHours, err2 := time.ParseDuration(fmt.Sprintf("%dh",
 				data.DateOfLsGpsWn*7*24+uint(data.DateOfLsGpsDn)*24))
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse time duration: Leap: %v", err)
+			if err2 != nil {
+				return nil, fmt.Errorf("failed to parse time duration: Leap: %v", err2)
 			}
 			if data.LsChange == 0 && data.TimeToLsEvent >= 0 {
 				// shift leap date out of pmc window, so no pmc commands will be sent
@@ -417,7 +415,7 @@ func (l *LeapManager) processLeapIndication(data *ublox.TimeLs) (*leapIndResult,
 	return nil, nil
 }
 
-// IsLeapInWindow() returns whether a leap event is occuring within the specified time window from now
+// IsLeapInWindow() returns whether a leap event is occurring within the specified time window from now
 func (l *LeapManager) IsLeapInWindow(now time.Time, startOffset, endOffset time.Duration) bool {
 	startTime := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
 	lastLeap := l.leapFile.LeapEvents[len(l.leapFile.LeapEvents)-1]
