@@ -815,7 +815,7 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 			glog.Infof("clock class change value not found via PMC")
 		}
 	} else {
-		glog.Error("error parsing PMC util for clock class change event")
+		glog.Errorf("error parsing PMC util for clock class change event %s", e.Error())
 	}
 }
 

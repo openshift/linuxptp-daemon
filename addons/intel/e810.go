@@ -203,8 +203,8 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 					glog.Infof("Running /usr/bin/ubxtool with args %s", strings.Join(ublxArgs, ", "))
 					stdout, err = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput()
 					//stdout, err = exec.Command("/usr/local/bin/ubxtool", "-p", "STATUS").CombinedOutput()
-					_data := *data
 					if data != nil && ublxOpt.ReportOutput {
+						_data := *data
 						glog.Infof("Saving status to hwconfig: %s", string(stdout))
 						var pluginData *E810PluginData = _data.(*E810PluginData)
 						_pluginData := *pluginData

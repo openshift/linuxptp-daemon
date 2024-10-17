@@ -58,7 +58,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		expectedPhaseStatus:       0, //no phase status event for eec
 		expectedPhaseOffset:       dpll.FaultyPhaseOffset * 1000000,
 		expectedFrequencyStatus:   2, // locked
-		expectedInSpecState:       true,
+		expectedInSpecState:       false,
 		desc:                      "1.locked frequency status, unknonw Phase status ",
 	}, {
 		reply: &nl.DoDeviceGetReply{
