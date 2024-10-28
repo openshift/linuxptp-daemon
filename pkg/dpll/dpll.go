@@ -827,7 +827,6 @@ func (d *DpllConfig) holdover() {
 			// Ans : continue to calculate offset here and if source is returned and actual offset is within threshold then go to locked state and cancel this timer
 			d.phaseOffset = int64(math.Round((d.slope / 1000) * time.Since(start).Seconds()))
 			glog.Infof("(%s) time since holdover start %f, offset %d nanosecond holdover %s", d.iface, time.Since(start).Seconds(), d.phaseOffset, strconv.FormatBool(d.onHoldover))
-			d.sendDpllEvent()
 			if !d.isLocalOffsetInRange() { // when holdover verify with local max holdover not with regular threshold
 				// once not in range, it will not go back to in range until holdover is closed
 				glog.Infof("offset is out of range: %v, max %v",
@@ -837,6 +836,7 @@ func (d *DpllConfig) holdover() {
 				d.sendDpllEvent()
 				return
 			}
+			d.sendDpllEvent()
 		case <-timeout:
 			d.inSpec = false // not in HO, Out of spec
 			d.state = event.PTP_FREERUN
