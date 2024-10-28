@@ -27,7 +27,6 @@ var (
 func monkeyPatch() {
 
 	event.PMCGMGetter = func(cfgName string) (protocol.GrandmasterSettings, error) {
-		cfgName = strings.Replace(cfgName, event.TS2PHCProcessName, event.PTP4lProcessName, 1)
 		return protocol.GrandmasterSettings{
 			ClockQuality: fbprotocol.ClockQuality{
 				ClockClass:              0,
@@ -47,22 +46,22 @@ func monkeyPatch() {
 		}, nil
 	}
 	event.PMCGMSetter = func(cfgName string, g protocol.GrandmasterSettings) error {
-		cfgName = strings.Replace(cfgName, event.TS2PHCProcessName, event.PTP4lProcessName, 1)
 		return nil
 	}
 }
 
 type PTPEvents struct {
-	processName      event.EventSource
-	clockState       event.PTPState
-	cfgName          string
-	outOfSpec        bool
-	values           map[event.ValueType]interface{}
-	wantGMState      string // want is the expected output.
-	wantClockState   string
-	wantProcessState string
-	desc             string
-	sourceLost       bool
+	processName        event.EventSource
+	clockState         event.PTPState
+	cfgName            string
+	outOfSpec          bool
+	frequencyTraceable bool
+	values             map[event.ValueType]interface{}
+	wantGMState        string // want is the expected output.
+	wantClockState     string
+	wantProcessState   string
+	desc               string
+	sourceLost         bool
 }
 
 func TestEventHandler_ProcessEvents(t *testing.T) {
@@ -125,11 +124,11 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			clockState:       event.PTP_FREERUN,
 			outOfSpec:        false,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 0},
-			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
+			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "gnss[0]:[ts2phc.0.config] ens1f0 gnss_status 0 offset 0 s0",
 			sourceLost:       true,
-			desc:             "GPS is free run ,source is lost when everything else is locked(Do nothing and wait  for DPLL to switch to HOLDOVER)",
+			desc:             "GPS is free run ,source is lost when everything else is locked(DPLL to switch to HOLDOVER)",
 		},
 
 		{
@@ -144,15 +143,16 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			desc:             "dpll is on Holdover, where source is lost, move to holdover state",
 		},
 		{
-			processName:      event.DPLL,
-			cfgName:          "ts2phc.0.config",
-			clockState:       event.PTP_FREERUN,
-			outOfSpec:        true,
-			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 1, event.FREQUENCY_STATUS: 1, event.PPS_STATUS: 1},
-			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 140",
-			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 1 offset 0 phase_status 1 pps_status 1 s0",
-			desc:             "dpll move to FREERUN from holdover (out of spec)",
+			processName:        event.DPLL,
+			cfgName:            "ts2phc.0.config",
+			clockState:         event.PTP_FREERUN,
+			outOfSpec:          true,
+			frequencyTraceable: false,
+			values:             map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 1, event.FREQUENCY_STATUS: 1, event.PPS_STATUS: 1},
+			wantGMState:        "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
+			wantClockState:     "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
+			wantProcessState:   "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 1 offset 0 phase_status 1 pps_status 1 s0",
+			desc:               "dpll move to FREERUN from holdover (out of spec)",
 		},
 		{
 			processName:      event.GNSS,
@@ -161,10 +161,23 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			outOfSpec:        false,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 3},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 140",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "gnss[0]:[ts2phc.0.config] ens1f0 gnss_status 3 offset 0 s2",
 			sourceLost:       false,
 			desc:             "GPS is locked but dpll is in FREERUN and out of spec, yet to switch over in that case GM should stay with last state",
+		},
+		{
+			processName:        event.GNSS,
+			cfgName:            "ts2phc.0.config",
+			clockState:         event.PTP_LOCKED,
+			outOfSpec:          false,
+			frequencyTraceable: false,
+			values:             map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 3},
+			wantGMState:        "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
+			wantClockState:     "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
+			wantProcessState:   "gnss[0]:[ts2phc.0.config] ens1f0 gnss_status 3 offset 0 s2",
+			sourceLost:         false,
+			desc:               "GPS is locked but dpll is in FREERUN and out of spec, yet to switch over in that case GM should stay with last state",
 		},
 		{
 			processName:      event.DPLL,
@@ -211,7 +224,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	for _, test := range tests {
 		select {
-		case eChannel <- sendEvents(test.cfgName, test.processName, test.clockState, test.values, test.outOfSpec, test.sourceLost):
+		case eChannel <- sendEvents(test.cfgName, test.processName, test.clockState, test.values, test.outOfSpec, test.frequencyTraceable, test.sourceLost):
 			log.Println("sent data to channel")
 			log.Println(test.cfgName, test.processName, test.clockState, test.outOfSpec, test.values)
 			time.Sleep(1 * time.Second)
@@ -325,20 +338,21 @@ func ProcessTestEvents(c net.Conn, logOut chan<- string) {
 }
 
 func sendEvents(cfgName string, processName event.EventSource, state event.PTPState,
-	values map[event.ValueType]interface{}, outOfSpec bool, sourceLost bool) event.EventChannel {
+	values map[event.ValueType]interface{}, outOfSpec, sourceLost, frequencyTraceable bool) event.EventChannel {
 	glog.Info("sending Nav status event to event handler Process")
 	return event.EventChannel{
-		ProcessName: processName,
-		State:       state,
-		IFace:       "ens1f0",
-		CfgName:     cfgName,
-		Values:      values,
-		SourceLost:  sourceLost,
-		ClockType:   "GM",
-		Time:        0,
-		OutOfSpec:   outOfSpec,
-		WriteToLog:  true,
-		Reset:       false,
+		ProcessName:        processName,
+		State:              state,
+		IFace:              "ens1f0",
+		CfgName:            cfgName,
+		Values:             values,
+		SourceLost:         sourceLost,
+		ClockType:          "GM",
+		Time:               0,
+		OutOfSpec:          outOfSpec,
+		FrequencyTraceable: frequencyTraceable,
+		WriteToLog:         true,
+		Reset:              false,
 	}
 }
 

@@ -11,7 +11,7 @@ type DDetails []*DataDetails
 
 // Data ...
 type Data struct {
-	ProcessName EventSource // ts2phc  // dppl
+	ProcessName EventSource // ts2phc  // dpll
 	Details     DDetails    // array of iface and  offset
 	State       PTPState    // have the worst state here
 	logData     string      // iface that is connected to GNSS
@@ -45,7 +45,7 @@ func (d *Data) UpdateState() {
 	state := PTP_UNKNOWN
 	for _, detail := range d.Details { // 2 ts2phc or 2 dpll etc
 		switch detail.State {
-		case PTP_FREERUN: // if its free ru and main state is not holdover then this is the state
+		case PTP_FREERUN: // if its free run and main state is not holdover then this is the state
 			if state != PTP_HOLDOVER {
 				state = detail.State
 			}
