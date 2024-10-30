@@ -11,9 +11,6 @@ import (
 	"github.com/openshift/linuxptp-daemon/pkg/leap"
 	ptpv1 "github.com/openshift/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	fake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/yaml"
 )
 
@@ -42,7 +39,8 @@ func clean(t *testing.T) {
 func applyProfileSyncE(t *testing.T, profile *ptpv1.PtpProfile) {
 
 	stopCh := make(<-chan struct{})
-	mockLeap()
+	assert.NoError(t, leap.MockLeapFile())
+	defer close(leap.LeapMgr.Close)
 	dn := New(
 		"test-node-name",
 		"openshift-ptp",
@@ -62,8 +60,6 @@ func applyProfileSyncE(t *testing.T, profile *ptpv1.PtpProfile) {
 	assert.NotNil(t, dn)
 	err := dn.applyNodePtpProfile(0, profile)
 	assert.NoError(t, err)
-	close(leap.LeapMgr.Close)
-
 }
 
 func testRequirements(t *testing.T, profile *ptpv1.PtpProfile) {
@@ -101,25 +97,4 @@ func Test_applyProfile_synce(t *testing.T) {
 		testRequirements(t, profile)
 		clean(t)
 	}
-}
-
-func mockLeap() error {
-	cm := &v1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "openshift-ptp", Name: "leap-configmap"},
-		Data: map[string]string{
-			"test-node-name": `# Do not edit
-# This file is generated automatically by linuxptp-daemon
-#$	3927775672
-#@	4291747200
-3692217600     37    # 1 Jan 2017`,
-		},
-	}
-	os.Setenv("NODE_NAME", "test-node-name")
-	client := fake.NewSimpleClientset(cm)
-	lm, err := leap.New(client, "openshift-ptp")
-	if err != nil {
-		return err
-	}
-	go lm.Run()
-	return nil
 }
