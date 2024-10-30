@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/openshift/linuxptp-daemon/pkg/event"
+	"github.com/openshift/linuxptp-daemon/pkg/leap"
 	"github.com/openshift/linuxptp-daemon/pkg/synce"
 	ptpv1 "github.com/openshift/ptp-operator/api/v1"
 	"github.com/sirupsen/logrus"
@@ -220,7 +221,6 @@ func setup() {
 	var logLevel string
 	flag.StringVar(&logLevel, "logLevel", "4", "test")
 	flag.Lookup("v").Value.Set(logLevel)
-
 	daemon.InitializeOffsetMaps()
 	pm = daemon.NewProcessManager()
 	daemon.RegisterMetrics(MYNODE)
@@ -236,6 +236,8 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 func Test_ProcessPTPMetrics(t *testing.T) {
+	leap.MockLeapFile()
+	defer close(leap.LeapMgr.Close)
 
 	assert := assert.New(t)
 	for _, tc := range testCases {

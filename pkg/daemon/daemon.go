@@ -966,10 +966,11 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 		logEntry := synce.ParseLog(output)
 		p.ProcessSynceEvents(logEntry)
 
-	} else if p.name == ts2phcProcessName && (strings.Contains(output, NMEASourceDisabledIndicator) ||
-		strings.Contains(output, InvalidMasterTimestampIndicator) ||
-		(strings.Contains(output, NMEASourceDisabledIndicator2) &&
-			(!leap.LeapMgr.IsLeapInWindow(time.Now().UTC(), -2*time.Second, time.Second)))) { //TODO identify which interface lost nmea or 1pps
+	} else if p.name == ts2phcProcessName &&
+		(strings.Contains(output, NMEASourceDisabledIndicator) ||
+			strings.Contains(output, InvalidMasterTimestampIndicator) ||
+			strings.Contains(output, NMEASourceDisabledIndicator2)) &&
+		!leap.LeapMgr.IsLeapInWindow(time.Now().UTC(), -2*time.Second, time.Second) { //TODO identify which interface lost nmea or 1pps
 		iface := p.ifaces.GetGMInterface().Name
 		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, state, map[event.ValueType]interface{}{event.NMEA_STATUS: int64(0)})
 		glog.Error("nmea string lost") //TODO: add for 1pps lost
