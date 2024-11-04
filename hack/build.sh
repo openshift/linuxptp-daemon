@@ -11,4 +11,4 @@ fi
 export GO15VENDOREXPERIMENT=1
 export GOBIN=${PWD}/bin
 export GOPATH=${PWD}/.gopath
-go build --mod=vendor -tags no_openssl "$@" -o bin/ptp ${REPO_PATH}/cmd
+go build --mod=vendor "$@" -o bin/ptp ${REPO_PATH}/cmd
