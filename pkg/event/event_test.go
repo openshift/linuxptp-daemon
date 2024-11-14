@@ -207,7 +207,8 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	eventManager := event.Init("node", true, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	eventManager.MockEnable()
 	go eventManager.ProcessEvents()
-	assert.NoError(t, mockLeap())
+	assert.NoError(t, leap.MockLeapFile())
+	defer close(leap.LeapMgr.Close)
 	time.Sleep(1 * time.Second)
 	for _, test := range tests {
 		select {
