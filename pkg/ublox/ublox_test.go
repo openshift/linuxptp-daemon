@@ -88,8 +88,7 @@ func TestFindProtoVersion(t *testing.T) {
 func Test_Query(t *testing.T) {
 	t.Skip("Skipping test, ubxtool needs to be installed")
 	u := ublox.UBlox{}
-	//assert.Nil(t, e)
-	assert.NotNil(t, u)
+	assert.NotNil(t, &u)
 	ss, s, err := u.Query("-V", regexp.MustCompile("Version"))
 	assert.NotEmpty(t, ss)
 	assert.NotEmpty(t, s[0])
