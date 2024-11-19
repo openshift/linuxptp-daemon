@@ -9,7 +9,6 @@ import (
 
 	nl "github.com/openshift/linuxptp-daemon/pkg/dpll-netlink"
 
-	"github.com/golang/glog"
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/dpll"
 	"github.com/openshift/linuxptp-daemon/pkg/event"
@@ -59,7 +58,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		expectedPhaseOffset:       dpll.FaultyPhaseOffset * 1000000,
 		expectedFrequencyStatus:   2, // locked
 		expectedInSpecState:       false,
-		desc:                      "1.locked frequency status, unknonw Phase status ",
+		desc:                      fmt.Sprintf("1.locked frequency status, unknonw Phase status : pin %d ", pinType),
 	}, {
 		reply: &nl.DoDeviceGetReply{
 			Id:            id,
@@ -72,14 +71,14 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		},
 		sourceLost:                false,
 		source:                    source,
-		offset:                    5,
+		offset:                    1,
 		expectedIntermediateState: event.PTP_LOCKED,
 		expectedState:             event.PTP_LOCKED,
 		expectedPhaseStatus:       2, //no phase status event for eec
 		expectedPhaseOffset:       50,
 		expectedFrequencyStatus:   2, // locked
 		expectedInSpecState:       true,
-		desc:                      "2. with locked frequency status, reading phase status ",
+		desc:                      fmt.Sprintf("2. with locked frequency status, reading phase status  : pin %d ", pinType),
 	},
 		{
 			reply: &nl.DoDeviceGetReply{
@@ -100,8 +99,8 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 			sourceLost:                true,
 			sleep:                     2,
 			source:                    source,
-			offset:                    5,
-			expectedIntermediateState: event.PTP_FREERUN,
+			offset:                    1,
+			expectedIntermediateState: event.PTP_HOLDOVER,
 			expectedState:             event.PTP_FREERUN,
 			expectedPhaseStatus: func() int64 {
 				if pinType == 2 {
@@ -125,7 +124,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 					return true
 				}
 			}(),
-			desc: "3. Holdover frequency/Phase status status times out in 1sec ",
+			desc: fmt.Sprintf("3. Holdover frequency/Phase status status times out in 1sec  : pin %d ", pinType),
 		},
 		{
 			reply: &nl.DoDeviceGetReply{
@@ -165,7 +164,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 					return true
 				}
 			}(),
-			desc: "4.Out of holdover state.or stays in free run for pps , gns:=declare outofSpec Freerun within a sec",
+			desc: fmt.Sprintf("4.Out of holdover state.or stays in free run for pps , gns:=declare outofSpec Freerun within a sec : pin %d ", pinType),
 		},
 	}
 }
@@ -176,7 +175,7 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 	closeChn := make(chan bool)
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
-	d := dpll.NewDpll(clockid, 1400, 2, 10, "ens01",
+	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{})
 	d.CmdInit()
 	eventChannel := make(chan event.EventChannel, 10)
@@ -207,7 +206,6 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 		assert.Equal(t, tt.expectedPhaseOffset/1000000, d.PhaseOffset(), tt.desc)
 		assert.Equal(t, tt.expectedState, d.State(), tt.desc)
 		assert.Equal(t, tt.expectedInSpecState, d.InSpec())
-
 	}
 	closeChn <- true
 }
@@ -219,7 +217,7 @@ func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 	closeChn := make(chan bool)
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
-	d := dpll.NewDpll(clockid, 1400, 2, 10, "ens01",
+	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{})
 	d.CmdInit()
 	eventChannel := make(chan event.EventChannel, 10)
@@ -259,7 +257,6 @@ func TestSysfs(t *testing.T) {
 	//assert.Nil(t, err)
 	fcontentStr := strings.ReplaceAll("-26644444444444444", "\n", "")
 	index, err2 := strconv.ParseInt(fcontentStr, 10, 64)
-	glog.Errorf("errr %s", err2)
 	assert.Nil(t, err2)
 	assert.GreaterOrEqual(t, index, int64(-26644444444444444))
 }
@@ -276,11 +273,11 @@ func TestSlopeAndTimer(t *testing.T) {
 
 	testCase := []dpllTestCase{
 		{
-			localMaxHoldoverOffSet: 6000,
-			localHoldoverTimeout:   100,
-			maxInSpecOffset:        100,
-			expectedSlope:          60000,
-			expectedTimeout:        2,
+			localMaxHoldoverOffSet: 6000,       // in ns
+			localHoldoverTimeout:   100,        // in sec
+			maxInSpecOffset:        100,        // in ns
+			expectedSlope:          6000 / 100, // 60ns rate of change
+			expectedTimeout:        2,          // 100/60 = 2 sec (maxInSpecOffset /slope)
 		},
 	}
 	for _, tt := range testCase {

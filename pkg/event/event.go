@@ -316,7 +316,6 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 	ts2phcState := PTP_FREERUN
 	gnssSrcLost := e.isSourceLost(cfgName)
 	gmInterface := e.getGNSSInterface(cfgName)
-
 	if gmInterface == GM_INTERFACE_UNKNOWN {
 		glog.Infof("GM-GNSS interface is not yet identified, gm state reporting delayed.")
 		return grandMasterSyncState{gmIFace: gmInterface}
@@ -576,7 +575,7 @@ func (e *EventHandler) ProcessEvents() {
 			}
 		}
 	}()
-
+	var lastgmState PTPState
 connect:
 	select {
 	case <-e.closeCh:
@@ -669,12 +668,22 @@ connect:
 			} else {
 				// Update the in MemData
 				dataDetails := e.addEvent(event)
+				// Computes GM state
+				gmState := e.updateGMState(event.CfgName)
+				// right now if GPS offset || mode is bad then consider source lost
+				if e.gmSyncState[event.CfgName] != nil {
+					e.gmSyncState[event.CfgName].sourceLost = event.OutOfSpec
+				}
+				if gmState.state != PTP_LOCKED { // here update nmea status
+					if _, ok := event.Values[NMEA_STATUS]; ok {
+						event.Values[NMEA_STATUS] = 0
+					}
+				}
+
 				logDataValues = dataDetails.logData
 				if event.WriteToLog && logDataValues != "" {
 					logOut = append(logOut, logDataValues)
 				}
-				// Computes GM state
-				gmState := e.updateGMState(event.CfgName)
 				// only if config has this special name
 				d := e.GetData(event.CfgName, event.ProcessName)
 
@@ -703,6 +712,8 @@ connect:
 					}
 					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), eventIface)
 					//  update all metric that was sent to events
+					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
+
 					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
 					if gmState.gmIFace != GM_INTERFACE_UNKNOWN { // race condition ;
 						gmIface := gmState.gmIFace
@@ -757,6 +768,11 @@ connect:
 						}
 					}()
 				}
+				if lastgmState != gmState.state {
+					glog.Infof("PTP State: GM State %v, Clock Class %d Time %s sourceLost %v", gmState.state, gmState.clockClass, time.Now(), gmState.sourceLost)
+					lastgmState = gmState.state
+				}
+
 			} // end of GM condition
 			if len(logOut) > 0 {
 				if e.stdoutToSocket {

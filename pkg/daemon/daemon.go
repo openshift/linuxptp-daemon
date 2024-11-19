@@ -436,7 +436,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	if test {
 		configPrefix = testDir
 	}
-
 	dn.pluginManager.OnPTPConfigChange(nodeProfile)
 
 	ptpProcesses := []string{
@@ -493,17 +492,24 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 			messageTag = fmt.Sprintf("[ts2phc.%d.config:{level}]", runID)
 			leap.LeapMgr.SetPtp4lConfigPath(fmt.Sprintf("ptp4l.%d.config", runID))
-			//DPLL is considered to be running along with ts2phc
-			localMaxDpllHoldoverOffSet, timer := dpll.CalculateTimer(nodeProfile)
+			// DPLL is considered to be running along with ts2phc
+			maxInSpecOffset, maxHoldoverOffSet, maxHoldoverTimeout, inSpecTimer, frequencyTraceable := dpll.CalculateTimer(nodeProfile)
 			// update ts2phcOpts with the new config
 			if configOpts != nil && *configOpts != "" {
 				if !strings.Contains(*configOpts, "--ts2phc.holdover") {
-					*configOpts += " --ts2phc.holdover " + strconv.FormatInt(timer, 10)
-				}
+					if frequencyTraceable {
+						*configOpts += " --ts2phc.holdover " + strconv.FormatInt(maxHoldoverTimeout, 10)
+					} else {
+						*configOpts += " --ts2phc.holdover " + strconv.FormatInt(inSpecTimer, 10)
+					}
+				} // there is a 5s delay in the NMEA driver, accepting pulses 5s after the last valid NMEA message, so that might need to be subtracted from that value
+				// need more testing to confirm
 				if !strings.Contains(*configOpts, "--servo_offset_threshold") {
-					*configOpts += " --servo_offset_threshold " + strconv.FormatInt(localMaxDpllHoldoverOffSet, 10) // infinite threshold to prevent servo from running in s3 state when holdover is enabled
-					// there is a 5s delay in the NMEA driver, accepting pulses 5s after the last valid NMEA message, so that might need to be subtracted from that value
-					// need more testing to confirm
+					if frequencyTraceable {
+						*configOpts += " --servo_offset_threshold " + strconv.FormatInt(maxHoldoverOffSet, 10)
+					} else {
+						*configOpts += " --servo_offset_threshold " + strconv.FormatInt(maxInSpecOffset, 10)
+					}
 				}
 				if !strings.Contains(*configOpts, "--servo_num_offset_values") { //if consecutive smaller offsets (less than the threshold) are not observed, the system stays in S2
 					*configOpts += " --servo_num_offset_values 10"
@@ -768,9 +774,9 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 	}
 	// ptp4l[5196819.100]: [ptp4l.0.config] PTP_PROCESS_STOPPED:0/1
 	deadProcessMsg := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d\n", processName, time.Now().Unix(), cfgName, status)
-	UpdateProcessStatusMetrics(processName, cfgName, status)
 	glog.Infof("%s\n", deadProcessMsg)
 	if c == nil {
+		UpdateProcessStatusMetrics(processName, cfgName, status)
 		return
 	}
 	_, err := (*c).Write([]byte(deadProcessMsg))
@@ -841,15 +847,15 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 		glog.Infof("Starting %s...", p.name)
 		glog.Infof("%s cmd: %+v", p.name, p.cmd)
 
-		//
-		// don't discard process stderr output
-		//
-		p.cmd.Stderr = os.Stderr
 		cmdReader, err := p.cmd.StdoutPipe()
 		if err != nil {
 			glog.Errorf("CmdRun() error creating StdoutPipe for %s: %v", p.name, err)
 			break
 		}
+
+		// don't discard process stderr output
+		p.cmd.Stderr = p.cmd.Stdout
+
 		if !stdoutToSocket {
 			scanner := bufio.NewScanner(cmdReader)
 			processStatus(nil, p.name, p.messageTag, PtpProcessUp)
@@ -897,8 +903,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 						fmt.Printf("%s\n", output)
 					}
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
-					out := fmt.Sprintf("%s\n", p.replaceClockID(output))
-
+					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
 					// for ts2phc, we need to extract metrics to identify GM state
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
@@ -908,9 +913,9 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
 						p.announceHAFailOver(&c, output) // do not use go routine since order of execution is important here
 					}
-					_, err2 := c.Write([]byte(removeMessageSuffix(out)))
+					_, err2 := c.Write([]byte(removeMessageSuffix(output)))
 					if err2 != nil {
-						glog.Errorf("Write %s error %s:", out, err2)
+						glog.Errorf("Write %s error %s:", output, err2)
 						goto connect
 					}
 				}
@@ -965,15 +970,6 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 		configName = strings.Split(configName, MessageTagSuffixSeperator)[0] // remove any suffix added to the configName
 		logEntry := synce.ParseLog(output)
 		p.ProcessSynceEvents(logEntry)
-
-	} else if p.name == ts2phcProcessName &&
-		(strings.Contains(output, NMEASourceDisabledIndicator) ||
-			strings.Contains(output, InvalidMasterTimestampIndicator) ||
-			strings.Contains(output, NMEASourceDisabledIndicator2)) &&
-		!leap.LeapMgr.IsLeapInWindow(time.Now().UTC(), -2*time.Second, time.Second) { //TODO identify which interface lost nmea or 1pps
-		iface := p.ifaces.GetGMInterface().Name
-		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, state, map[event.ValueType]interface{}{event.NMEA_STATUS: int64(0)})
-		glog.Error("nmea string lost") //TODO: add for 1pps lost
 	} else {
 		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
@@ -995,7 +991,6 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 			case HOLDOVER:
 				state = event.PTP_HOLDOVER // consider s1 state as holdover,this passed to event to create metrics and events
 			}
-
 			p.ProcessTs2PhcEvents(ptpOffset, source, ifaceName, state, values)
 		}
 	}
@@ -1392,4 +1387,13 @@ func (p *ptpProcess) SyncEDeviceByName(name string) *synce.Config {
 		}
 	}
 	return nil
+}
+
+func containsAny(output string, indicators ...string) bool {
+	for _, indicator := range indicators {
+		if strings.Contains(output, indicator) {
+			return true
+		}
+	}
+	return false
 }
