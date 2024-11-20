@@ -64,6 +64,7 @@ const (
 	MASTER
 	FAULTY
 	UNKNOWN
+	LISTENING
 )
 
 type masterOffsetInterface struct { // by slave iface with masked index
@@ -146,7 +147,7 @@ var (
 			Namespace: PTPNamespace,
 			Subsystem: PTPSubsystem,
 			Name:      "interface_role",
-			Help:      "0 = PASSIVE, 1 = SLAVE, 2 = MASTER, 3 = FAULTY, 4 = UNKNOWN",
+			Help:      "0 = PASSIVE, 1 = SLAVE, 2 = MASTER, 3 = FAULTY, 4 = UNKNOWN, 5 = LISTENING",
 		}, []string{"process", "node", "iface"})
 
 	ProcessStatus = prometheus.NewGaugeVec(
@@ -665,6 +666,8 @@ func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 		role = MASTER
 	} else if strings.Contains(output, "FAULT_DETECTED") || strings.Contains(output, "SYNCHRONIZATION_FAULT") {
 		role = FAULTY
+	} else if strings.Contains(output, "UNCALIBRATED to LISTENING") || strings.Contains(output, "SLAVE to LISTENING") {
+		role = LISTENING
 	} else {
 		portId = 0
 	}
