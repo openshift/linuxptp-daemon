@@ -153,6 +153,7 @@ type ptpProcess struct {
 	ptpClockThreshold *ptpv1.PtpClockThreshold
 	haProfile         map[string][]string // stores list of interface name for each profile
 	syncERelations    *synce.Relations
+	c                 *net.Conn
 }
 
 func (p *ptpProcess) Stopped() bool {

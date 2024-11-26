@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"github.com/openshift/linuxptp-daemon/pkg/config"
+	"net"
 	"os"
 	"os/exec"
 	"sync"
@@ -22,14 +23,15 @@ const (
 )
 
 type gpspipe struct {
-	name       string
-	execMutex  sync.Mutex
-	cmdLine    string
-	cmd        *exec.Cmd
-	serialPort string
-	exitCh     chan struct{}
-	stopped    bool
-	messageTag string
+	name           string
+	execMutex      sync.Mutex
+	cmdLine        string
+	cmd            *exec.Cmd
+	serialPort     string
+	exitCh         chan struct{}
+	stopped        bool
+	messageTag     string
+	stdoutToSocket bool
 }
 
 // Name ... Process name
@@ -67,7 +69,15 @@ func (gp *gpspipe) CmdStop() {
 		return
 	}
 	gp.setStopped(true)
-	processStatus(nil, gp.name, gp.messageTag, PtpProcessDown)
+	if !gp.stdoutToSocket {
+		processStatus(nil, gp.name, gp.messageTag, PtpProcessDown)
+	} else {
+		c, err := net.Dial("unix", eventSocket)
+		if err == nil {
+			processStatus(&c, gp.name, gp.messageTag, PtpProcessDown)
+			c.Close()
+		}
+	}
 	if gp.cmd.Process != nil {
 		glog.Infof("Sending TERM to (%s) PID: %d", gp.name, gp.cmd.Process.Pid)
 		err := gp.cmd.Process.Signal(syscall.SIGTERM)
@@ -97,7 +107,16 @@ func (gp *gpspipe) CmdRun(stdoutToSocket bool) {
 	defer func() {
 		gp.exitCh <- struct{}{}
 	}()
-	processStatus(nil, gp.name, gp.messageTag, PtpProcessUp)
+	gp.stdoutToSocket = stdoutToSocket
+	if !gp.stdoutToSocket {
+		processStatus(nil, gp.name, gp.messageTag, PtpProcessUp)
+	} else {
+		c, err := net.Dial("unix", eventSocket)
+		if err == nil {
+			processStatus(&c, gp.name, gp.messageTag, PtpProcessUp)
+			c.Close()
+		}
+	}
 	for {
 		glog.Infof("Starting %s...", gp.Name())
 		glog.Infof("%s cmd: %+v", gp.Name(), gp.cmd)
