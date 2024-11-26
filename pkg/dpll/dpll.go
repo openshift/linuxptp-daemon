@@ -5,6 +5,7 @@ import (
 	"fmt"
 	ptpv1 "github.com/openshift/ptp-operator/api/v1"
 	"math"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -263,6 +264,10 @@ func (d *DpllConfig) CmdInit() {
 		d.setAPIType()
 	}
 	glog.Infof("api type %v", d.apiType)
+}
+
+// ProcessStatus ... process status
+func (d *DpllConfig) ProcessStatus(c *net.Conn, status int64) {
 }
 
 // CmdRun ... run command
