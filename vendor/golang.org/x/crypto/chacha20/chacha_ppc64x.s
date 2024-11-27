@@ -36,6 +36,7 @@
 // for VPERMXOR
 #define MASK  R18
 
+<<<<<<< HEAD:vendor/golang.org/x/crypto/chacha20/chacha_ppc64x.s
 DATA consts<>+0x00(SB)/4, $0x61707865
 DATA consts<>+0x04(SB)/4, $0x3320646e
 DATA consts<>+0x08(SB)/4, $0x79622d32
@@ -97,6 +98,33 @@ GLOBL consts<>(SB), RODATA, $0xc0
 #define BE_XXBRW_INIT()
 #define BE_XXBRW(vr)
 #endif
+=======
+DATA consts<>+0x00(SB)/8, $0x3320646e61707865
+DATA consts<>+0x08(SB)/8, $0x6b20657479622d32
+DATA consts<>+0x10(SB)/8, $0x0000000000000001
+DATA consts<>+0x18(SB)/8, $0x0000000000000000
+DATA consts<>+0x20(SB)/8, $0x0000000000000004
+DATA consts<>+0x28(SB)/8, $0x0000000000000000
+DATA consts<>+0x30(SB)/8, $0x0a0b08090e0f0c0d
+DATA consts<>+0x38(SB)/8, $0x0203000106070405
+DATA consts<>+0x40(SB)/8, $0x090a0b080d0e0f0c
+DATA consts<>+0x48(SB)/8, $0x0102030005060704
+DATA consts<>+0x50(SB)/8, $0x6170786561707865
+DATA consts<>+0x58(SB)/8, $0x6170786561707865
+DATA consts<>+0x60(SB)/8, $0x3320646e3320646e
+DATA consts<>+0x68(SB)/8, $0x3320646e3320646e
+DATA consts<>+0x70(SB)/8, $0x79622d3279622d32
+DATA consts<>+0x78(SB)/8, $0x79622d3279622d32
+DATA consts<>+0x80(SB)/8, $0x6b2065746b206574
+DATA consts<>+0x88(SB)/8, $0x6b2065746b206574
+DATA consts<>+0x90(SB)/8, $0x0000000100000000
+DATA consts<>+0x98(SB)/8, $0x0000000300000002
+DATA consts<>+0xa0(SB)/8, $0x5566774411223300
+DATA consts<>+0xa8(SB)/8, $0xddeeffcc99aabb88
+DATA consts<>+0xb0(SB)/8, $0x6677445522330011
+DATA consts<>+0xb8(SB)/8, $0xeeffccddaabb8899
+GLOBL consts<>(SB), RODATA, $0xc0
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg):vendor/golang.org/x/crypto/chacha20/chacha_ppc64le.s
 
 //func chaCha20_ctr32_vsx(out, inp *byte, len int, key *[8]uint32, counter *uint32)
 TEXT ·chaCha20_ctr32_vsx(SB),NOSPLIT,$64-40

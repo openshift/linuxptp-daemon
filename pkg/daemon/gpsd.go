@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/openshift/linuxptp-daemon/pkg/config"
-	"github.com/openshift/linuxptp-daemon/pkg/event"
-	"github.com/openshift/linuxptp-daemon/pkg/leap"
-	"github.com/openshift/linuxptp-daemon/pkg/ublox"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/leap"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/ublox"
 	gpsdlib "github.com/stratoberry/go-gpsd"
 )
 

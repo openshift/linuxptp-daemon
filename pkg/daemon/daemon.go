@@ -15,21 +15,21 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openshift/linuxptp-daemon/pkg/synce"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/synce"
 
-	"github.com/openshift/linuxptp-daemon/pkg/config"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
 
-	"github.com/openshift/linuxptp-daemon/pkg/dpll"
-	"github.com/openshift/linuxptp-daemon/pkg/leap"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/dpll"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/leap"
 
-	"github.com/openshift/linuxptp-daemon/pkg/event"
-	ptpnetwork "github.com/openshift/linuxptp-daemon/pkg/network"
-	"github.com/openshift/linuxptp-daemon/pkg/pmc"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
+	ptpnetwork "github.com/josephdrichard/linuxptp-daemon/pkg/network"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/pmc"
 
 	"github.com/golang/glog"
 	"k8s.io/client-go/kubernetes"
 
-	ptpv1 "github.com/openshift/ptp-operator/api/v1"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
 const (

@@ -1,5 +1,5 @@
 FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.22-openshift-4.18 AS builder
-WORKDIR /go/src/github.com/openshift/linuxptp-daemon
+WORKDIR /go/src/github.com/josephdrichard/linuxptp-daemon
 COPY . .
 RUN make clean && make
 
@@ -17,6 +17,6 @@ RUN ln -s /usr/sbin/gpsd /usr/local/sbin/gpsd
 RUN ln -s /usr/bin/ubxtool /usr/local/bin/ubxtool
 
 
-COPY --from=builder /go/src/github.com/openshift/linuxptp-daemon/bin/ptp /usr/local/bin/
+COPY --from=builder /go/src/github.com/josephdrichard/linuxptp-daemon/bin/ptp /usr/local/bin/
 
 CMD ["/usr/local/bin/ptp"]

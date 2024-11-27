@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
-	dpll "github.com/openshift/linuxptp-daemon/pkg/dpll-netlink"
-	ptpv1 "github.com/openshift/ptp-operator/api/v1"
+	dpll "github.com/josephdrichard/linuxptp-daemon/pkg/dpll-netlink"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"sigs.k8s.io/yaml"
 )
 

@@ -768,6 +768,7 @@ func Munmap(b []byte) (err error) {
 	return mapper.Munmap(b)
 }
 
+<<<<<<< HEAD
 func MmapPtr(fd int, offset int64, addr unsafe.Pointer, length uintptr, prot int, flags int) (ret unsafe.Pointer, err error) {
 	xaddr, err := mapper.mmap(uintptr(addr), length, prot, flags, fd, offset)
 	return unsafe.Pointer(xaddr), err
@@ -777,6 +778,8 @@ func MunmapPtr(addr unsafe.Pointer, length uintptr) (err error) {
 	return mapper.munmap(uintptr(addr), length)
 }
 
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 //sys   Gethostname(buf []byte) (err error) = SYS___GETHOSTNAME_A
 //sysnb	Getgid() (gid int)
 //sysnb	Getpid() (pid int)
@@ -825,10 +828,17 @@ func Lstat(path string, stat *Stat_t) (err error) {
 // for checking symlinks begins with $VERSION/ $SYSNAME/ $SYSSYMR/ $SYSSYMA/
 func isSpecialPath(path []byte) (v bool) {
 	var special = [4][8]byte{
+<<<<<<< HEAD
 		{'V', 'E', 'R', 'S', 'I', 'O', 'N', '/'},
 		{'S', 'Y', 'S', 'N', 'A', 'M', 'E', '/'},
 		{'S', 'Y', 'S', 'S', 'Y', 'M', 'R', '/'},
 		{'S', 'Y', 'S', 'S', 'Y', 'M', 'A', '/'}}
+=======
+		[8]byte{'V', 'E', 'R', 'S', 'I', 'O', 'N', '/'},
+		[8]byte{'S', 'Y', 'S', 'N', 'A', 'M', 'E', '/'},
+		[8]byte{'S', 'Y', 'S', 'S', 'Y', 'M', 'R', '/'},
+		[8]byte{'S', 'Y', 'S', 'S', 'Y', 'M', 'A', '/'}}
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 
 	var i, j int
 	for i = 0; i < len(special); i++ {
@@ -3026,6 +3036,7 @@ func ZosConsolePrintf(format string, v ...interface{}) (int, error) {
 		return 0, fmt.Errorf("%s (errno2=0x%x)\n", err1.Error(), err2)
 	}
 	return 0, nil
+<<<<<<< HEAD
 }
 func ZosStringToEbcdicBytes(str string, nullterm bool) (ebcdicBytes []byte) {
 	if nullterm {
@@ -3210,4 +3221,103 @@ func sendfile(outfd int, infd int, offset *int64, count int) (written int, err e
 		}
 	}
 	return n2, nil
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 }
+func ZosStringToEbcdicBytes(str string, nullterm bool) (ebcdicBytes []byte) {
+	if nullterm {
+		ebcdicBytes = []byte(str + "\x00")
+	} else {
+		ebcdicBytes = []byte(str)
+	}
+	A2e(ebcdicBytes)
+	return
+}
+func ZosEbcdicBytesToString(b []byte, trimRight bool) (str string) {
+	res := make([]byte, len(b))
+	copy(res, b)
+	E2a(res)
+	if trimRight {
+		str = string(bytes.TrimRight(res, " \x00"))
+	} else {
+		str = string(res)
+	}
+	return
+}
+
+func fdToPath(dirfd int) (path string, err error) {
+	var buffer [1024]byte
+	// w_ctrl()
+	ret := runtime.CallLeFuncByPtr(runtime.XplinkLibvec+SYS_W_IOCTL<<4,
+		[]uintptr{uintptr(dirfd), 17, 1024, uintptr(unsafe.Pointer(&buffer[0]))})
+	if ret == 0 {
+		zb := bytes.IndexByte(buffer[:], 0)
+		if zb == -1 {
+			zb = len(buffer)
+		}
+		// __e2a_l()
+		runtime.CallLeFuncByPtr(runtime.XplinkLibvec+SYS___E2A_L<<4,
+			[]uintptr{uintptr(unsafe.Pointer(&buffer[0])), uintptr(zb)})
+		return string(buffer[:zb]), nil
+	}
+	// __errno()
+	errno := int(*(*int32)(unsafe.Pointer(runtime.CallLeFuncByPtr(runtime.XplinkLibvec+SYS___ERRNO<<4,
+		[]uintptr{}))))
+	// __errno2()
+	errno2 := int(runtime.CallLeFuncByPtr(runtime.XplinkLibvec+SYS___ERRNO2<<4,
+		[]uintptr{}))
+	// strerror_r()
+	ret = runtime.CallLeFuncByPtr(runtime.XplinkLibvec+SYS_STRERROR_R<<4,
+		[]uintptr{uintptr(errno), uintptr(unsafe.Pointer(&buffer[0])), 1024})
+	if ret == 0 {
+		zb := bytes.IndexByte(buffer[:], 0)
+		if zb == -1 {
+			zb = len(buffer)
+		}
+		return "", fmt.Errorf("%s (errno2=0x%x)", buffer[:zb], errno2)
+	} else {
+		return "", fmt.Errorf("fdToPath errno %d (errno2=0x%x)", errno, errno2)
+	}
+}
+
+func impl_Mkfifoat(dirfd int, path string, mode uint32) (err error) {
+	var _p0 *byte
+	_p0, err = BytePtrFromString(path)
+	if err != nil {
+		return
+	}
+	runtime.EnterSyscall()
+	r0, e2, e1 := CallLeFuncWithErr(GetZosLibVec()+SYS___MKFIFOAT_A<<4, uintptr(dirfd), uintptr(unsafe.Pointer(_p0)), uintptr(mode))
+	runtime.ExitSyscall()
+	if int64(r0) == -1 {
+		err = errnoErr2(e1, e2)
+	}
+	return
+}
+
+//go:nosplit
+func get_MkfifoatAddr() *(func(dirfd int, path string, mode uint32) (err error))
+
+var Mkfifoat = enter_Mkfifoat
+
+func enter_Mkfifoat(dirfd int, path string, mode uint32) (err error) {
+	funcref := get_MkfifoatAddr()
+	if funcptrtest(GetZosLibVec()+SYS___MKFIFOAT_A<<4, "") == 0 {
+		*funcref = impl_Mkfifoat
+	} else {
+		*funcref = legacy_Mkfifoat
+	}
+	return (*funcref)(dirfd, path, mode)
+}
+
+func legacy_Mkfifoat(dirfd int, path string, mode uint32) (err error) {
+	dirname, err := ZosFdToPath(dirfd)
+	if err != nil {
+		return err
+	}
+	return Mkfifo(dirname+"/"+path, mode)
+}
+
+//sys	Posix_openpt(oflag int) (fd int, err error) = SYS_POSIX_OPENPT
+//sys	Grantpt(fildes int) (rc int, err error) = SYS_GRANTPT
+//sys	Unlockpt(fildes int) (rc int, err error) = SYS_UNLOCKPT

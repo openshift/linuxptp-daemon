@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openshift/linuxptp-daemon/pkg/config"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
 
 	"github.com/golang/glog"
 )

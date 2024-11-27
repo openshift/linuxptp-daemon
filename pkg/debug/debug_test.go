@@ -1,7 +1,7 @@
 package debug_test
 
 import (
-	"github.com/openshift/linuxptp-daemon/pkg/debug"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/debug"
 	"testing"
 )
 

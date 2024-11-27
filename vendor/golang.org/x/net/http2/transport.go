@@ -202,6 +202,7 @@ func (t *Transport) markNewGoroutine() {
 	}
 }
 
+<<<<<<< HEAD
 func (t *Transport) now() time.Time {
 	if t != nil && t.transportTestHooks != nil {
 		return t.transportTestHooks.group.Now()
@@ -216,6 +217,8 @@ func (t *Transport) timeSince(when time.Time) time.Duration {
 	return time.Since(when)
 }
 
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 // newTimer creates a new time.Timer, or a synthetic timer in tests.
 func (t *Transport) newTimer(d time.Duration) timer {
 	if t.transportTestHooks != nil {
@@ -818,6 +821,7 @@ func (t *Transport) NewClientConn(c net.Conn) (*ClientConn, error) {
 }
 
 func (t *Transport) newClientConn(c net.Conn, singleUse bool) (*ClientConn, error) {
+<<<<<<< HEAD
 	conf := configFromTransport(t)
 	cc := &ClientConn{
 		t:                           t,
@@ -840,11 +844,31 @@ func (t *Transport) newClientConn(c net.Conn, singleUse bool) (*ClientConn, erro
 		lastActive:                  t.now(),
 	}
 	var group synctestGroupInterface
+=======
+	cc := &ClientConn{
+		t:                     t,
+		tconn:                 c,
+		readerDone:            make(chan struct{}),
+		nextStreamID:          1,
+		maxFrameSize:          16 << 10,                    // spec default
+		initialWindowSize:     65535,                       // spec default
+		maxConcurrentStreams:  initialMaxConcurrentStreams, // "infinite", per spec. Use a smaller value until we have received server settings.
+		peerMaxHeaderListSize: 0xffffffffffffffff,          // "infinite", per spec. Use 2^64-1 instead.
+		streams:               make(map[uint32]*clientStream),
+		singleUse:             singleUse,
+		wantSettingsAck:       true,
+		pings:                 make(map[[8]byte]chan struct{}),
+		reqHeaderMu:           make(chan struct{}, 1),
+	}
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	if t.transportTestHooks != nil {
 		t.markNewGoroutine()
 		t.transportTestHooks.newclientconn(cc)
 		c = cc.tconn
+<<<<<<< HEAD
 		group = t.group
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	}
 	if VerboseLogs {
 		t.vlogf("http2: Transport creating client conn %p to %v", cc, c.RemoteAddr())
@@ -1509,6 +1533,7 @@ func (cs *clientStream) writeRequest(req *http.Request, streamf func(*clientStre
 	if cc.reqHeaderMu == nil {
 		panic("RoundTrip on uninitialized ClientConn") // for tests
 	}
+<<<<<<< HEAD
 	if isExtendedConnect {
 		select {
 		case <-cs.reqCancel:
@@ -1521,6 +1546,8 @@ func (cs *clientStream) writeRequest(req *http.Request, streamf func(*clientStre
 			}
 		}
 	}
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	select {
 	case cc.reqHeaderMu <- struct{}{}:
 	case <-cs.reqCancel:

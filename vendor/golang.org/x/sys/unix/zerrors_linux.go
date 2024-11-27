@@ -1710,7 +1710,10 @@ const (
 	KEXEC_ARCH_S390                             = 0x160000
 	KEXEC_ARCH_SH                               = 0x2a0000
 	KEXEC_ARCH_X86_64                           = 0x3e0000
+<<<<<<< HEAD
 	KEXEC_CRASH_HOTPLUG_SUPPORT                 = 0x8
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	KEXEC_FILE_DEBUG                            = 0x8
 	KEXEC_FILE_NO_INITRAMFS                     = 0x4
 	KEXEC_FILE_ON_CRASH                         = 0x2
@@ -1930,8 +1933,11 @@ const (
 	MNT_EXPIRE                                  = 0x4
 	MNT_FORCE                                   = 0x1
 	MNT_ID_REQ_SIZE_VER0                        = 0x18
+<<<<<<< HEAD
 	MNT_ID_REQ_SIZE_VER1                        = 0x20
 	MNT_NS_INFO_SIZE_VER0                       = 0x10
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	MODULE_INIT_COMPRESSED_FILE                 = 0x4
 	MODULE_INIT_IGNORE_MODVERSIONS              = 0x1
 	MODULE_INIT_IGNORE_VERMAGIC                 = 0x2
@@ -2973,7 +2979,11 @@ const (
 	RWF_HIPRI                                   = 0x1
 	RWF_NOAPPEND                                = 0x20
 	RWF_NOWAIT                                  = 0x8
+<<<<<<< HEAD
 	RWF_SUPPORTED                               = 0x7f
+=======
+	RWF_SUPPORTED                               = 0x3f
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	RWF_SYNC                                    = 0x4
 	RWF_WRITE_LIFE_NOT_SET                      = 0x0
 	SCHED_BATCH                                 = 0x3
@@ -3663,7 +3673,10 @@ const (
 	XDP_UMEM_PGOFF_COMPLETION_RING              = 0x180000000
 	XDP_UMEM_PGOFF_FILL_RING                    = 0x100000000
 	XDP_UMEM_REG                                = 0x4
+<<<<<<< HEAD
 	XDP_UMEM_TX_METADATA_LEN                    = 0x4
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	XDP_UMEM_TX_SW_CSUM                         = 0x2
 	XDP_UMEM_UNALIGNED_CHUNK_FLAG               = 0x1
 	XDP_USE_NEED_WAKEUP                         = 0x8

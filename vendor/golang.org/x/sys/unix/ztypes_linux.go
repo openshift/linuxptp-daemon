@@ -2522,7 +2522,11 @@ type XDPMmapOffsets struct {
 type XDPUmemReg struct {
 	Addr            uint64
 	Len             uint64
+<<<<<<< HEAD
 	Size            uint32
+=======
+	Chunk_size      uint32
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	Headroom        uint32
 	Flags           uint32
 	Tx_metadata_len uint32
@@ -4747,7 +4751,11 @@ const (
 	NL80211_ATTR_MAC_HINT                                   = 0xc8
 	NL80211_ATTR_MAC_MASK                                   = 0xd7
 	NL80211_ATTR_MAX_AP_ASSOC_STA                           = 0xca
+<<<<<<< HEAD
 	NL80211_ATTR_MAX                                        = 0x14c
+=======
+	NL80211_ATTR_MAX                                        = 0x14a
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	NL80211_ATTR_MAX_CRIT_PROT_DURATION                     = 0xb4
 	NL80211_ATTR_MAX_CSA_COUNTERS                           = 0xce
 	NL80211_ATTR_MAX_MATCH_SETS                             = 0x85
@@ -5351,7 +5359,11 @@ const (
 	NL80211_FREQUENCY_ATTR_GO_CONCURRENT                    = 0xf
 	NL80211_FREQUENCY_ATTR_INDOOR_ONLY                      = 0xe
 	NL80211_FREQUENCY_ATTR_IR_CONCURRENT                    = 0xf
+<<<<<<< HEAD
 	NL80211_FREQUENCY_ATTR_MAX                              = 0x21
+=======
+	NL80211_FREQUENCY_ATTR_MAX                              = 0x20
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	NL80211_FREQUENCY_ATTR_MAX_TX_POWER                     = 0x6
 	NL80211_FREQUENCY_ATTR_NO_10MHZ                         = 0x11
 	NL80211_FREQUENCY_ATTR_NO_160MHZ                        = 0xc

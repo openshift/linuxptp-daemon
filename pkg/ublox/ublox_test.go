@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/openshift/linuxptp-daemon/pkg/ublox"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/ublox"
 	"github.com/stretchr/testify/assert"
 )
 

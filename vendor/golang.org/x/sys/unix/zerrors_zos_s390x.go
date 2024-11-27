@@ -581,8 +581,11 @@ const (
 	AT_EMPTY_PATH                   = 0x1000
 	AT_REMOVEDIR                    = 0x200
 	RENAME_NOREPLACE                = 1 << 0
+<<<<<<< HEAD
 	ST_RDONLY                       = 1
 	ST_NOSUID                       = 2
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 )
 
 const (

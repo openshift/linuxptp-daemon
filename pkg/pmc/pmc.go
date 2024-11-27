@@ -9,7 +9,7 @@ import (
 
 	"github.com/golang/glog"
 	expect "github.com/google/goexpect"
-	"github.com/openshift/linuxptp-daemon/pkg/protocol"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/protocol"
 )
 
 var (

@@ -3,7 +3,7 @@ package dpll
 import (
 	"context"
 	"fmt"
-	ptpv1 "github.com/openshift/ptp-operator/api/v1"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"math"
 	"net"
 	"os"
@@ -14,9 +14,9 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/mdlayher/genetlink"
-	"github.com/openshift/linuxptp-daemon/pkg/config"
-	nl "github.com/openshift/linuxptp-daemon/pkg/dpll-netlink"
-	"github.com/openshift/linuxptp-daemon/pkg/event"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
+	nl "github.com/josephdrichard/linuxptp-daemon/pkg/dpll-netlink"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
 	"golang.org/x/sync/semaphore"
 )
 

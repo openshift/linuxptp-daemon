@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	nl "github.com/openshift/linuxptp-daemon/pkg/dpll-netlink"
+	nl "github.com/josephdrichard/linuxptp-daemon/pkg/dpll-netlink"
 
-	"github.com/openshift/linuxptp-daemon/pkg/config"
-	"github.com/openshift/linuxptp-daemon/pkg/dpll"
-	"github.com/openshift/linuxptp-daemon/pkg/event"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/dpll"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -2,7 +2,7 @@ package event
 
 import (
 	"fmt"
-	"github.com/openshift/linuxptp-daemon/pkg/debug"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/debug"
 	"net"
 	"sort"
 	"strconv"
@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openshift/linuxptp-daemon/pkg/pmc"
-	"github.com/openshift/linuxptp-daemon/pkg/protocol"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/pmc"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/protocol"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
-	"github.com/openshift/linuxptp-daemon/pkg/leap"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/leap"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

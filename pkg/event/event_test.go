@@ -11,9 +11,9 @@ import (
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
-	"github.com/openshift/linuxptp-daemon/pkg/event"
-	"github.com/openshift/linuxptp-daemon/pkg/leap"
-	"github.com/openshift/linuxptp-daemon/pkg/protocol"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/leap"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/protocol"
 	"github.com/stretchr/testify/assert"
 )
 

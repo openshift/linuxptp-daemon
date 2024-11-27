@@ -9,14 +9,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openshift/linuxptp-daemon/pkg/synce"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/synce"
 
-	"github.com/openshift/linuxptp-daemon/pkg/config"
-	"github.com/openshift/linuxptp-daemon/pkg/event"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
 
 	"github.com/golang/glog"
 
-	ptpv1 "github.com/openshift/ptp-operator/api/v1"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
 // LinuxPTPUpdate controls whether to update linuxPTP conf

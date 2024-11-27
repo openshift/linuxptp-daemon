@@ -2,7 +2,7 @@ package daemon
 
 import (
 	"fmt"
-	"github.com/openshift/linuxptp-daemon/pkg/synce"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/synce"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,7 +12,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
-	"github.com/openshift/linuxptp-daemon/pkg/config"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	utilwait "k8s.io/apimachinery/pkg/util/wait"
 

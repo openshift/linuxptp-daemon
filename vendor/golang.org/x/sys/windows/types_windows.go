@@ -3590,6 +3590,7 @@ type DCB struct {
 	EvtChar    byte
 	wReserved1 uint16
 }
+<<<<<<< HEAD
 
 // Keyboard Layout Flags.
 // See https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadkeyboardlayoutw
@@ -3601,3 +3602,5 @@ const (
 	KLF_NOTELLSHELL   = 0x00000080
 	KLF_SETFORPROCESS = 0x00000100
 )
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)

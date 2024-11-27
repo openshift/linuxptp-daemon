@@ -320,5 +320,8 @@ const (
 	SYS_LSM_GET_SELF_ATTR       = 459
 	SYS_LSM_SET_SELF_ATTR       = 460
 	SYS_LSM_LIST_MODULES        = 461
+<<<<<<< HEAD
 	SYS_MSEAL                   = 462
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 )

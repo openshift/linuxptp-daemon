@@ -179,6 +179,38 @@ type Server struct {
 	// Synchronization group used for testing.
 	// Outside of tests, this is nil.
 	group synctestGroupInterface
+<<<<<<< HEAD
+=======
+}
+
+func (s *Server) markNewGoroutine() {
+	if s.group != nil {
+		s.group.Join()
+	}
+}
+
+func (s *Server) now() time.Time {
+	if s.group != nil {
+		return s.group.Now()
+	}
+	return time.Now()
+}
+
+// newTimer creates a new time.Timer, or a synthetic timer in tests.
+func (s *Server) newTimer(d time.Duration) timer {
+	if s.group != nil {
+		return s.group.NewTimer(d)
+	}
+	return timeTimer{time.NewTimer(d)}
+}
+
+// afterFunc creates a new time.AfterFunc timer, or a synthetic timer in tests.
+func (s *Server) afterFunc(d time.Duration, f func()) timer {
+	if s.group != nil {
+		return s.group.AfterFunc(d, f)
+	}
+	return timeTimer{time.AfterFunc(d, f)}
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 }
 
 func (s *Server) markNewGoroutine() {
@@ -639,9 +671,12 @@ type serverConn struct {
 	goAwayCode                  ErrCode
 	shutdownTimer               timer // nil until used
 	idleTimer                   timer // nil if unused
+<<<<<<< HEAD
 	readIdleTimeout             time.Duration
 	pingTimeout                 time.Duration
 	readIdleTimer               timer // nil if unused
+=======
+>>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 
 	// Owned by the writeFrameAsync goroutine:
 	headerWriteBuf bytes.Buffer
