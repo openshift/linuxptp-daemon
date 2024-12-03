@@ -76,12 +76,33 @@ func getDefaultUblxCmds() []E810UblxCmds {
 		ReportOutput: false,
 		Args:         []string{"-p", "CFG-MSG,0xf0,0x03,0"},
 	}
+	// Ublx command to disable VTG messages
+	cfgMsgDisableVTG := E810UblxCmds{
+		ReportOutput: false,
+		Args:         []string{"-z", "CFG-MSGOUT-NMEA_ID_VTG_I2C,0"},
+	}
+	// Ublx command to disable GST messages
+	cfgMsgDisableGST := E810UblxCmds{
+		ReportOutput: false,
+		Args:         []string{"-z", "CFG-MSGOUT-NMEA_ID_GST_I2C,0"},
+	}
+	// Ublx command to disable ZDA messages
+	cfgMsgDisableZDA := E810UblxCmds{
+		ReportOutput: false,
+		Args:         []string{"-z", "CFG-MSGOUT-NMEA_ID_ZDA_I2C,0"},
+	}
+	// Ublx command to disable GBS messages
+	cfgMsgDisableGBS := E810UblxCmds{
+		ReportOutput: false,
+		Args:         []string{"-z", "CFG-MSGOUT-NMEA_ID_GBS_I2C,0"},
+	}
 	// Ublx command to save configuration to storage
 	cfgSave := E810UblxCmds{
 		ReportOutput: false,
 		Args:         []string{"-p", "SAVE"},
 	}
-	return []E810UblxCmds{cfgMsgNavClock, cfgMsgNavStatus, cfgMsgDisableSA, cfgMsgDisableSV, cfgSave}
+	return []E810UblxCmds{cfgMsgNavClock, cfgMsgNavStatus, cfgMsgDisableSA, cfgMsgDisableSV,
+		cfgMsgDisableVTG, cfgMsgDisableGST, cfgMsgDisableZDA, cfgMsgDisableGBS, cfgSave}
 }
 
 func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
