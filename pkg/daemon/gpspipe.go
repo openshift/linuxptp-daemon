@@ -2,12 +2,13 @@ package daemon
 
 import (
 	"fmt"
-	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"os"
 	"os/exec"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/openshift/linuxptp-daemon/pkg/config"
 
 	"github.com/golang/glog"
 )
@@ -89,7 +90,7 @@ func (gp *gpspipe) CmdInit() {
 	if gp.name == "" {
 		gp.name = GPSPIPE_PROCESSNAME
 	}
-	gp.cmdLine = fmt.Sprintf("/usr/local/bin/gpspipe -v -r -l -o %s", gp.SerialPort())
+	gp.cmdLine = fmt.Sprintf("/usr/local/bin/gpspipe -v -R -l -o %s", gp.SerialPort())
 }
 
 // CmdRun ... run gpspipe
