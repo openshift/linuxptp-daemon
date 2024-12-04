@@ -1,4 +1,4 @@
-package: github.com/josephdrichard/linuxptp-daemon
+package: github.com/k8snetworkplumbingwg/linuxptp-daemon
 import:
 - package: github.com/jaypipes/ghw
   version: ^0.4.0

@@ -1,9 +1,9 @@
 package mapping
 
 import (
-	"github.com/josephdrichard/linuxptp-daemon/addons/generic"
-	"github.com/josephdrichard/linuxptp-daemon/addons/intel"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/plugin"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/addons/generic"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/addons/intel"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 )
 
 var PluginMapping = map[string]plugin.New{

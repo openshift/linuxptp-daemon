@@ -15,16 +15,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/josephdrichard/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
-	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 
-	"github.com/josephdrichard/linuxptp-daemon/pkg/dpll"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 
-	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
-	ptpnetwork "github.com/josephdrichard/linuxptp-daemon/pkg/network"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 
 	"github.com/golang/glog"
 	"k8s.io/client-go/kubernetes"

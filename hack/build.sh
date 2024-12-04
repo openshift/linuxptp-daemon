@@ -1,6 +1,6 @@
 #!/bin/bash
 
-ORG_PATH="github.com/josephdrichard"
+ORG_PATH="github.com/k8snetworkplumbingwg"
 REPO_PATH="${ORG_PATH}/linuxptp-daemon"
 
 if [ ! -h .gopath/src/${REPO_PATH} ]; then

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 )
 
 const (

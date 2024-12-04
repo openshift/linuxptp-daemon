@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/josephdrichard/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
-	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 
 	"github.com/golang/glog"
 

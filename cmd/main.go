@@ -16,9 +16,9 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/daemon"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/daemon"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

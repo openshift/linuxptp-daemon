@@ -8,7 +8,7 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
 
-	ptpnetwork "github.com/josephdrichard/linuxptp-daemon/pkg/network"
+	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 )
 
 func populateNodePTPDevices(nodePTPDev *ptpv1.NodePtpDevice, hwconfigs *[]ptpv1.HwConfig) (*ptpv1.NodePtpDevice, error) {

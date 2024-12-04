@@ -2,8 +2,8 @@ package daemon
 
 import (
 	"github.com/golang/glog"
-	"github.com/josephdrichard/linuxptp-daemon/addons"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/plugin"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/addons"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 

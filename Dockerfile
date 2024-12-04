@@ -1,5 +1,5 @@
 FROM golang:1.22.4 AS builder
-WORKDIR /go/src/github.com/josephdrichard/linuxptp-daemon
+WORKDIR /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon
 COPY . .
 RUN make clean && make
 
@@ -17,6 +17,6 @@ RUN ln -s /usr/sbin/gpsd /usr/local/sbin/gpsd
 RUN ln -s /usr/bin/ubxtool /usr/local/bin/ubxtool
 
 
-COPY --from=builder /go/src/github.com/josephdrichard/linuxptp-daemon/bin/ptp /usr/local/bin/
+COPY --from=builder /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon/bin/ptp /usr/local/bin/
 
 CMD ["/usr/local/bin/ptp"]

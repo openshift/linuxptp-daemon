@@ -14,9 +14,9 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/mdlayher/genetlink"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
-	nl "github.com/josephdrichard/linuxptp-daemon/pkg/dpll-netlink"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
+	nl "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"golang.org/x/sync/semaphore"
 )
 

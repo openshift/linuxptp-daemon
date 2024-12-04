@@ -1,4 +1,4 @@
-module github.com/josephdrichard/linuxptp-daemon
+module github.com/k8snetworkplumbingwg/linuxptp-daemon
 
 go 1.22
 

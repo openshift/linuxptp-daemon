@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/josephdrichard/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"

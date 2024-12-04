@@ -2,7 +2,7 @@ package synce_test
 
 import (
 	"fmt"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/utils/pointer"
 	"testing"

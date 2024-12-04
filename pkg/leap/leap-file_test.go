@@ -8,7 +8,7 @@ import (
 	"time"
 
 	leaphash "github.com/facebook/time/leaphash"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/ublox"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
