@@ -4,7 +4,7 @@ default:
 image:
 	./hack/build-image.sh
 push:
-	docker push ghcr.io/k8snetworkplumbingwg/linuxptp-daemon:latest
+	docker push ghcr.io/k8snetworkplumbingwg/linuxptp-daemon-image:latest
 clean:
 	./hack/cleanup.sh
 fmt:
