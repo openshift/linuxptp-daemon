@@ -65,12 +65,22 @@ func getDefaultUblxCmds() []E810UblxCmds {
 		Args:         []string{"-p", "CFG-MSG,1,3,1"},
 	}
 
+	// Ublx command to disable SA messages
+	cfgMsgDisableSA := E810UblxCmds{
+		ReportOutput: false,
+		Args:         []string{"-p", "CFG-MSG,0xf0,0x02,0"},
+	}
+	// Ublx command to disable SV messages
+	cfgMsgDisableSV := E810UblxCmds{
+		ReportOutput: false,
+		Args:         []string{"-p", "CFG-MSG,0xf0,0x03,0"},
+	}
 	// Ublx command to save configuration to storage
 	cfgSave := E810UblxCmds{
 		ReportOutput: false,
 		Args:         []string{"-p", "SAVE"},
 	}
-	return []E810UblxCmds{cfgMsgNavClock, cfgMsgNavStatus, cfgSave}
+	return []E810UblxCmds{cfgMsgNavClock, cfgMsgNavStatus, cfgMsgDisableSA, cfgMsgDisableSV, cfgSave}
 }
 
 func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
