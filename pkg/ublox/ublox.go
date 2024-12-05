@@ -229,7 +229,7 @@ func (u *UBlox) UbloxPollInit() {
 		wait := 1000000000
 		args := []string{"-u", UBXCommand, "-t", "-P", "29.20", "-w", fmt.Sprintf("%d", wait)}
 		//python -u /usr/local/bin/ubxtool -t -p NAV-CLOCK -p NAV-STATUS -P 29.20 -w 10
-		u.cmd = exec.Command("python", args...)
+		u.cmd = exec.Command("python3", args...)
 		stdoutreader, _ := u.cmd.StdoutPipe()
 		u.reader = bufio.NewReader(stdoutreader)
 		u.setStatus(UBXTOOL_ACTIVE)
