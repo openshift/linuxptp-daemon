@@ -639,57 +639,67 @@ func (d *DpllConfig) stateDecision() {
 		glog.Infof("dpll is in FREERUN, state is FREERUN (%s)", d.iface)
 		d.sendDpllEvent()
 	case DPLL_LOCKED:
-		if !d.sourceLost && d.isOffsetInRange() { // right now pps always source not lost
+		if !d.sourceLost && d.isOffsetInRange() {
 			if d.hasGNSSAsSource() && d.onHoldover {
 				d.holdoverCloseCh <- true
 			}
 			glog.Infof("dpll is locked, offset is in range, state is LOCKED(%s)", d.iface)
 			d.state = event.PTP_LOCKED
-		} else { // what happens if source is lost and DPLL is locked? goto holdover?
+			d.inSpec = true
+		} else {
 			glog.Infof("dpll is locked, offset is out of range, state is FREERUN(%s)", d.iface)
 			d.state = event.PTP_FREERUN
+			d.inSpec = true
 		}
-		d.inSpec = true
 		d.sendDpllEvent()
 	case DPLL_LOCKED_HO_ACQ, DPLL_HOLDOVER:
-		if d.hasPPSAsSource() {
+		switch {
+		case d.hasPPSAsSource(): // non GNSS sourced card
 			if dpllStatus == DPLL_HOLDOVER {
-				d.state = event.PTP_FREERUN // pps when moved to HOLDOVER we declare freerun
+				d.state = event.PTP_FREERUN
 				d.phaseOffset = FaultyPhaseOffset
 				d.sourceLost = true
-			} else if dpllStatus == DPLL_LOCKED_HO_ACQ && d.isOffsetInRange() {
+			} else if d.isOffsetInRange() {
 				d.state = event.PTP_LOCKED
 				d.sourceLost = false
 			} else {
 				d.state = event.PTP_FREERUN
 				d.sourceLost = false
-				d.phaseOffset = FaultyPhaseOffset
+				// d.phaseOffset =  whatever offset is sent by pps sourced dpll //TODO: update master with this changed
 			}
-		} else if !d.sourceLost && d.isOffsetInRange() {
+		case !d.sourceLost && d.isOffsetInRange(): //  DLL in range
 			glog.Infof("dpll is locked, source is not lost, offset is in range, state is DPLL_LOCKED_HO_ACQ or DPLL_HOLDOVER(%s)", d.iface)
-			if d.hasGNSSAsSource() {
-				if d.onHoldover {
-					d.holdoverCloseCh <- true
-					glog.Infof("closing holdover for %s", d.iface)
-				}
-				d.inSpec = true
+			if d.hasGNSSAsSource() && d.onHoldover {
+				d.holdoverCloseCh <- true
+				glog.Infof("closing holdover for %s", d.iface)
 			}
+			d.inSpec = true
 			d.state = event.PTP_LOCKED
-		} else if d.sourceLost && d.inSpec {
-			glog.Infof("dpll state is DPLL_LOCKED_HO_ACQ or DPLL_HOLDOVER,  source is lost, state is HOLDOVER(%s)", d.iface)
+		case d.sourceLost && d.inSpec: // this is GNSS source card  only
 			if !d.onHoldover {
 				d.holdoverCloseCh = make(chan bool)
 				d.onHoldover = true
 				d.state = event.PTP_HOLDOVER
 				go d.holdover()
 			}
-			return // sending events are handled by holdover return here
-		} else if !d.inSpec {
-			glog.Infof("dpll is not in spec ,state is DPLL_LOCKED_HO_ACQ or DPLL_HOLDOVER, offset is out of range, state is FREERUN(%s)", d.iface)
+			return // do not send event holdover will handle it
+		case !d.inSpec:
+			glog.Infof("dpll is not in spec, state is DPLL_LOCKED_HO_ACQ or DPLL_HOLDOVER, offset is out of range, state is FREERUN(%s)", d.iface)
 			d.state = event.PTP_FREERUN
 			d.phaseOffset = FaultyPhaseOffset
 		}
 		d.sendDpllEvent()
+	}
+	// log the decision
+	if d.hasPPSAsSource() {
+		glog.Infof("%s-dpll decision: Status %d, Offset %d, In spec %v, Source %v lost %v",
+			d.iface, dpllStatus, d.phaseOffset, d.inSpec, "pps", d.sourceLost)
+		d.sourceLost = false
+		//TODO: do not have a handler to catch pps source , so we will set to false
+		// and to true if state changes to holdover for source PPS based DPLL
+	} else if d.hasGNSSAsSource() {
+		glog.Infof("%s-dpll decision: Status %d, Offset %d, In spec %v, Source %v lost %v, On holdover %v",
+			d.iface, dpllStatus, d.phaseOffset, d.inSpec, "GNSS", d.sourceLost, d.onHoldover)
 	}
 }
 
