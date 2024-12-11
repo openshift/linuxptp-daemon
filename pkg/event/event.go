@@ -138,34 +138,36 @@ type grandMasterSyncState struct {
 // EventHandler ... event handler to process events
 type EventHandler struct {
 	sync.Mutex
-	nodeName         string
-	stdoutSocket     string
-	stdoutToSocket   bool
-	processChannel   <-chan EventChannel
-	closeCh          chan bool
-	data             map[string][]*Data
-	offsetMetric     *prometheus.GaugeVec
-	clockMetric      *prometheus.GaugeVec
-	clockClassMetric *prometheus.GaugeVec
-	clockClass       fbprotocol.ClockClass
-	gmSyncState      map[string]*grandMasterSyncState
-	outOfSpec        bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
-	ReduceLog        bool // reduce logs for every announce
+	nodeName           string
+	stdoutSocket       string
+	stdoutToSocket     bool
+	processChannel     <-chan EventChannel
+	closeCh            chan bool
+	data               map[string][]*Data
+	offsetMetric       *prometheus.GaugeVec
+	clockMetric        *prometheus.GaugeVec
+	clockClassMetric   *prometheus.GaugeVec
+	clockClass         fbprotocol.ClockClass
+	gmSyncState        map[string]*grandMasterSyncState
+	outOfSpec          bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
+	frequencyTraceable bool
+	ReduceLog          bool // reduce logs for every announce
 }
 
 // EventChannel .. event channel to subscriber to events
 type EventChannel struct {
-	ProcessName EventSource               // ptp4l, gnss etc
-	State       PTPState                  // PTP locked etc
-	IFace       string                    // Interface that is causing the event
-	CfgName     string                    // ptp config profile name
-	Values      map[ValueType]interface{} // either offset or status , 3 information  offset , phase state and frequency state
-	ClockType   ClockType                 // oc bc gm
-	Time        int64                     // time.Unix.Now()
-	OutOfSpec   bool                      // out of Spec for offset
-	WriteToLog  bool                      // send to log in predefined format %s[%d]:[%s] %s %d
-	Reset       bool                      // reset data on ptp deletes or process died
-	SourceLost  bool
+	ProcessName        EventSource               // ptp4l, gnss etc
+	State              PTPState                  // PTP locked etc
+	IFace              string                    // Interface that is causing the event
+	CfgName            string                    // ptp config profile name
+	Values             map[ValueType]interface{} // either offset or status , 3 information  offset , phase state and frequency state
+	ClockType          ClockType                 // oc bc gm
+	Time               int64                     // time.Unix.Now()
+	OutOfSpec          bool                      // out of Spec for offset
+	WriteToLog         bool                      // send to log in predefined format %s[%d]:[%s] %s %d
+	Reset              bool                      // reset data on ptp deletes or process died
+	SourceLost         bool
+	FrequencyTraceable bool
 }
 
 var (
@@ -182,19 +184,20 @@ func (e *EventHandler) MockEnable() {
 func Init(nodeName string, stdOutToSocket bool, socketName string, processChannel chan EventChannel, closeCh chan bool,
 	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec, clockClassMetric *prometheus.GaugeVec) *EventHandler {
 	ptpEvent := &EventHandler{
-		nodeName:         nodeName,
-		stdoutSocket:     socketName,
-		stdoutToSocket:   stdOutToSocket,
-		closeCh:          closeCh,
-		processChannel:   processChannel,
-		data:             map[string][]*Data{},
-		clockMetric:      clockMetric,
-		offsetMetric:     offsetMetric,
-		clockClassMetric: clockClassMetric,
-		clockClass:       protocol.ClockClassUninitialized,
-		gmSyncState:      map[string]*grandMasterSyncState{},
-		outOfSpec:        false,
-		ReduceLog:        true,
+		nodeName:           nodeName,
+		stdoutSocket:       socketName,
+		stdoutToSocket:     stdOutToSocket,
+		closeCh:            closeCh,
+		processChannel:     processChannel,
+		data:               map[string][]*Data{},
+		clockMetric:        clockMetric,
+		offsetMetric:       offsetMetric,
+		clockClassMetric:   clockClassMetric,
+		clockClass:         protocol.ClockClassUninitialized,
+		gmSyncState:        map[string]*grandMasterSyncState{},
+		outOfSpec:          false,
+		frequencyTraceable: false,
+		ReduceLog:          true,
 	}
 	if clockClassMetric != nil {
 		clockClassMetric.With(prometheus.Labels{
@@ -320,7 +323,7 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 				dpllState = d.State
 			case GNSS:
 				gnssState = d.State
-				// expecting to have atleast one enterfae
+				// expecting to have atleast one interface
 			case TS2PHCProcessName:
 				ts2phcState = d.State
 			}
@@ -335,10 +338,11 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 	}
 	e.gmSyncState[cfgName].gmIFace = gmInterface
 	switch dpllState {
-	case PTP_FREERUN:
+	case PTP_FREERUN: // This is OVER ALL State with HOLDOVER having the highest priority
+		// add check so that clock class won't change if GM was in HOLDOVER state
 		e.gmSyncState[cfgName].state = dpllState
 		// T-GM or T-BC in free-run mode
-		if e.outOfSpec {
+		if e.outOfSpec && e.frequencyTraceable {
 			// T-GM in holdover, out of holdover specification
 			e.gmSyncState[cfgName].clockClass = protocol.ClockClassOutOfSpec
 		} else { // from holdover it goes to out of spec to free run
@@ -474,6 +478,7 @@ func (e *EventHandler) updateSpecState(event EventChannel) {
 	// update if DPLL holdover is out of spec
 	if event.ProcessName == DPLL {
 		e.outOfSpec = event.OutOfSpec
+		e.frequencyTraceable = event.FrequencyTraceable
 	}
 }
 func (e *EventHandler) toString() string {
