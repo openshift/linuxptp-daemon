@@ -659,14 +659,16 @@ func (d *DpllConfig) stateDecision() {
 				d.sourceLost = false
 			} else {
 				d.state = event.PTP_FREERUN
-				d.sourceLost = false
-				d.phaseOffset = FaultyPhaseOffset
+				d.sourceLost = false // phase offset will be the one that was read
 			}
 		case !d.sourceLost && d.isOffsetInRange():
 			glog.Infof("dpll is locked, source is not lost, offset is in range, state is DPLL_LOCKED_HO_ACQ or DPLL_HOLDOVER(%s)", d.iface)
 			if d.hasGNSSAsSource() && d.onHoldover {
-				d.holdoverCloseCh <- true
-				glog.Infof("closing holdover for %s", d.iface)
+				select {
+				case d.holdoverCloseCh <- true:
+					glog.Infof("closing holdover for %s since source is restored and locked ", d.iface)
+				default:
+				}
 			}
 			d.inSpec = true
 			d.state = event.PTP_LOCKED
@@ -678,10 +680,15 @@ func (d *DpllConfig) stateDecision() {
 				go d.holdover()
 			}
 			return // do not send event holdover  will handle it
-		case !d.inSpec:
+		case !d.inSpec: // this is for GNSS only
 			glog.Infof("dpll is not in spec, state is DPLL_LOCKED_HO_ACQ or DPLL_HOLDOVER, offset is out of range, state is FREERUN(%s)", d.iface)
 			d.state = event.PTP_FREERUN
 			d.phaseOffset = FaultyPhaseOffset
+			select {
+			case d.holdoverCloseCh <- true:
+				glog.Infof("closing holdover for %s since offset if out of spec", d.iface)
+			default:
+			}
 		}
 		d.sendDpllEvent()
 	}
