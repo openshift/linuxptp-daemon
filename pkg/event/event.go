@@ -356,7 +356,8 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 	}
 	e.gmSyncState[cfgName].gmIFace = gmInterface
 	switch dpllState {
-	case PTP_FREERUN:
+	case PTP_FREERUN: // This is OVER ALL State with HOLDOVER having the highest priority
+		// add check so that clock class won't change if GM was in HOLDOVER state
 		e.gmSyncState[cfgName].state = dpllState
 		// T-GM or T-BC in free-run mode
 		if e.outOfSpec && e.frequencyTraceable {
