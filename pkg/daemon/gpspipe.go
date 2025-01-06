@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"sync"
@@ -31,6 +32,7 @@ type gpspipe struct {
 	exitCh     chan struct{}
 	stopped    bool
 	messageTag string
+	c          *net.Conn
 }
 
 // Name ... Process name
@@ -68,7 +70,7 @@ func (gp *gpspipe) CmdStop() {
 		return
 	}
 	gp.setStopped(true)
-	processStatus(nil, gp.name, gp.messageTag, PtpProcessDown)
+	gp.ProcessStatus(nil, PtpProcessDown)
 	if gp.cmd.Process != nil {
 		glog.Infof("Sending TERM to (%s) PID: %d", gp.name, gp.cmd.Process.Pid)
 		err := gp.cmd.Process.Signal(syscall.SIGTERM)
@@ -93,13 +95,21 @@ func (gp *gpspipe) CmdInit() {
 	gp.cmdLine = fmt.Sprintf("/usr/local/bin/gpspipe -v -R -l -o %s", gp.SerialPort())
 }
 
+func (gp *gpspipe) ProcessStatus(c *net.Conn, status int64) {
+	if c != nil {
+		gp.c = c
+	}
+	processStatus(gp.c, gp.name, gp.messageTag, status)
+}
+
 // CmdRun ... run gpspipe
 func (gp *gpspipe) CmdRun(stdoutToSocket bool) {
 	defer func() {
 		gp.exitCh <- struct{}{}
 	}()
-	processStatus(nil, gp.name, gp.messageTag, PtpProcessUp)
+
 	for {
+		gp.ProcessStatus(nil, PtpProcessUp)
 		glog.Infof("Starting %s...", gp.Name())
 		glog.Infof("%s cmd: %+v", gp.Name(), gp.cmd)
 		gp.cmd.Stderr = os.Stderr
@@ -126,7 +136,7 @@ func (gp *gpspipe) CmdRun(stdoutToSocket bool) {
 			newCmd := exec.Command(gp.cmd.Args[0], gp.cmd.Args[1:]...)
 			gp.cmd = newCmd
 		} else {
-			processStatus(nil, gp.name, gp.messageTag, PtpProcessDown)
+			gp.ProcessStatus(nil, PtpProcessDown)
 			gp.exitCh <- struct{}{}
 			break
 		}
