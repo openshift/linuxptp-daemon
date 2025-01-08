@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -44,6 +45,7 @@ type GPSD struct {
 	subscriber           *GPSDSubscriber
 	monitorCtx           context.Context
 	monitorCancel        context.CancelFunc
+	c                    *net.Conn
 }
 
 // GPSDSubscriber ... event subscriber
@@ -125,7 +127,7 @@ func (g *GPSD) CmdStop() {
 		return
 	}
 	g.setStopped(true)
-	processStatus(nil, g.name, g.messageTag, PtpProcessDown)
+	g.ProcessStatus(nil, PtpProcessDown)
 	if g.cmd.Process != nil {
 		glog.Infof("Sending TERM to PID: %d", g.cmd.Process.Pid)
 		err := g.cmd.Process.Signal(syscall.SIGTERM)
@@ -148,6 +150,14 @@ func (g *GPSD) CmdInit() {
 	g.cmdLine = fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -G -N %s", g.Name(), g.SerialPort())
 }
 
+func (g *GPSD) ProcessStatus(c *net.Conn, status int64) {
+	if c != nil {
+		g.c = c
+	}
+
+	processStatus(g.c, g.name, g.messageTag, status)
+}
+
 // CmdRun ... run GPSD
 func (g *GPSD) CmdRun(stdoutToSocket bool) {
 	defer func() {
@@ -161,8 +171,9 @@ func (g *GPSD) CmdRun(stdoutToSocket bool) {
 	}
 	g.subscriber = &GPSDSubscriber{source: event.MONITORING, gpsd: g, id: string(event.GNSS)}
 	g.registerSubscriber()
-	processStatus(nil, g.name, g.messageTag, PtpProcessUp)
+
 	for {
+		g.ProcessStatus(nil, PtpProcessUp)
 		glog.Infof("Starting %s...", g.Name())
 		glog.Infof("%s cmd: %+v", g.Name(), g.cmd)
 		g.cmd.Stderr = os.Stderr
