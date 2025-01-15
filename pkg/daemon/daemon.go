@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -56,6 +57,23 @@ var (
 	clockIDRegEx          = regexp.MustCompile(`\/dev\/ptp\d+`)
 )
 
+var configPrefix = "/var/run"
+
+var ptpProcesses = []string{
+	ts2phcProcessName,  // there can be only one ts2phc process in the system
+	syncEProcessName,   // there can be only one synce Process per profile
+	ptp4lProcessName,   // there could be more than one ptp4l in the system
+	phc2sysProcessName, // there can be only one phc2sys process in the system
+}
+
+var ptpTmpFiles = []string{
+	ts2phcProcessName,
+	syncEProcessName,
+	ptp4lProcessName,
+	phc2sysProcessName,
+	pmcSocketName,
+}
+
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
 // Processes in ProcessManager will be started
@@ -81,14 +99,14 @@ func NewProcessManager() *ProcessManager {
 
 // SetTestProfileProcess ...
 func (p *ProcessManager) SetTestProfileProcess(name string, ifaces config.IFaces, socketPath,
-	ptp4lConfigPath string, nodeProfile ptpv1.PtpProfile) {
+	processConfigPath string, nodeProfile ptpv1.PtpProfile) {
 	p.process = append(p.process, &ptpProcess{
-		name:            name,
-		ifaces:          ifaces,
-		ptp4lSocketPath: socketPath,
-		ptp4lConfigPath: ptp4lConfigPath,
-		execMutex:       sync.Mutex{},
-		nodeProfile:     nodeProfile,
+		name:              name,
+		ifaces:            ifaces,
+		processSocketPath: socketPath,
+		processConfigPath: processConfigPath,
+		execMutex:         sync.Mutex{},
+		nodeProfile:       nodeProfile,
 	})
 }
 
@@ -135,8 +153,8 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 type ptpProcess struct {
 	name              string
 	ifaces            config.IFaces
-	ptp4lSocketPath   string
-	ptp4lConfigPath   string
+	processSocketPath string
+	processConfigPath string
 	configName        string
 	messageTag        string
 	eventCh           chan event.EventChannel
@@ -292,6 +310,24 @@ func (dn *Daemon) SetProcessManager(p *ProcessManager) {
 	dn.processManager = p
 }
 
+// Delete all socket and config files
+func (dn *Daemon) cleanupTempFiles() error {
+	glog.Infof("Cleaning up temporary files")
+	var err error
+	for _, p := range ptpTmpFiles {
+		processWildcard := fmt.Sprintf("%s/%s*", configPrefix, p)
+		files, _ := filepath.Glob(processWildcard)
+		for _, file := range files {
+			err = os.Remove(file)
+			if err != nil {
+				glog.Infof("Failed deleting %s", file)
+			}
+		}
+
+	}
+	return nil
+}
+
 func (dn *Daemon) applyNodePTPProfiles() error {
 	glog.Infof("in applyNodePTPProfiles")
 	for _, p := range dn.processManager.process {
@@ -323,6 +359,9 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// collector (assuming there are no other
 	// references).
 	dn.processManager.process = nil
+
+	// All configs will be rebuild, and sockets recreated, so they can all be deleted
+	dn.cleanupTempFiles()
 
 	// TODO:
 	// compare nodeProfile with previous config,
@@ -433,18 +472,10 @@ ptpconfig profiles for ptp4l
 */
 func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) error {
 	testDir, test := nodeProfile.PtpSettings["unitTest"]
-	var configPrefix = "/var/run"
 	if test {
 		configPrefix = testDir
 	}
 	dn.pluginManager.OnPTPConfigChange(nodeProfile)
-
-	ptpProcesses := []string{
-		ts2phcProcessName,  // there can be only one ts2phc process in the system
-		syncEProcessName,   // there can be only one synce Process per profile
-		ptp4lProcessName,   // there could be more than one ptp4l in the system
-		phc2sysProcessName, // there can be only one phc2sys process in the system
-	}
 
 	var err error
 	var cmdLine string
@@ -594,8 +625,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		dprocess := ptpProcess{
 			name:              p,
 			ifaces:            ifaces,
-			ptp4lConfigPath:   configPath,
-			ptp4lSocketPath:   socketPath,
+			processConfigPath: configPath,
+			processSocketPath: socketPath,
 			configName:        configFile,
 			messageTag:        messageTag,
 			exitCh:            make(chan bool),
@@ -1018,11 +1049,11 @@ func (p *ptpProcess) cmdStop() {
 			return
 		}
 	}
-	glog.Infof("removing config path %s for %s ", p.ptp4lConfigPath, p.name)
-	if p.ptp4lConfigPath != "" {
-		err := os.Remove(p.ptp4lConfigPath)
+	glog.Infof("removing config path %s for %s ", p.processConfigPath, p.name)
+	if p.processConfigPath != "" {
+		err := os.Remove(p.processConfigPath)
 		if err != nil {
-			glog.Errorf("failed to remove ptp4l config path %s: %v", p.ptp4lConfigPath, err)
+			glog.Errorf("failed to remove ptp4l config path %s: %v", p.processConfigPath, err)
 		}
 	}
 	<-p.exitCh
@@ -1109,7 +1140,7 @@ func (dn *Daemon) ApplyHaProfiles(nodeProfile *ptpv1.PtpProfile, cmdLine string)
 	for _, profileName := range lsProfiles {
 		for _, dmProcess := range dn.processManager.process {
 			if dmProcess.nodeProfile.Name != nil && *dmProcess.nodeProfile.Name == profileName {
-				updateHaProfileToSocketPath = append(updateHaProfileToSocketPath, "-z "+dmProcess.ptp4lSocketPath)
+				updateHaProfileToSocketPath = append(updateHaProfileToSocketPath, "-z "+dmProcess.processSocketPath)
 				var ifaces []string
 				for _, iface := range dmProcess.ifaces {
 					ifaces = append(ifaces, iface.Name)
