@@ -321,9 +321,6 @@ const (
 	AUDIT_INTEGRITY_STATUS                      = 0x70a
 	AUDIT_IPC                                   = 0x517
 	AUDIT_IPC_SET_PERM                          = 0x51f
-	AUDIT_IPE_ACCESS                            = 0x58c
-	AUDIT_IPE_CONFIG_CHANGE                     = 0x58d
-	AUDIT_IPE_POLICY_LOAD                       = 0x58e
 	AUDIT_KERNEL                                = 0x7d0
 	AUDIT_KERNEL_OTHER                          = 0x524
 	AUDIT_KERN_MODULE                           = 0x532
@@ -460,7 +457,6 @@ const (
 	B600                                        = 0x8
 	B75                                         = 0x2
 	B9600                                       = 0xd
-	BCACHEFS_SUPER_MAGIC                        = 0xca451a4e
 	BDEVFS_MAGIC                                = 0x62646576
 	BINDERFS_SUPER_MAGIC                        = 0x6c6f6f70
 	BINFMTFS_MAGIC                              = 0x42494e4d
@@ -492,14 +488,12 @@ const (
 	BPF_F_ID                                    = 0x20
 	BPF_F_NETFILTER_IP_DEFRAG                   = 0x1
 	BPF_F_QUERY_EFFECTIVE                       = 0x1
-	BPF_F_REDIRECT_FLAGS                        = 0x19
 	BPF_F_REPLACE                               = 0x4
 	BPF_F_SLEEPABLE                             = 0x10
 	BPF_F_STRICT_ALIGNMENT                      = 0x1
 	BPF_F_TEST_REG_INVARIANTS                   = 0x80
 	BPF_F_TEST_RND_HI32                         = 0x4
 	BPF_F_TEST_RUN_ON_CPU                       = 0x1
-	BPF_F_TEST_SKB_CHECKSUM_COMPLETE            = 0x4
 	BPF_F_TEST_STATE_FREQ                       = 0x8
 	BPF_F_TEST_XDP_LIVE_FRAMES                  = 0x2
 	BPF_F_XDP_DEV_BOUND_ONLY                    = 0x40
@@ -934,7 +928,6 @@ const (
 	EPOLL_CTL_ADD                               = 0x1
 	EPOLL_CTL_DEL                               = 0x2
 	EPOLL_CTL_MOD                               = 0x3
-	EPOLL_IOC_TYPE                              = 0x8a
 	EROFS_SUPER_MAGIC_V1                        = 0xe0f5e1e2
 	ESP_V4_FLOW                                 = 0xa
 	ESP_V6_FLOW                                 = 0xc
@@ -948,6 +941,9 @@ const (
 	ETHTOOL_FEC_OFF                             = 0x4
 	ETHTOOL_FEC_RS                              = 0x8
 	ETHTOOL_FLAG_ALL                            = 0x7
+	ETHTOOL_FLAG_COMPACT_BITSETS                = 0x1
+	ETHTOOL_FLAG_OMIT_REPLY                     = 0x2
+	ETHTOOL_FLAG_STATS                          = 0x4
 	ETHTOOL_FLASHDEV                            = 0x33
 	ETHTOOL_FLASH_MAX_FILENAME                  = 0x80
 	ETHTOOL_FWVERS_LEN                          = 0x20
@@ -1170,7 +1166,6 @@ const (
 	EXTA                                        = 0xe
 	EXTB                                        = 0xf
 	F2FS_SUPER_MAGIC                            = 0xf2f52010
-	FALLOC_FL_ALLOCATE_RANGE                    = 0x0
 	FALLOC_FL_COLLAPSE_RANGE                    = 0x8
 	FALLOC_FL_INSERT_RANGE                      = 0x20
 	FALLOC_FL_KEEP_SIZE                         = 0x1
@@ -1710,10 +1705,6 @@ const (
 	KEXEC_ARCH_S390                             = 0x160000
 	KEXEC_ARCH_SH                               = 0x2a0000
 	KEXEC_ARCH_X86_64                           = 0x3e0000
-<<<<<<< HEAD
-	KEXEC_CRASH_HOTPLUG_SUPPORT                 = 0x8
-=======
->>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	KEXEC_FILE_DEBUG                            = 0x8
 	KEXEC_FILE_NO_INITRAMFS                     = 0x4
 	KEXEC_FILE_ON_CRASH                         = 0x2
@@ -1789,7 +1780,6 @@ const (
 	KEY_SPEC_USER_KEYRING                       = -0x4
 	KEY_SPEC_USER_SESSION_KEYRING               = -0x5
 	LANDLOCK_ACCESS_FS_EXECUTE                  = 0x1
-	LANDLOCK_ACCESS_FS_IOCTL_DEV                = 0x8000
 	LANDLOCK_ACCESS_FS_MAKE_BLOCK               = 0x800
 	LANDLOCK_ACCESS_FS_MAKE_CHAR                = 0x40
 	LANDLOCK_ACCESS_FS_MAKE_DIR                 = 0x80
@@ -1807,8 +1797,6 @@ const (
 	LANDLOCK_ACCESS_NET_BIND_TCP                = 0x1
 	LANDLOCK_ACCESS_NET_CONNECT_TCP             = 0x2
 	LANDLOCK_CREATE_RULESET_VERSION             = 0x1
-	LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET         = 0x1
-	LANDLOCK_SCOPE_SIGNAL                       = 0x2
 	LINUX_REBOOT_CMD_CAD_OFF                    = 0x0
 	LINUX_REBOOT_CMD_CAD_ON                     = 0x89abcdef
 	LINUX_REBOOT_CMD_HALT                       = 0xcdef0123
@@ -1873,19 +1861,6 @@ const (
 	MAP_FILE                                    = 0x0
 	MAP_FIXED                                   = 0x10
 	MAP_FIXED_NOREPLACE                         = 0x100000
-	MAP_HUGE_16GB                               = 0x88000000
-	MAP_HUGE_16KB                               = 0x38000000
-	MAP_HUGE_16MB                               = 0x60000000
-	MAP_HUGE_1GB                                = 0x78000000
-	MAP_HUGE_1MB                                = 0x50000000
-	MAP_HUGE_256MB                              = 0x70000000
-	MAP_HUGE_2GB                                = 0x7c000000
-	MAP_HUGE_2MB                                = 0x54000000
-	MAP_HUGE_32MB                               = 0x64000000
-	MAP_HUGE_512KB                              = 0x4c000000
-	MAP_HUGE_512MB                              = 0x74000000
-	MAP_HUGE_64KB                               = 0x40000000
-	MAP_HUGE_8MB                                = 0x5c000000
 	MAP_HUGE_MASK                               = 0x3f
 	MAP_HUGE_SHIFT                              = 0x1a
 	MAP_PRIVATE                                 = 0x2
@@ -1933,11 +1908,6 @@ const (
 	MNT_EXPIRE                                  = 0x4
 	MNT_FORCE                                   = 0x1
 	MNT_ID_REQ_SIZE_VER0                        = 0x18
-<<<<<<< HEAD
-	MNT_ID_REQ_SIZE_VER1                        = 0x20
-	MNT_NS_INFO_SIZE_VER0                       = 0x10
-=======
->>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	MODULE_INIT_COMPRESSED_FILE                 = 0x4
 	MODULE_INIT_IGNORE_MODVERSIONS              = 0x1
 	MODULE_INIT_IGNORE_VERMAGIC                 = 0x2
@@ -2203,7 +2173,7 @@ const (
 	NFT_REG_SIZE                                = 0x10
 	NFT_REJECT_ICMPX_MAX                        = 0x3
 	NFT_RT_MAX                                  = 0x4
-	NFT_SECMARK_CTX_MAXLEN                      = 0x1000
+	NFT_SECMARK_CTX_MAXLEN                      = 0x100
 	NFT_SET_MAXNAMELEN                          = 0x100
 	NFT_SOCKET_MAX                              = 0x3
 	NFT_TABLE_F_MASK                            = 0x7
@@ -2372,11 +2342,9 @@ const (
 	PERF_MEM_LVLNUM_IO                          = 0xa
 	PERF_MEM_LVLNUM_L1                          = 0x1
 	PERF_MEM_LVLNUM_L2                          = 0x2
-	PERF_MEM_LVLNUM_L2_MHB                      = 0x5
 	PERF_MEM_LVLNUM_L3                          = 0x3
 	PERF_MEM_LVLNUM_L4                          = 0x4
 	PERF_MEM_LVLNUM_LFB                         = 0xc
-	PERF_MEM_LVLNUM_MSC                         = 0x6
 	PERF_MEM_LVLNUM_NA                          = 0xf
 	PERF_MEM_LVLNUM_PMEM                        = 0xe
 	PERF_MEM_LVLNUM_RAM                         = 0xd
@@ -2449,7 +2417,6 @@ const (
 	PRIO_PGRP                                   = 0x1
 	PRIO_PROCESS                                = 0x0
 	PRIO_USER                                   = 0x2
-	PROCFS_IOCTL_MAGIC                          = 'f'
 	PROC_SUPER_MAGIC                            = 0x9fa0
 	PROT_EXEC                                   = 0x4
 	PROT_GROWSDOWN                              = 0x1000000
@@ -2531,23 +2498,6 @@ const (
 	PR_PAC_GET_ENABLED_KEYS                     = 0x3d
 	PR_PAC_RESET_KEYS                           = 0x36
 	PR_PAC_SET_ENABLED_KEYS                     = 0x3c
-	PR_PPC_DEXCR_CTRL_CLEAR                     = 0x4
-	PR_PPC_DEXCR_CTRL_CLEAR_ONEXEC              = 0x10
-	PR_PPC_DEXCR_CTRL_EDITABLE                  = 0x1
-	PR_PPC_DEXCR_CTRL_MASK                      = 0x1f
-	PR_PPC_DEXCR_CTRL_SET                       = 0x2
-	PR_PPC_DEXCR_CTRL_SET_ONEXEC                = 0x8
-	PR_PPC_DEXCR_IBRTPD                         = 0x1
-	PR_PPC_DEXCR_NPHIE                          = 0x3
-	PR_PPC_DEXCR_SBHE                           = 0x0
-	PR_PPC_DEXCR_SRAPD                          = 0x2
-	PR_PPC_GET_DEXCR                            = 0x48
-	PR_PPC_SET_DEXCR                            = 0x49
-	PR_RISCV_CTX_SW_FENCEI_OFF                  = 0x1
-	PR_RISCV_CTX_SW_FENCEI_ON                   = 0x0
-	PR_RISCV_SCOPE_PER_PROCESS                  = 0x0
-	PR_RISCV_SCOPE_PER_THREAD                   = 0x1
-	PR_RISCV_SET_ICACHE_FLUSH_CTX               = 0x47
 	PR_RISCV_V_GET_CONTROL                      = 0x46
 	PR_RISCV_V_SET_CONTROL                      = 0x45
 	PR_RISCV_V_VSTATE_CTRL_CUR_MASK             = 0x3
@@ -2639,28 +2589,6 @@ const (
 	PR_UNALIGN_NOPRINT                          = 0x1
 	PR_UNALIGN_SIGBUS                           = 0x2
 	PSTOREFS_MAGIC                              = 0x6165676c
-	PTP_CLK_MAGIC                               = '='
-	PTP_ENABLE_FEATURE                          = 0x1
-	PTP_EXTTS_EDGES                             = 0x6
-	PTP_EXTTS_EVENT_VALID                       = 0x1
-	PTP_EXTTS_V1_VALID_FLAGS                    = 0x7
-	PTP_EXTTS_VALID_FLAGS                       = 0x1f
-	PTP_EXT_OFFSET                              = 0x10
-	PTP_FALLING_EDGE                            = 0x4
-	PTP_MAX_SAMPLES                             = 0x19
-	PTP_PEROUT_DUTY_CYCLE                       = 0x2
-	PTP_PEROUT_ONE_SHOT                         = 0x1
-	PTP_PEROUT_PHASE                            = 0x4
-	PTP_PEROUT_V1_VALID_FLAGS                   = 0x0
-	PTP_PEROUT_VALID_FLAGS                      = 0x7
-	PTP_PIN_GETFUNC                             = 0xc0603d06
-	PTP_PIN_GETFUNC2                            = 0xc0603d0f
-	PTP_RISING_EDGE                             = 0x2
-	PTP_STRICT_FLAGS                            = 0x8
-	PTP_SYS_OFFSET_EXTENDED                     = 0xc4c03d09
-	PTP_SYS_OFFSET_EXTENDED2                    = 0xc4c03d12
-	PTP_SYS_OFFSET_PRECISE                      = 0xc0403d08
-	PTP_SYS_OFFSET_PRECISE2                     = 0xc0403d11
 	PTRACE_ATTACH                               = 0x10
 	PTRACE_CONT                                 = 0x7
 	PTRACE_DETACH                               = 0x11
@@ -2974,21 +2902,15 @@ const (
 	RUSAGE_SELF                                 = 0x0
 	RUSAGE_THREAD                               = 0x1
 	RWF_APPEND                                  = 0x10
-	RWF_ATOMIC                                  = 0x40
 	RWF_DSYNC                                   = 0x2
 	RWF_HIPRI                                   = 0x1
 	RWF_NOAPPEND                                = 0x20
 	RWF_NOWAIT                                  = 0x8
-<<<<<<< HEAD
-	RWF_SUPPORTED                               = 0x7f
-=======
 	RWF_SUPPORTED                               = 0x3f
->>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	RWF_SYNC                                    = 0x4
 	RWF_WRITE_LIFE_NOT_SET                      = 0x0
 	SCHED_BATCH                                 = 0x3
 	SCHED_DEADLINE                              = 0x6
-	SCHED_EXT                                   = 0x7
 	SCHED_FIFO                                  = 0x1
 	SCHED_FLAG_ALL                              = 0x7f
 	SCHED_FLAG_DL_OVERRUN                       = 0x4
@@ -3257,7 +3179,6 @@ const (
 	STATX_ATTR_MOUNT_ROOT                       = 0x2000
 	STATX_ATTR_NODUMP                           = 0x40
 	STATX_ATTR_VERITY                           = 0x100000
-	STATX_ATTR_WRITE_ATOMIC                     = 0x400000
 	STATX_BASIC_STATS                           = 0x7ff
 	STATX_BLOCKS                                = 0x400
 	STATX_BTIME                                 = 0x800
@@ -3271,10 +3192,8 @@ const (
 	STATX_MTIME                                 = 0x40
 	STATX_NLINK                                 = 0x4
 	STATX_SIZE                                  = 0x200
-	STATX_SUBVOL                                = 0x8000
 	STATX_TYPE                                  = 0x1
 	STATX_UID                                   = 0x8
-	STATX_WRITE_ATOMIC                          = 0x10000
 	STATX__RESERVED                             = 0x80000000
 	SYNC_FILE_RANGE_WAIT_AFTER                  = 0x4
 	SYNC_FILE_RANGE_WAIT_BEFORE                 = 0x1
@@ -3673,10 +3592,6 @@ const (
 	XDP_UMEM_PGOFF_COMPLETION_RING              = 0x180000000
 	XDP_UMEM_PGOFF_FILL_RING                    = 0x100000000
 	XDP_UMEM_REG                                = 0x4
-<<<<<<< HEAD
-	XDP_UMEM_TX_METADATA_LEN                    = 0x4
-=======
->>>>>>> f3897055 (Update import paths to use k8snetworkplumbingwg)
 	XDP_UMEM_TX_SW_CSUM                         = 0x2
 	XDP_UMEM_UNALIGNED_CHUNK_FLAG               = 0x1
 	XDP_USE_NEED_WAKEUP                         = 0x8

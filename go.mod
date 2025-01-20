@@ -1,20 +1,22 @@
 module github.com/k8snetworkplumbingwg/linuxptp-daemon
 
-go 1.22
+go 1.23
+
+toolchain go1.23.5
 
 require (
 	github.com/bigkevmcd/go-configparser v0.0.0-20240624060122-ccd05f93a9d2
-	github.com/facebook/time v0.0.0-20230529151911-512b3b30ab23
+	github.com/facebook/time v0.0.0-20241030181404-3e1b98825c29
 	github.com/golang/glog v1.2.4
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
 	github.com/jaypipes/ghw v0.12.0
-	github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20241128072615-fc8a95491c23
+	github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20250131044559-79f9d65acc42
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
 	github.com/prometheus/client_golang v1.16.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stratoberry/go-gpsd v1.1.0
-	github.com/stretchr/testify v1.8.2
+	github.com/stretchr/testify v1.8.4
 	golang.org/x/sync v0.10.0
 	k8s.io/api v0.28.3
 	k8s.io/apimachinery v0.28.3
@@ -65,13 +67,13 @@ require (
 	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	golang.org/x/crypto v0.24.0 // indirect
+	golang.org/x/crypto v0.31.0 // indirect
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
-	golang.org/x/net v0.26.0 // indirect
+	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/oauth2 v0.21.0 // indirect
-	golang.org/x/sys v0.21.0 // indirect
-	golang.org/x/term v0.21.0 // indirect
-	golang.org/x/text v0.16.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/term v0.27.0 // indirect
+	golang.org/x/text v0.21.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20230525234030-28d5490b6b19 // indirect

@@ -27,8 +27,8 @@ github.com/evanphx/json-patch v5.6.0+incompatible h1:jBYDEEiFBPxA0v50tFdvOzQQTCv
 github.com/evanphx/json-patch v5.6.0+incompatible/go.mod h1:50XU6AFN0ol/bzJsmQLiYLvXMP4fmwYFNcr97nuDLSk=
 github.com/evanphx/json-patch/v5 v5.6.0 h1:b91NhWfaz02IuVxO9faSllyAtNXHMPkC5J8sJCLunww=
 github.com/evanphx/json-patch/v5 v5.6.0/go.mod h1:G79N1coSVB93tBe7j6PhzjmR3/2VvlbKOFpnXhI9Bw4=
-github.com/facebook/time v0.0.0-20230529151911-512b3b30ab23 h1:2bNmQUpwOmOwPrUFts4znQaefE8fYMzf3yutKzWztWM=
-github.com/facebook/time v0.0.0-20230529151911-512b3b30ab23/go.mod h1:dfouHrgxDA7FxAzPYOFIGHFcrFlG2trLpeLtA5+hs+Q=
+github.com/facebook/time v0.0.0-20241030181404-3e1b98825c29 h1:Wr7FnEYmlj5fGdkd/K0HYRL/om45M0+W1TEwEkkcclw=
+github.com/facebook/time v0.0.0-20241030181404-3e1b98825c29/go.mod h1:JqN8uXgJS+ap6WitHzGsH9ahzElfT9My1+255bK5ORw=
 github.com/fsnotify/fsnotify v1.6.0 h1:n+5WquG0fcWoWp6xPWfHdbskMCQaFnG6PfBrh1Ky4HY=
 github.com/fsnotify/fsnotify v1.6.0/go.mod h1:sl3t1tCWJFWoRz9R8WJCbQihKKwmorjAbSClcnxKAGw=
 github.com/ghodss/yaml v1.0.0 h1:wQHKEahhL6wmXdzwWG11gIVCkOv05bNOh+Rxn0yngAk=
@@ -93,8 +93,8 @@ github.com/josharian/native v1.1.0 h1:uuaP0hAbW7Y4l0ZRQ6C9zfb7Mg1mbFKry/xzDAfmtL
 github.com/josharian/native v1.1.0/go.mod h1:7X/raswPFr05uY3HiLlYeyQntB6OO7E/d2Cu7qoaN2w=
 github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
-github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20241128072615-fc8a95491c23 h1:tysHv6OVPoLyuNJ00qXXSuzjMUiR/sT3oKA/3Ix3T4I=
-github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20241128072615-fc8a95491c23/go.mod h1:sQx3e5omguJVo6G5gYHJ7dZJvKsPPBkDA95HaH5I4zo=
+github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20250131044559-79f9d65acc42 h1:pGKCN46Ll+NE8p/twNQf9xzJZbMkA5Ho8gkvwNZMNZ8=
+github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20250131044559-79f9d65acc42/go.mod h1:4XC6tDWOLGqAhLMkBSDuZ2Dfz+yWa0p5LWaEywz1b48=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/kr/pretty v0.2.1/go.mod h1:ipq/a2n7PKx3OHsz4KJII5eveXtPO4qwEXGdVfWzfnI=
@@ -157,8 +157,8 @@ github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/
 github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
-github.com/stretchr/testify v1.8.2 h1:+h33VjcLVPDHtOdpUCuF+7gSuG3yGIftsP1YvFihtJ8=
-github.com/stretchr/testify v1.8.2/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
+github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
+github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/ziutek/telnet v0.0.0-20180329124119-c3b780dc415b/go.mod h1:IZpXDfkJ6tWD3PhBK5YzgQT+xJWh7OsdwiG8hA2MkO4=
