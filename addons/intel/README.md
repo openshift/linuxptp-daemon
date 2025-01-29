@@ -30,7 +30,7 @@ spec:
         settings:
           LocalMaxHoldoverOffSet: 1500
           LocalHoldoverTimeout: 14400
-          MaxInSpecOffset: 100
+          MaxInSpecOffset: 1500
         phaseOffsetPins:
           ens2f0:
             boardLabel: GNSS-1PPS

@@ -30,7 +30,7 @@ const (
 
 	LocalMaxHoldoverOffSet = 1500  //ns
 	LocalHoldoverTimeout   = 14400 //secs
-	MaxInSpecOffset        = 100   //ns
+	MaxInSpecOffset        = 1500  //ns
 	monitoringInterval     = 1 * time.Second
 
 	LocalMaxHoldoverOffSetStr = "LocalMaxHoldoverOffSet"

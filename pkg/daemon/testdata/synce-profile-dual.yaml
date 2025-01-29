@@ -19,7 +19,7 @@ plugins:
     settings:
       LocalHoldoverTimeout: 14400
       LocalMaxHoldoverOffSet: 1500
-      MaxInSpecOffset: 100
+      MaxInSpecOffset: 1500
     ublxCmds:
       - args:
           - -P
