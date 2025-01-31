@@ -5,7 +5,7 @@ go 1.22
 require (
 	github.com/bigkevmcd/go-configparser v0.0.0-20240624060122-ccd05f93a9d2
 	github.com/facebook/time v0.0.0-20230529151911-512b3b30ab23
-	github.com/golang/glog v1.1.0
+	github.com/golang/glog v1.2.4
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
 	github.com/jaypipes/ghw v0.12.0
 	github.com/mdlayher/genetlink v1.3.2
@@ -42,7 +42,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/gnostic-models v0.6.8 // indirect
-	github.com/google/go-cmp v0.5.9 // indirect
+	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/google/goterm v0.0.0-20190703233501-fc88cf888a3f // indirect
 	github.com/google/uuid v1.6.0 // indirect
