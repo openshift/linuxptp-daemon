@@ -19,4 +19,4 @@ jobs:
         go-version: '1.23'
 
     - name: lint
-      run: lint
+      run: make lint
