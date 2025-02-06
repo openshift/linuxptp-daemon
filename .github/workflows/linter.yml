@@ -26,4 +26,5 @@ jobs:
         uses: golangci/golangci-lint-action@v4
         with:
           version: latest  # You can specify a specific version like v1.54.2
-          args: --timeout=5m
+          args: --config=.golangci.yml --timeout=5m
+          
