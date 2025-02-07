@@ -115,7 +115,7 @@ jobs:
           kubectl apply -f deploy/00-ns.yaml
           kubectl apply -f deploy/01-sa.yaml
           kubectl apply -f deploy/02-rbac.yaml
-          kubectl apply -f deploy/leap-config.yaml
+          kubectl apply -f deploy/03-leap-config.yaml
           ./hack/gen-configmap-data-source.sh
           kubectl create configmap linuxptp-configmap -n openshift-ptp --from-file ./linuxptp-configmap
           sed "s/{{PR_NUMBER}}/$PR_NUMBER/g" deploy/linuxptp-daemon.yaml > deployment-temp.yaml
