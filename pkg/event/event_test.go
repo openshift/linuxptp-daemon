@@ -291,7 +291,12 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	eventManager.MockEnable()
 	go eventManager.ProcessEvents()
 	assert.NoError(t, leap.MockLeapFile())
-	defer close(leap.LeapMgr.Close)
+	defer func() {
+		close(leap.LeapMgr.Close)
+		// Sleep to allow context to switch
+		time.Sleep(100 * time.Millisecond)
+		assert.Nil(t, leap.LeapMgr)
+	}()
 	time.Sleep(1 * time.Second)
 	for _, test := range tests {
 		select {
