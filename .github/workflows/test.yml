@@ -97,10 +97,6 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@v3
 
-      - name: Set PR Number as Environment Variable
-        run: |
-          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
-
       - name: build and push linuxptp-daemon image
         run: |
            docker build -f Dockerfile -t localhost:5000/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} .    
@@ -110,13 +106,17 @@ jobs:
         run: |
           kind load docker-image localhost:5000/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} --name kind-cluster
 
+      - name: Set PR Number as Environment Variable
+        run: |
+          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+
       - name: Deploy to Kind
         run: |
           kubectl apply -f deploy/00-ns.yaml
           kubectl apply -f deploy/01-sa.yaml
           kubectl apply -f deploy/02-rbac.yaml
           kubectl apply -f deploy/linuxptp-daemon.yaml
-          sed "s/{{PR_NUMBER}}/${{ github.event.pull_request.number }}/g" deploy/linuxptp-daemon.yaml > deployment-temp.yaml
+          ed "s/{{PR_NUMBER}}/$PR_NUMBER/g" deploy/linuxptp-daemon.yaml > deployment-temp.yaml
           kubectl apply -f deployment-temp.yaml
           kubectl get pods -A
       
