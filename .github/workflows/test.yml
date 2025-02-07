@@ -111,8 +111,8 @@ jobs:
       
       - name: Describe Pod for Debugging
         run: |
-          kubectl describe pod ds/linuxptp-daemon -n openshift-ptp || echo "Failed to describe pod"
-          
+          kubectl describe pod -l app=linuxptp-daemon -n openshift-ptp || echo "Failed to describe pod"
+    
       - name: Wait for Logs (30s Timeout)
         run: |
           END=$((SECONDS+30))
