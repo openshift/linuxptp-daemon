@@ -121,39 +121,26 @@ jobs:
           kubectl apply -f deployment-temp.yaml
           kubectl get pods -A
       
-      - name: Describe Pod for Debugging
+      - name: Wait for Pod to Start
         run: |
-          kubectl describe pod -l app=linuxptp-daemon -n openshift-ptp || echo "Failed to describe pod"
-          
-      - name: Check Image Pull Errors (Retry for 30s)
-        run: |
-          end=$((SECONDS+30))
-          while [ $SECONDS -lt $end ]; do
-            REASON=$(kubectl get pod -l app=linuxptp-daemon -n openshift-ptp -o jsonpath='{.items[0].status.containerStatuses[*].state.waiting.reason}')
-            echo "Container Creating Reason: $REASON"
-            if [ -z "$REASON" ]; then
-              echo "Container is running or initialized."
-            break
+          TIMEOUT=120  # 2 minute timeout
+          START_TIME=$(date +%s)
+          while true; do
+            POD_STATUS=$(kubectl describe pod linuxptp-daemon -n openshift-ptp | grep "Status:" | awk '{print $2}')
+            if [ "$POD_STATUS" == "Running" ]; then
+              echo "Pod linuxptp-daemon is running."
+              break
             fi
-            sleep 5
-          done 
-          
-      - name: Wait for Logs (30s Timeout)
-        run: |
-          END=$((SECONDS+30))
-          while [ $SECONDS -lt $END ]; do
-            LOGS=$(kubectl logs ds/linuxptp-daemon -n openshift-ptp 2>/dev/null || echo "No logs yet")
-            echo "$LOGS"
-            if [[ "$LOGS" != "No logs yet" ]]; then
-              echo "Logs detected!"
-              exit 0
+            CURRENT_TIME=$(date +%s)
+            ELAPSED_TIME=$((CURRENT_TIME - START_TIME))
+            if [ "$ELAPSED_TIME" -ge "$TIMEOUT" ]; then
+              echo "Timeout reached. Pod did not start within $TIMEOUT seconds."
+              exit 1
             fi
-            echo "Waiting for logs..."
-            sleep 5
+            echo "Waiting for Pod to start..."
+            sleep 5  # Check every 5 seconds
           done
-          echo "Timeout reached, no logs found!"
-          exit 1
-
+          
       - name: Wait for DaemonSet to be Ready
         run: |
           kubectl rollout status ds/linuxptp-daemon -n openshift-ptp --timeout=180s
