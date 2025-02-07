@@ -60,12 +60,26 @@ jobs:
 
       - name: Verify Kubernetes Cluster
         run: kubectl get nodes
-        
-      - name: Set up Local Registry for Kind
+          
+      - name: Set up Local Registry
         run: |
           docker network inspect kind >/dev/null 2>&1 || docker network create kind
-          docker run -d --restart=always -p 5001:5001 --name kind-registry registry:2
-          echo "Registry running at localhost:5001" 
+          docker ps | grep kind-registry || docker run -d --restart=always -p 5001:5001 --name kind-registry registry:2
+          echo "Registry running at localhost:5001"
+          
+      - name: Connect Registry to Kind
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: local-registry-hosting
+            namespace: kube-public
+          data:
+            localRegistryHosting.v1: |
+              host: "localhost:5001"
+              help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
+          EOF
        
       - name: Check out the repo
         uses: actions/checkout@v3
