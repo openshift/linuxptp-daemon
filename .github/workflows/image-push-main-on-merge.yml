@@ -12,6 +12,9 @@ on:
 jobs:
   build-and-push-image-linuxptp-daemon:
     runs-on: ubuntu-20.04
+    permissions:  # Added required permissions
+      contents: read
+      packages: write
     steps:
       - name: Check out the repo
         uses: actions/checkout@v3
