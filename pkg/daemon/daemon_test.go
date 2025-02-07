@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
@@ -235,9 +236,15 @@ func TestMain(m *testing.M) {
 	teardown()
 	os.Exit(code)
 }
+
 func Test_ProcessPTPMetrics(t *testing.T) {
 	leap.MockLeapFile()
-	defer close(leap.LeapMgr.Close)
+	defer func() {
+		close(leap.LeapMgr.Close)
+		// Sleep to allow context to switch
+		time.Sleep(100 * time.Millisecond)
+		assert.Nil(t, leap.LeapMgr)
+	}()
 
 	assert := assert.New(t)
 	for _, tc := range testCases {
