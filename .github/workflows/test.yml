@@ -18,9 +18,6 @@ jobs:
 
     - name: fmt
       run: make fmt
-
-    - name: Build
-      run: make all
   test:
     strategy:
       matrix:
