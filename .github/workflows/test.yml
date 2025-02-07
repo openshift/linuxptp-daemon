@@ -97,6 +97,10 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@v3
 
+      - name: Set PR Number as Environment Variable
+        run: |
+          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+
       - name: build and push linuxptp-daemon image
         run: |
            docker build -f Dockerfile -t localhost:5000/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} .    
