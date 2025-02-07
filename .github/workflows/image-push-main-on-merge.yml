@@ -1,5 +1,9 @@
 name: "Push linuxptp daemon on merge to main"
 
+permissions:
+  contents: read
+  packages: write  # This gives GitHub Actions permission to push to GHCR
+  
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
   BUILD_PLATFORMS: linux/amd64
@@ -12,9 +16,6 @@ on:
 jobs:
   build-and-push-image-linuxptp-daemon:
     runs-on: ubuntu-20.04
-    permissions:  # Added required permissions
-      contents: read
-      packages: write
     steps:
       - name: Check out the repo
         uses: actions/checkout@v3
