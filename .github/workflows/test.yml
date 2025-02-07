@@ -1,8 +1,26 @@
-name: Unit Test
+name: Test
 
 on: [push, pull_request]
 
 jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+    
+    - name: Set up Go 1.23
+      uses: actions/setup-go@v3
+      with:
+        go-version: 1.23.x
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
+    - name: fmt
+      run: make fmt
+
+    - name: Build
+      run: make all
   test:
     strategy:
       matrix:
@@ -22,6 +40,75 @@ jobs:
 
       - name: Install Dependencies
         run: go mod tidy && go mod download
-
+       
       - name: Run Tests
         run: make test
+  buildImage:
+    runs-on: ${{ matrix.os }}
+    needs: build #needs: [build,test]  # Runs after the "build and test" job is completed
+    steps:
+    - name: Check out the repo
+      uses: actions/checkout@v3
+
+    - name: build linuxptp-daemon image
+      run: podman build -f Dockerfile -t localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} .
+  kind:
+    runs-on: ${{ matrix.os }}
+    needs: buildImage  # Runs after the "buildImage" job is completed
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.23  # Adjust as needed
+
+      - name: Set up Kubernetes with Kind
+        uses: helm/kind-action@v1.8.0
+        with:
+          cluster_name: kind-cluster
+          wait: 120s
+
+      - name: Verify Kubernetes Cluster
+        run: kubectl get nodes
+        
+      - name: Set up Local Registry for Kind
+        run: |
+          docker network create kind
+          docker run -d --restart=always -p 5001:5001 --name kind-registry registry:2
+          echo "Registry running at localhost:5001" 
+          
+      - name: Push Image to Local Kind Registry
+        run: |
+          podman push localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}}
+
+      - name: Load Image into Kind Cluster
+        run: |
+          kind load docker-image localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} --name kind-cluster
+
+      - name: Deploy to Kind
+        run: |
+          kubectl apply -f deploy/00-ns.yaml
+          kubectl apply -f deploy/01-sa.yaml
+          kubectl apply -f deploy/02-rbac.yaml
+          kubectl apply -f deploy/linuxptp-daemon.yaml
+          kubectl get pods -A
+
+      - name: Wait for DaemonSet to be Ready
+        run: |
+          kubectl rollout status ds/linuxptp-daemon -n openshift-ptp --timeout=180s
+
+      - name: Check DaemonSet Status
+        run: |
+          kubectl get daemonset linuxptp-daemon -n openshift-ptp -o wide
+
+      - name: Verify Pods in DaemonSet
+        run: |
+          kubectl get pods -n openshift-ptp -o wide
+          kubectl wait --for=condition=Ready pod -l app=linuxptp-daemon -n openshift-ptp --timeout=120s
+        
+      - name: Cleanup Kind Cluster
+        if: always() # Ensures cleanup runs even if previous steps fail
+        run: kind delete cluster --name kind-cluster
+
