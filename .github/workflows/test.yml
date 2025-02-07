@@ -80,6 +80,10 @@ jobs:
               host: "localhost:5001"
               help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
           EOF
+
+      - name: Check registry status
+        run: |
+          docker logs kind-registry
           
       - name: Check registry status
         run: |
