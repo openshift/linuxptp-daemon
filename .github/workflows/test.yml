@@ -116,7 +116,7 @@ jobs:
           kubectl apply -f deploy/01-sa.yaml
           kubectl apply -f deploy/02-rbac.yaml
           kubectl apply -f deploy/linuxptp-daemon.yaml
-          sed "s/{{PR_NUMBER}}/${{ github.event.pull_request.number }}/g" deploy/deployment.yaml > deployment-temp.yaml
+          sed "s/{{PR_NUMBER}}/${{ github.event.pull_request.number }}/g" deploy/linuxptp-daemon.yaml > deployment-temp.yaml
           kubectl apply -f deployment-temp.yaml
           kubectl get pods -A
       
