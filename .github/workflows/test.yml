@@ -42,7 +42,7 @@ jobs:
         run: make test
   buildImage:
     runs-on: ${{ matrix.os }}
-    needs: build #needs: [build,test]  # Runs after the "build and test" job is completed
+    needs: [build,test]  # Runs after the "build and test" job is completed
     steps:
     - name: Check out the repo
       uses: actions/checkout@v3
