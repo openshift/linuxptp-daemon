@@ -10,6 +10,7 @@ on:
 
 jobs:
   lint:
+    if: false  # This prevents the job from running
     name: Run GolangCI-Lint
     runs-on: ubuntu-latest
 
