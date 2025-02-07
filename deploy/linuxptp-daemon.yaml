@@ -26,7 +26,7 @@ spec:
       - name: linuxptp-daemon-container
         securityContext:
           privileged: true
-        image: quay.io/aneeshkp/linuxptp-daemon:4.18
+        image: localhost:5001/ghaction-linuxptp-daemon:pr-{{PR_NUMBER}}
         command: [ "/bin/bash", "-c", "--" ]
         args: [ "/usr/local/bin/ptp --alsologtostderr" ]
         imagePullPolicy: IfNotPresent
