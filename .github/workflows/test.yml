@@ -112,7 +112,20 @@ jobs:
       - name: Describe Pod for Debugging
         run: |
           kubectl describe pod -l app=linuxptp-daemon -n openshift-ptp || echo "Failed to describe pod"
-    
+          
+      - name: Check Image Pull Errors (Retry for 30s)
+        run: |
+          end=$((SECONDS+30))
+          while [ $SECONDS -lt $end ]; do
+            REASON=$(kubectl get pod -l app=linuxptp-daemon -n openshift-ptp -o jsonpath='{.items[0].status.containerStatuses[*].state.waiting.reason}')
+            echo "Container Creating Reason: $REASON"
+            if [ -z "$REASON" ]; then
+              echo "Container is running or initialized."
+            break
+            fi
+            sleep 5
+          done 
+          
       - name: Wait for Logs (30s Timeout)
         run: |
           END=$((SECONDS+30))
