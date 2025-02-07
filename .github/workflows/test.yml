@@ -80,18 +80,19 @@ jobs:
               host: "localhost:5001"
               help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
           EOF
+          
+      - name: Check registry status
+        run: |
+          curl -v http://localhost:5001/v2/
        
       - name: Check out the repo
         uses: actions/checkout@v3
 
-      - name: build linuxptp-daemon image
+      - name: build and push linuxptp-daemon image
         run: |
            docker build -f Dockerfile -t localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} .    
+           docker push localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}}
         
-      - name: Push Image to Local Kind Registry
-        run: |
-          docker push localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}}
-
       - name: Load Image into Kind Cluster
         run: |
           kind load docker-image localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} --name kind-cluster
