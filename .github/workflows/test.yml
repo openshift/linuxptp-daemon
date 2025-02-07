@@ -64,8 +64,8 @@ jobs:
       - name: Set up Local Registry
         run: |
           docker network inspect kind >/dev/null 2>&1 || docker network create kind
-          docker ps | grep kind-registry || docker run -d --restart=always -p 5001:5001 --name kind-registry registry:2
-          echo "Registry running at localhost:5001"
+          docker ps | grep kind-registry || docker run -d --restart=always -p 5000:5000 --name kind-registry registry:2
+          echo "Registry running at localhost:5000"
           
       - name: Connect Registry to Kind
         run: |
@@ -77,7 +77,7 @@ jobs:
             namespace: kube-public
           data:
             localRegistryHosting.v1: |
-              host: "localhost:5001"
+              host: "localhost:5000"
               help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
           EOF
 
@@ -87,19 +87,19 @@ jobs:
           
       - name: Check registry status
         run: |
-          curl -v http://localhost:5001/v2/
+          curl -v http://localhost:5000/v2/
        
       - name: Check out the repo
         uses: actions/checkout@v3
 
       - name: build and push linuxptp-daemon image
         run: |
-           docker build -f Dockerfile -t localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} .    
-           docker push localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}}
+           docker build -f Dockerfile -t localhost:5000/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} .    
+           docker push localhost:5000/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}}
         
       - name: Load Image into Kind Cluster
         run: |
-          kind load docker-image localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} --name kind-cluster
+          kind load docker-image localhost:5000/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} --name kind-cluster
 
       - name: Deploy to Kind
         run: |
