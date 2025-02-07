@@ -60,6 +60,11 @@ jobs:
 
       - name: Verify Kubernetes Cluster
         run: kubectl get nodes
+        
+      - name: Label KinD Node as Linux
+        run: |
+          NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+          kubectl label node "$NODE_NAME" kubernetes.io/os=linux --overwrite 
           
       - name: Set up Local Registry
         run: |
