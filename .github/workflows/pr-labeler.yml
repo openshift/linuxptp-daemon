@@ -4,6 +4,7 @@ on:
 
 jobs:
   triage:
+    if: false  # This prevents the job from running
     runs-on: ubuntu-latest
     steps:
       - uses: actions/labeler@v3
