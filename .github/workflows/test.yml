@@ -105,6 +105,12 @@ jobs:
       - name: Load Image into Kind Cluster
         run: |
           kind load docker-image localhost:5000/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} --name kind-cluster
+          
+      - name: Test Docker Pull
+        run: |
+          echo "Testing if the image can be pulled..."
+          docker pull localhost:5000/ghaction-linuxptp-daemon:pr-${{ github.event.pull_request.number }}
+          docker images | grep "ghaction-linuxptp-daemon"
 
       - name: Set PR Number as Environment Variable
         run: |
