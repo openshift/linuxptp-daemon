@@ -28,7 +28,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
+          
+      - name: Debug GitHub Token Permissions
+        run: |
+          curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+               -H "Accept: application/vnd.github+json" \
+               https://api.github.com/user
+               
       - name: Docker meta
         id: docker_meta
         uses: docker/metadata-action@v4
