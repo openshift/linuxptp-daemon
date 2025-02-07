@@ -108,6 +108,26 @@ jobs:
           kubectl apply -f deploy/02-rbac.yaml
           kubectl apply -f deploy/linuxptp-daemon.yaml
           kubectl get pods -A
+      
+      - name: Describe Pod for Debugging
+        run: |
+          kubectl describe pod ds/linuxptp-daemon -n openshift-ptp || echo "Failed to describe pod"
+          
+      - name: Wait for Logs (30s Timeout)
+        run: |
+          END=$((SECONDS+30))
+          while [ $SECONDS -lt $END ]; do
+            LOGS=$(kubectl logs ds/linuxptp-daemon -n openshift-ptp 2>/dev/null || echo "No logs yet")
+            echo "$LOGS"
+            if [[ "$LOGS" != "No logs yet" ]]; then
+              echo "Logs detected!"
+              exit 0
+            fi
+            echo "Waiting for logs..."
+            sleep 5
+          done
+          echo "Timeout reached, no logs found!"
+          exit 1
 
       - name: Wait for DaemonSet to be Ready
         run: |
