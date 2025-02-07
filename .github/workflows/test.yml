@@ -24,7 +24,7 @@ jobs:
         go-version: [1.23.x]  # Use valid versions
         os: [ubuntu-latest]
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -41,7 +41,7 @@ jobs:
       - name: Run Tests
         run: make test
   buildImage:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     needs: [build,test]  # Runs after the "build and test" job is completed
     steps:
     - name: Check out the repo
@@ -50,7 +50,7 @@ jobs:
     - name: build linuxptp-daemon image
       run: podman build -f Dockerfile -t localhost:5001/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} .
   kind:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     needs: buildImage  # Runs after the "buildImage" job is completed
     steps:
       - name: Checkout Code
