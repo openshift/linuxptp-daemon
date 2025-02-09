@@ -32,11 +32,6 @@ jobs:
           username:  ${{github.repository_owner}}
           password: ${{ secrets.GITHUB_TOKEN }}
                
-      - name: Docker meta
-        id: docker_meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
 
       - name: Build and push linuxptp-daemon
         if: ${{ github.repository_owner == env.image-push-owner }}
@@ -48,7 +43,6 @@ jobs:
           sbom: false 
           provenance: false 
           tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          labels: ${{ steps.docker_meta.outputs.labels }}
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
           file: ./Dockerfile
