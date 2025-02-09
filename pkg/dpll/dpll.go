@@ -344,7 +344,7 @@ func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.Do
 				glog.Info("discarding on invalid lock status: ", nl.GetDpllStatusHR(reply))
 				continue
 			}
-			glog.Info(nl.GetDpllStatusHR(reply))
+			glog.Info(nl.GetDpllStatusHR(reply), " ", d.iface)
 			switch nl.GetDpllType(reply.Type) {
 			case "eec":
 				d.frequencyStatus = int64(reply.LockStatus)
@@ -360,7 +360,7 @@ func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.Do
 	for _, pin := range pins {
 		if d.PhaseOffsetPin(pin) {
 			d.SetPhaseOffset(pin.ParentDevice.PhaseOffset)
-			glog.Info("setting phase offset to ", d.phaseOffset, " ns for clock id ", d.clockId)
+			glog.Info("setting phase offset to ", d.phaseOffset, " ns for clock id ", d.clockId, " iface ", d.iface)
 			valid = true
 		}
 	}
@@ -620,73 +620,75 @@ func (d *DpllConfig) MonitorDpll() {
 // stateDecision
 func (d *DpllConfig) stateDecision() {
 	dpllStatus := d.getWorseState(d.phaseStatus, d.frequencyStatus)
-	glog.Infof("%s-dpll decision: Status %d, Offset %d, In spec %v, Source lost %v, On holdover %v",
-		d.iface, dpllStatus, d.phaseOffset, d.inSpec, d.sourceLost, d.onHoldover)
-	if d.hasPPSAsSource() {
-		d.sourceLost = false //TODO: do not have a handler to catch pps source , so we will set to false
-		// and to true if state changes to holdover for source PPS based DPLL
-	}
+
 	switch dpllStatus {
 	case DPLL_FREERUN, DPLL_INVALID, DPLL_UNKNOWN:
-		d.inSpec = true
+		d.inSpec = false
+		d.sourceLost = true
+		glog.Infof("on holdover %t has GNSS source %t", d.onHoldover, d.hasGNSSAsSource())
 		if d.hasGNSSAsSource() && d.onHoldover {
-			d.holdoverCloseCh <- true
-		} else if d.hasPPSAsSource() {
-			d.sourceLost = true
+			glog.Infof("trying to close holdover (%s)", d.iface)
+			select {
+			case d.holdoverCloseCh <- true:
+				glog.Infof("closing holdover for %s since DPLL flipped to Unlocked", d.iface)
+			default:
+			}
 		}
 		d.state = event.PTP_FREERUN
 		d.phaseOffset = FaultyPhaseOffset
 		glog.Infof("dpll is in FREERUN, state is FREERUN (%s)", d.iface)
 		d.sendDpllEvent()
-	case DPLL_LOCKED:
-		if !d.sourceLost && d.isOffsetInRange() { // right now pps always source not lost
-			if d.hasGNSSAsSource() && d.onHoldover {
-				d.holdoverCloseCh <- true
-			}
-			glog.Infof("dpll is locked, offset is in range, state is LOCKED(%s)", d.iface)
-			d.state = event.PTP_LOCKED
-		} else { // what happens if source is lost and DPLL is locked? goto holdover?
-			glog.Infof("dpll is locked, offset is out of range, state is FREERUN(%s)", d.iface)
+
+	case DPLL_HOLDOVER:
+		switch {
+		case d.hasPPSAsSource():
 			d.state = event.PTP_FREERUN
-		}
-		d.inSpec = true
-		d.sendDpllEvent()
-	case DPLL_LOCKED_HO_ACQ, DPLL_HOLDOVER:
-		if d.hasPPSAsSource() {
-			if dpllStatus == DPLL_HOLDOVER {
-				d.state = event.PTP_FREERUN // pps when moved to HOLDOVER we declare freerun
-				d.phaseOffset = FaultyPhaseOffset
-				d.sourceLost = true
-			} else if dpllStatus == DPLL_LOCKED_HO_ACQ && d.isOffsetInRange() {
-				d.state = event.PTP_LOCKED
-				d.sourceLost = false
-			} else {
+			d.phaseOffset = FaultyPhaseOffset
+			glog.Infof("Follower card DPLL is on holdover - hardware failure or pins misconfigured")
+		case d.hasGNSSAsSource():
+			if !d.inSpec { // d.inSpec is updated by the holdover routine
+				glog.Infof("dpll is not in spec, state is DPLL_HOLDOVER, offset is out of range, state is FREERUN(%s)", d.iface)
 				d.state = event.PTP_FREERUN
-				d.sourceLost = false
 				d.phaseOffset = FaultyPhaseOffset
+				select {
+				case d.holdoverCloseCh <- true:
+					glog.Infof("closing holdover for %s since offset if out of spec", d.iface)
+				default:
+				}
+			} else if !d.onHoldover {
+				d.holdoverCloseCh = make(chan bool)
+				d.onHoldover = true
+				d.state = event.PTP_HOLDOVER
+				glog.Infof("starting holdover (%s)", d.iface)
+				go d.holdover()
+
 			}
-		} else if !d.sourceLost && d.isOffsetInRange() {
-			glog.Infof("dpll is locked, source is not lost, offset is in range, state is DPLL_LOCKED_HO_ACQ or DPLL_HOLDOVER(%s)", d.iface)
-			if d.hasGNSSAsSource() {
-				if d.onHoldover {
-					d.holdoverCloseCh <- true
-					glog.Infof("closing holdover for %s", d.iface)
+		}
+		d.sendDpllEvent()
+
+	case DPLL_LOCKED_HO_ACQ:
+		if d.isOffsetInRange() {
+			d.state = event.PTP_LOCKED
+			d.inSpec = true
+		} else {
+			d.state = event.PTP_FREERUN
+			d.sourceLost = false // phase offset will be the one that was read
+		}
+		if d.isOffsetInRange() {
+			glog.Infof("dpll is locked, source is not lost, offset is in range, state is DPLL_LOCKED_HO_ACQ(%s)", d.iface)
+			if d.hasGNSSAsSource() && d.onHoldover {
+				select {
+				case d.holdoverCloseCh <- true:
+					glog.Infof("closing holdover for %s since source is restored and locked ", d.iface)
+				default:
 				}
 				d.inSpec = true
 			}
 			d.state = event.PTP_LOCKED
-		} else if d.sourceLost && d.inSpec {
-			glog.Infof("dpll state is DPLL_LOCKED_HO_ACQ or DPLL_HOLDOVER,  source is lost, state is HOLDOVER(%s)", d.iface)
-			if !d.onHoldover {
-				d.holdoverCloseCh = make(chan bool)
-				d.onHoldover = true
-				d.state = event.PTP_HOLDOVER
-				go d.holdover()
-			}
-			return // sending events are handled by holdover return here
-		} else if !d.inSpec {
-			glog.Infof("dpll is not in spec ,state is DPLL_LOCKED_HO_ACQ or DPLL_HOLDOVER, offset is out of range, state is FREERUN(%s)", d.iface)
+		} else {
+			glog.Infof("dpll is not in spec, state is DPLL_LOCKED_HO_ACQ, offset is out of range, state is FREERUN(%s)", d.iface)
 			d.state = event.PTP_FREERUN
+			d.inSpec = false
 			d.phaseOffset = FaultyPhaseOffset
 		}
 		d.sendDpllEvent()
