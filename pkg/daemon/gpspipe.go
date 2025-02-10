@@ -114,14 +114,6 @@ func (gp *gpspipe) CmdRun(stdoutToSocket bool) {
 		glog.Infof("%s cmd: %+v", gp.Name(), gp.cmd)
 		gp.cmd.Stderr = os.Stderr
 		var err error
-		if err != nil {
-			glog.Errorf("CmdRun() error creating StdoutPipe for %s: %v", gp.Name(), err)
-			if gp.Stopped() {
-				return
-			}
-			time.Sleep(1 * time.Second)
-			continue
-		}
 		// Don't restart after termination
 		if !gp.Stopped() {
 			time.Sleep(1 * time.Second)
