@@ -44,7 +44,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 			Id:            id,
 			ModuleName:    moduleName,
 			Mode:          1,
-			ModeSupported: 0,
+			ModeSupported: []uint32{0},
 			LockStatus:    2, //LOCKED,
 			ClockId:       clockid,
 			Type:          2, //1 pps 2 eec
@@ -58,13 +58,13 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		expectedPhaseOffset:       dpll.FaultyPhaseOffset * 1000000,
 		expectedFrequencyStatus:   2, // locked
 		expectedInSpecState:       false,
-		desc:                      fmt.Sprintf("1.locked frequency status, unknonw Phase status : pin %d ", pinType),
+		desc:                      fmt.Sprintf("1.locked frequency status, unknown Phase status : pin %d ", pinType),
 	}, {
 		reply: &nl.DoDeviceGetReply{
 			Id:            id,
 			ModuleName:    moduleName,
 			Mode:          1,
-			ModeSupported: 0,
+			ModeSupported: []uint32{0},
 			LockStatus:    2, //LOCKED,
 			ClockId:       clockid,
 			Type:          1, //1 pps 2 eec
@@ -85,7 +85,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 				Id:            id,
 				ModuleName:    moduleName,
 				Mode:          1,
-				ModeSupported: 0,
+				ModeSupported: []uint32{0},
 				LockStatus: func() uint32 {
 					if pinType == 2 {
 						return 4 // holdover
@@ -131,7 +131,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 				Id:            id,
 				ModuleName:    moduleName,
 				Mode:          1,
-				ModeSupported: 0,
+				ModeSupported: []uint32{0},
 				LockStatus:    4, // holdover,
 				ClockId:       clockid,
 				Type:          pinType, //1 pps 2 eec

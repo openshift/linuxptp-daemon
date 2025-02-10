@@ -3,7 +3,6 @@ package dpll
 import (
 	"context"
 	"fmt"
-	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"math"
 	"net"
 	"os"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
@@ -38,6 +39,9 @@ const (
 	MaxInSpecOffsetStr        = "MaxInSpecOffset"
 	ClockIdStr                = "clockId"
 	FaultyPhaseOffset         = 99999999999
+
+	// The PPS pin index in the pin-parent-device structure
+	PPS_PIN_INDEX = 1
 )
 
 type dpllApiType string
@@ -323,8 +327,9 @@ func (d *DpllConfig) Timer() int64 {
 	return d.timer
 }
 
-func (d *DpllConfig) PhaseOffsetPin(pin *nl.DoPinGetReply) bool {
-	if pin.ClockId == d.clockId && pin.ParentDevice.PhaseOffset != math.MaxInt64 {
+func (d *DpllConfig) PhaseOffsetPin(pin *nl.PinInfo) bool {
+
+	if pin.ClockId == d.clockId && pin.ParentDevice[PPS_PIN_INDEX].PhaseOffset != math.MaxInt64 {
 		for k, v := range d.phaseOffsetPinFilter[strconv.FormatUint(d.clockId, 10)] {
 			switch k {
 			case "boardLabel":
@@ -345,7 +350,7 @@ func (d *DpllConfig) PhaseOffsetPin(pin *nl.DoPinGetReply) bool {
 }
 
 // nlUpdateState updates DPLL state in the DpllConfig structure.
-func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.DoPinGetReply) bool {
+func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.PinInfo) bool {
 	valid := false
 
 	for _, reply := range devices {
@@ -369,7 +374,7 @@ func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.Do
 	}
 	for _, pin := range pins {
 		if d.PhaseOffsetPin(pin) {
-			d.SetPhaseOffset(pin.ParentDevice.PhaseOffset)
+			d.SetPhaseOffset(pin.ParentDevice[PPS_PIN_INDEX].PhaseOffset)
 			glog.Info("setting phase offset to ", d.phaseOffset, " ns for clock id ", d.clockId)
 			valid = true
 		}
@@ -390,9 +395,9 @@ func (d *DpllConfig) monitorNtf(c *genetlink.Conn) {
 			}
 			return
 		}
-		devices, pins := []*nl.DoDeviceGetReply{}, []*nl.DoPinGetReply{}
+		devices, pins := []*nl.DoDeviceGetReply{}, []*nl.PinInfo{}
 		for _, msg := range msgs {
-			devices, pins = []*nl.DoDeviceGetReply{}, []*nl.DoPinGetReply{}
+			devices, pins = []*nl.DoDeviceGetReply{}, []*nl.PinInfo{}
 			switch msg.Header.Command {
 			case nl.DPLL_CMD_DEVICE_CHANGE_NTF:
 				devices, err = nl.ParseDeviceReplies([]genetlink.Message{msg})
@@ -451,7 +456,7 @@ func (d *DpllConfig) setAPIType() {
 func (d *DpllConfig) MonitorDpllMock() {
 	glog.Info("starting dpll mock monitoring")
 
-	if d.nlUpdateState([]*nl.DoDeviceGetReply{<-MockDpllReplies}, []*nl.DoPinGetReply{}) {
+	if d.nlUpdateState([]*nl.DoDeviceGetReply{<-MockDpllReplies}, []*nl.PinInfo{}) {
 		d.stateDecision()
 	}
 
@@ -488,7 +493,7 @@ func (d *DpllConfig) MonitorDpllNetlink() {
 				goto abort
 			}
 
-			if d.nlUpdateState(replies, []*nl.DoPinGetReply{}) {
+			if d.nlUpdateState(replies, []*nl.PinInfo{}) {
 				d.stateDecision()
 			}
 
