@@ -1,9 +1,9 @@
-FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.22-openshift-4.18 AS builder
-WORKDIR /go/src/github.com/openshift/linuxptp-daemon
+FROM golang:1.23.5 AS builder
+WORKDIR /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon
 COPY . .
 RUN make clean && make
 
-FROM registry.ci.openshift.org/ocp/4.18:base-rhel9
+FROM quay.io/centos/centos:stream9
 
 RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata synce4l && yum clean all
 
@@ -17,6 +17,6 @@ RUN ln -s /usr/sbin/gpsd /usr/local/sbin/gpsd
 RUN ln -s /usr/bin/ubxtool /usr/local/bin/ubxtool
 
 
-COPY --from=builder /go/src/github.com/openshift/linuxptp-daemon/bin/ptp /usr/local/bin/
+COPY --from=builder /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon/bin/ptp /usr/local/bin/
 
 CMD ["/usr/local/bin/ptp"]

@@ -11,9 +11,9 @@ import (
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
-	"github.com/openshift/linuxptp-daemon/pkg/event"
-	"github.com/openshift/linuxptp-daemon/pkg/leap"
-	"github.com/openshift/linuxptp-daemon/pkg/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -291,7 +291,12 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	eventManager.MockEnable()
 	go eventManager.ProcessEvents()
 	assert.NoError(t, leap.MockLeapFile())
-	defer close(leap.LeapMgr.Close)
+	defer func() {
+		close(leap.LeapMgr.Close)
+		// Sleep to allow context to switch
+		time.Sleep(100 * time.Millisecond)
+		assert.Nil(t, leap.LeapMgr)
+	}()
 	time.Sleep(1 * time.Second)
 	for _, test := range tests {
 		select {

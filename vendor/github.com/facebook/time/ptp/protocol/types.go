@@ -163,6 +163,15 @@ func (t Correction) Nanoseconds() float64 {
 	return IntFloat(t).Value()
 }
 
+// Duration converts PTP CorrectionField to time.Duration, ignoring
+// case where correction is too big, and dropping fractions of nanoseconds
+func (t Correction) Duration() time.Duration {
+	if !t.TooBig() {
+		return time.Duration(t.Nanoseconds())
+	}
+	return 0
+}
+
 func (t Correction) String() string {
 	if t.TooBig() {
 		return "Correction(Too big)"
@@ -199,15 +208,13 @@ func (c ClockIdentity) String() string {
 
 // MAC turns ClockIdentity into the MAC address it was based upon. EUI-48 is assumed.
 func (c ClockIdentity) MAC() net.HardwareAddr {
-	asBytes := [8]byte{}
-	binary.BigEndian.PutUint64(asBytes[:], uint64(c))
 	mac := make(net.HardwareAddr, 6)
-	mac[0] = asBytes[0]
-	mac[1] = asBytes[1]
-	mac[2] = asBytes[2]
-	mac[3] = asBytes[5]
-	mac[4] = asBytes[6]
-	mac[5] = asBytes[7]
+	mac[0] = byte(c >> 56)
+	mac[1] = byte(c >> 48)
+	mac[2] = byte(c >> 40)
+	mac[3] = byte(c >> 16)
+	mac[4] = byte(c >> 8)
+	mac[5] = byte(c)
 	return mac
 }
 
@@ -215,7 +222,8 @@ func (c ClockIdentity) MAC() net.HardwareAddr {
 func NewClockIdentity(mac net.HardwareAddr) (ClockIdentity, error) {
 	b := [8]byte{}
 	macLen := len(mac)
-	if macLen == 6 { // EUI-48
+	switch macLen {
+	case 6: // EUI-48
 		b[0] = mac[0]
 		b[1] = mac[1]
 		b[2] = mac[2]
@@ -224,9 +232,9 @@ func NewClockIdentity(mac net.HardwareAddr) (ClockIdentity, error) {
 		b[5] = mac[3]
 		b[6] = mac[4]
 		b[7] = mac[5]
-	} else if macLen == 8 { // EUI-64
+	case 8: // EUI-64
 		copy(b[:], mac)
-	} else {
+	default:
 		return 0, fmt.Errorf("unsupported MAC %v, must be either EUI48 or EUI64", mac)
 	}
 	return ClockIdentity(binary.BigEndian.Uint64(b[:])), nil
@@ -278,8 +286,8 @@ func (s PTPSeconds) Empty() bool {
 
 // Seconds returns number of seconds as uint64
 func (s PTPSeconds) Seconds() uint64 {
-	b := append([]byte{0x0, 0x0}, s[:]...)
-	return binary.BigEndian.Uint64(b)
+	return uint64(s[5]) | uint64(s[4])<<8 | uint64(s[3])<<16 | uint64(s[2])<<24 |
+		uint64(s[1])<<32 | uint64(s[0])<<40
 }
 
 // Time returns number of seconds in as Time
@@ -303,11 +311,14 @@ func NewPTPSeconds(t time.Time) PTPSeconds {
 	if t.IsZero() {
 		return PTPSeconds{}
 	}
-	b := [8]byte{}
+	v := uint64(t.Unix())
 	s := PTPSeconds{}
-	binary.BigEndian.PutUint64(b[:], uint64(t.Unix()))
-	// take last 6 bytes from 8 bytes of int64
-	copy(s[:], b[2:])
+	s[0] = byte(v >> 40)
+	s[1] = byte(v >> 32)
+	s[2] = byte(v >> 24)
+	s[3] = byte(v >> 16)
+	s[4] = byte(v >> 8)
+	s[5] = byte(v)
 	return s
 }
 
@@ -353,10 +364,13 @@ func NewTimestamp(t time.Time) Timestamp {
 	ts := Timestamp{
 		Nanoseconds: uint32(t.Nanosecond()),
 	}
-	b := [8]byte{}
-	binary.BigEndian.PutUint64(b[:], uint64(t.Unix()))
-	// take last 6 bytes from 8 bytes of int64
-	copy(ts.Seconds[:], b[2:])
+	v := uint64(t.Unix())
+	ts.Seconds[0] = byte(v >> 40)
+	ts.Seconds[1] = byte(v >> 32)
+	ts.Seconds[2] = byte(v >> 24)
+	ts.Seconds[3] = byte(v >> 16)
+	ts.Seconds[4] = byte(v >> 8)
+	ts.Seconds[5] = byte(v)
 	return ts
 }
 

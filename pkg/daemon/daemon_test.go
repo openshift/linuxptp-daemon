@@ -6,16 +6,17 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/openshift/linuxptp-daemon/pkg/event"
-	"github.com/openshift/linuxptp-daemon/pkg/leap"
-	"github.com/openshift/linuxptp-daemon/pkg/synce"
-	ptpv1 "github.com/openshift/ptp-operator/api/v1"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/sirupsen/logrus"
 	"k8s.io/utils/pointer"
 
-	"github.com/openshift/linuxptp-daemon/pkg/config"
-	"github.com/openshift/linuxptp-daemon/pkg/daemon"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/daemon"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -235,9 +236,15 @@ func TestMain(m *testing.M) {
 	teardown()
 	os.Exit(code)
 }
+
 func Test_ProcessPTPMetrics(t *testing.T) {
 	leap.MockLeapFile()
-	defer close(leap.LeapMgr.Close)
+	defer func() {
+		close(leap.LeapMgr.Close)
+		// Sleep to allow context to switch
+		time.Sleep(100 * time.Millisecond)
+		assert.Nil(t, leap.LeapMgr)
+	}()
 
 	assert := assert.New(t)
 	for _, tc := range testCases {

@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/openshift/linuxptp-daemon/pkg/config"
-	"github.com/openshift/linuxptp-daemon/pkg/event"
-	"github.com/openshift/linuxptp-daemon/pkg/leap"
-	"github.com/openshift/linuxptp-daemon/pkg/ublox"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	gpsdlib "github.com/stratoberry/go-gpsd"
 )
 
@@ -178,13 +178,6 @@ func (g *GPSD) CmdRun(stdoutToSocket bool) {
 		glog.Infof("%s cmd: %+v", g.Name(), g.cmd)
 		g.cmd.Stderr = os.Stderr
 		var err error
-		if err != nil {
-			glog.Errorf("CmdRun() error creating StdoutPipe for %s: %v", g.Name(), err)
-			if g.stopped {
-				return
-			}
-			time.Sleep(5 * time.Second)
-		}
 		// Don't restart after termination
 		if !g.Stopped() {
 			time.Sleep(1 * time.Second)

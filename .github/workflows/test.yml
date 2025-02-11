@@ -1,0 +1,167 @@
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+    
+    - name: Set up Go 1.23
+      uses: actions/setup-go@v3
+      with:
+        go-version: 1.23.x
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
+    - name: fmt
+      run: make fmt
+  test:
+    strategy:
+      matrix:
+        go-version: [1.23.x]  # Use valid versions
+        os: [ubuntu-latest]
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Install Dependencies
+        run: go mod tidy && go mod download
+       
+      - name: Run Tests
+        run: make test
+  kind:
+    runs-on: ubuntu-latest
+    needs: [build,test]  # Runs after the "build and test " job is completed
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.23  # Adjust as needed
+
+      - name: Set up Kubernetes with Kind
+        uses: helm/kind-action@v1.8.0
+        with:
+          cluster_name: kind-cluster
+          wait: 120s
+
+      - name: Verify Kubernetes Cluster
+        run: kubectl get nodes
+        
+      - name: Label KinD Node as Linux
+        run: |
+          NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+          kubectl label node "$NODE_NAME" kubernetes.io/os=linux --overwrite 
+          
+      - name: Set up Local Registry
+        run: |
+          docker network inspect kind >/dev/null 2>&1 || docker network create kind
+          docker ps | grep kind-registry || docker run -d --restart=always -p 5000:5000 --name kind-registry registry:2
+          echo "Registry running at localhost:5000"
+          
+      - name: Connect Registry to Kind
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: local-registry-hosting
+            namespace: kube-public
+          data:
+            localRegistryHosting.v1: |
+              host: "localhost:5000"
+              help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
+          EOF
+
+      - name: Check registry status
+        run: |
+          docker logs kind-registry
+          
+      - name: Check registry status
+        run: |
+          curl -v http://localhost:5000/v2/
+       
+      - name: Check out the repo
+        uses: actions/checkout@v3
+
+      - name: build and push linuxptp-daemon image
+        run: |
+           docker build -f Dockerfile -t localhost:5000/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} .    
+           docker push localhost:5000/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}}
+        
+      - name: Load Image into Kind Cluster
+        run: |
+          kind load docker-image localhost:5000/ghaction-linuxptp-daemon:pr-${{github.event.pull_request.number}} --name kind-cluster
+          
+      - name: Test Docker Pull
+        run: |
+          echo "Testing if the image can be pulled..."
+          docker pull localhost:5000/ghaction-linuxptp-daemon:pr-${{ github.event.pull_request.number }}
+          docker images | grep "ghaction-linuxptp-daemon"
+
+      - name: Set PR Number as Environment Variable
+        run: |
+          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+
+      - name: Deploy to Kind
+        run: |
+          kubectl apply -f deploy/00-ns.yaml
+          kubectl apply -f deploy/01-sa.yaml
+          kubectl apply -f deploy/02-rbac.yaml
+          kubectl apply -f deploy/03-leap-config.yaml
+          ./hack/gen-configmap-data-source.sh
+          kubectl create configmap linuxptp-configmap -n openshift-ptp --from-file ./linuxptp-configmap
+          sed "s/{{PR_NUMBER}}/$PR_NUMBER/g" deploy/linuxptp-daemon.yaml > deployment-temp.yaml
+          kubectl apply -f deployment-temp.yaml
+          kubectl get pods -A
+      
+      - name: Wait for Pod to Start
+        run: |
+          TIMEOUT=120  # 2 minute timeout
+          START_TIME=$(date +%s)
+          while true; do
+            POD_STATUS=$(kubectl describe pod linuxptp-daemon -n openshift-ptp | grep "Status:" | awk '{print $2}')
+            if [ "$POD_STATUS" == "Running" ]; then
+              echo "Pod linuxptp-daemon is running."
+              break
+            fi
+            CURRENT_TIME=$(date +%s)
+            ELAPSED_TIME=$((CURRENT_TIME - START_TIME))
+            if [ "$ELAPSED_TIME" -ge "$TIMEOUT" ]; then
+              echo "Timeout reached. Pod did not start within $TIMEOUT seconds."
+              exit 1
+            fi
+            echo "Waiting for Pod to start..."
+            sleep 5  # Check every 5 seconds
+          done
+          
+      - name: Wait for DaemonSet to be Ready
+        run: |
+          kubectl rollout status ds/linuxptp-daemon -n openshift-ptp --timeout=180s
+
+      - name: Check DaemonSet Status
+        run: |
+          kubectl get daemonset linuxptp-daemon -n openshift-ptp -o wide
+
+      - name: Verify Pods in DaemonSet
+        run: |
+          kubectl get pods -n openshift-ptp -o wide
+          kubectl wait --for=condition=Ready pod -l app=linuxptp-daemon -n openshift-ptp --timeout=120s
+        
+      - name: Cleanup Kind Cluster
+        if: always() # Ensures cleanup runs even if previous steps fail
+        run: kind delete cluster --name kind-cluster
+

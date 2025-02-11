@@ -1,0 +1,22 @@
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+jobs:
+  vendors-ci-triggers-list:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v5
+        env:
+          MESSAGE: >-
+            Thanks for your PR,\n
+            Best regards.
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "${{ env.MESSAGE }}"
+            })

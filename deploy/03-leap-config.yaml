@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: leap-configmap
+  namespace: openshift-ptp
+data:
+  leap.key: "some-value"
