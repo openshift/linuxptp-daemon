@@ -2,12 +2,13 @@ package daemon
 
 import (
 	"fmt"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -723,7 +724,6 @@ func addFlagsForMonitor(process string, configOpts *string, conf *ptp4lConf, std
 func StartMetricsServer(bindAddress string) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-
 	go utilwait.Until(func() {
 		err := http.ListenAndServe(bindAddress, mux)
 		if err != nil {
