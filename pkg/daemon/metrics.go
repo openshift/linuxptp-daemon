@@ -31,6 +31,7 @@ const (
 	syncEProcessName   = "synce4l"
 	clockRealTime      = "CLOCK_REALTIME"
 	master             = "master"
+	pmcSocketName      = "pmc"
 
 	faultyOffset = 999999
 
