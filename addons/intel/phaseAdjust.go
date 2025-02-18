@@ -14,9 +14,9 @@ import (
 )
 
 type InputDelay struct {
-	Connector        string `json:"connector"`
-	DelayPs          int    `json:"delayPs"`
-	DelayVariationPs int    `json:"delayVariationPs"`
+	Connector string `json:"connector"`
+	DelayPs   int    `json:"delayPs"`
+	// DelayVariationPs int    `json:"delayVariationPs"`
 }
 
 type InputPhaseDelays struct {
@@ -28,10 +28,10 @@ type InputPhaseDelays struct {
 }
 
 type InternalLink struct {
-	Connector        string `yaml:"connector"`
-	Pin              string `yaml:"pin"`
-	DelayPs          int32  `yaml:"delayPs"`
-	DelayVariationPs uint32 `yaml:"delayVariationPs"`
+	Connector string `yaml:"connector"`
+	Pin       string `yaml:"pin"`
+	DelayPs   int32  `yaml:"delayPs"`
+	// DelayVariationPs uint32 `yaml:"delayVariationPs"`
 }
 
 type InternalDelays struct {
@@ -94,19 +94,15 @@ func InitInternalDelays(part string) (*InternalDelays, error) {
 	return nil, fmt.Errorf("can't find delays for %s", part)
 }
 
-func sendDelayCompensation(comp *[]delayCompensation) error {
+func sendDelayCompensation(comp *[]delayCompensation, DpllPins []*dpll.PinInfo) error {
 	glog.Info(comp)
 	conn, err := dpll.Dial(nil)
 	if err != nil {
 		return fmt.Errorf("failed to dial DPLL: %v", err)
 	}
 	defer conn.Close()
-	pinReplies, err := conn.DumpPinGet()
-	if err != nil {
-		return fmt.Errorf("failed to dump DPLL pins: %v", err)
-	}
-	for _, pin := range pinReplies {
 
+	for _, pin := range DpllPins {
 		for _, dc := range *comp {
 			desiredClockId, err := strconv.ParseUint(dc.clockId, 10, 64)
 			if err != nil {
@@ -124,75 +120,6 @@ func sendDelayCompensation(comp *[]delayCompensation) error {
 		}
 	}
 	return nil
-}
-
-func findDelayCompensation(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*[]delayCompensation, error) {
-	compensations := []delayCompensation{}
-	for _, card := range e810Opts.InputDelays {
-		delays, err := InitInternalDelays(card.Part)
-		if err != nil {
-			return nil, err
-		}
-		if card.Input != nil {
-			externalDelay := card.Input.DelayPs
-			connector := card.Input.Connector
-			link := findInternalLink(delays.ExternalInputs, connector)
-			if link == nil {
-				return nil, fmt.Errorf("plugin E810 error: can't find connector %s in the card %s spec", connector, card.Part)
-			}
-			var pinLabel string
-			var internalDelay int32
-
-			pinLabel = link.Pin
-			internalDelay = link.DelayPs
-			clockId, err := addClockId(card.Id, nodeProfile)
-			if err != nil {
-				return nil, err
-			}
-			compensations = append(compensations, delayCompensation{
-				DelayPs:   int32(externalDelay) + internalDelay,
-				pinLabel:  pinLabel,
-				iface:     card.Id,
-				direction: "input",
-				clockId:   *clockId,
-			})
-		}
-		if card.GnssInput {
-			gnssLink := &delays.GnssInput
-			if gnssLink == nil {
-				return nil, fmt.Errorf("plugin E810 error: can't identify GNSS link in the %s data", card.Part)
-			}
-			clockId, err := addClockId(card.Id, nodeProfile)
-			if err != nil {
-				return nil, err
-			}
-			compensations = append(compensations, delayCompensation{
-				DelayPs:   gnssLink.DelayPs,
-				pinLabel:  gnssLink.Pin,
-				iface:     card.Id,
-				direction: "input",
-				clockId:   *clockId,
-			})
-		}
-		for _, outputConn := range card.PhaseOutputConnectors {
-			link := findInternalLink(delays.ExternalOutputs, outputConn)
-			if link == nil {
-				return nil, fmt.Errorf("plugin E810 error: can't find connector %s in the card %s spec", outputConn, card.Part)
-			}
-			clockId, err := addClockId(card.Id, nodeProfile)
-			if err != nil {
-				return nil, err
-			}
-			compensations = append(compensations, delayCompensation{
-				DelayPs:   link.DelayPs,
-				pinLabel:  link.Pin,
-				iface:     card.Id,
-				direction: "output",
-				clockId:   *clockId,
-			})
-		}
-	}
-	return &compensations, nil
 }
 
 func addClockId(iface string, nodeProfile *ptpv1.PtpProfile) (*string, error) {

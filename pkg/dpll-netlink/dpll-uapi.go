@@ -178,6 +178,12 @@ type PinParentPinHR struct {
 	State    string `json:"parentState"`
 }
 
+const (
+	DPLL_PIN_STATE_CONNECTED    = 1
+	DPLL_PIN_STATE_DISCONNECTED = 2
+	DPLL_PIN_STATE_SELECTABLE   = 3
+)
+
 // GetPinState returns DPLL pin state as a string
 func GetPinState(s uint32) string {
 	stateMap := map[int]string{
@@ -207,6 +213,11 @@ func GetPinType(tp uint32) string {
 	}
 	return ""
 }
+
+const (
+	DPLL_PIN_DIRECTION_INPUT  = 1
+	DPLL_PIN_DIRECTION_OUTPUT = 2
+)
 
 // GetPinDirection returns DPLL pin direction as a string
 func GetPinDirection(d uint32) string {
