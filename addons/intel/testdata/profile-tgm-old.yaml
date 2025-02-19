@@ -1,41 +1,23 @@
 name: grandmaster
 ptpSettings:
   unitTest: /tmp/test
-phc2sysOpts: -r -u 0 -m -w -N 8 -R 16 -s ens7f0 -n 24
+phc2sysOpts: -a -r -n 24 -N 8 -R 16 -u 0
 plugins:
   e810:
     enableDefaultConfig: false
-    interconnections:
-    - id: ens7f0
-      part: E810-XXVDA4T
-      inputPhaseDelay:
-        connector: U.FL2
-        delayPs: 920
-    - id: ens4f0
-      part: E810-XXVDA4T
-      gnssInput: true
-      phaseOutputConnectors:
-      - U.FL1
-    - id: ens2f0
-      part: E810-XXVDA4T
-      inputPhaseDelay:
-        connector: U.FL2
-        delayPs: 920
-      phaseOutputConnectors:
-      - U.FL1
     pins:
-      ens7f0:
-        SMA1: 2 1
-        SMA2: 0 2
-        U.FL1: 0 1
-        U.FL2: 0 2
       ens4f0:
         SMA1: 2 1
+        SMA2: 2 2
+        U.FL1: 0 1
+        U.FL2: 0 2
+      ens5f0:
+        SMA1: 1 1
         SMA2: 0 2
         U.FL1: 0 1
         U.FL2: 0 2
-      ens2f0:
-        SMA1: 2 1
+      ens8f0:
+        SMA1: 1 1
         SMA2: 0 2
         U.FL1: 0 1
         U.FL2: 0 2
@@ -209,40 +191,23 @@ ptp4lConf: |
 ptp4lOpts: -2 --summary_interval -4
 ptpSchedulingPolicy: SCHED_FIFO
 ptpSchedulingPriority: 10
-synce4lConf: |
-  [global]
-  logging_level              7
-  use_syslog                 0
-  verbose                    1
-  message_tag                [synce4l]
-  [<synce1>]
-  network_option             2
-  extended_tlv               1
-  recover_time               60
-  #clock_id 5799633565433967748
-  module_name                ice
-  dnu_prio 0XFF
-  [ens7f0]
-  tx_heartbeat_msec          1000
-  rx_heartbeat_msec          10
-  allowed_qls                0xE
-  allowed_ext_qls            0x40
-  [{GNSS}]
-  board_label                GNSS-1PPS
-  input_QL                   0x1
-  input_ext_QL               0x20
-synce4lOpts: ' -m'
 ts2phcConf: |
-  [nmea]
-  ts2phc.master 1
   [global]
   use_syslog  0
   verbose 1
   logging_level 7
   ts2phc.pulsewidth 100000000
-  ts2phc.nmea_serialport /dev/gnss1 
   leapfile  /usr/share/zoneinfo/leap-seconds.list
   [ens7f0]
   ts2phc.extts_polarity rising
   ts2phc.extts_correction 0
+  ts2phc.master 0
+  [ens4f0]
+  ts2phc.extts_polarity rising
+  ts2phc.extts_correction 0
+  ts2phc.master 0
+  [ens2f0]
+  ts2phc.extts_polarity rising
+  ts2phc.extts_correction 0
+  ts2phc.master 0
 ts2phcOpts: ' '

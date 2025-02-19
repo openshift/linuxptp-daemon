@@ -87,6 +87,7 @@ func testRequirements(t *testing.T, profile *ptpv1.PtpProfile) {
 	}
 }
 func Test_applyProfile_synce(t *testing.T) {
+	defer clean(t)
 	testDataFiles := []string{
 		"testdata/synce-profile.yaml",
 		"testdata/synce-profile-dual.yaml",
