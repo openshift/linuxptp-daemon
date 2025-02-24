@@ -156,7 +156,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			outOfSpec:        true,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 1, event.FREQUENCY_STATUS: 1, event.PPS_STATUS: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 140",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 1 offset 0 phase_status 1 pps_status 1 s0",
 			desc:             "dpll move to FREERUN from holdover (out of spec)",
 		},
