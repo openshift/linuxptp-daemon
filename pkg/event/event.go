@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openshift/linuxptp-daemon/pkg/debug"
 	"github.com/openshift/linuxptp-daemon/pkg/pmc"
 	"github.com/openshift/linuxptp-daemon/pkg/protocol"
 
@@ -145,34 +146,36 @@ type grandMasterSyncState struct {
 // EventHandler ... event handler to process events
 type EventHandler struct {
 	sync.Mutex
-	nodeName         string
-	stdoutSocket     string
-	stdoutToSocket   bool
-	processChannel   <-chan EventChannel
-	closeCh          chan bool
-	data             map[string][]*Data
-	offsetMetric     *prometheus.GaugeVec
-	clockMetric      *prometheus.GaugeVec
-	clockClassMetric *prometheus.GaugeVec
-	clockClass       fbprotocol.ClockClass
-	gmSyncState      map[string]*grandMasterSyncState
-	outOfSpec        bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
-	ReduceLog        bool // reduce logs for every announce
+	nodeName           string
+	stdoutSocket       string
+	stdoutToSocket     bool
+	processChannel     <-chan EventChannel
+	closeCh            chan bool
+	data               map[string][]*Data
+	offsetMetric       *prometheus.GaugeVec
+	clockMetric        *prometheus.GaugeVec
+	clockClassMetric   *prometheus.GaugeVec
+	clockClass         fbprotocol.ClockClass
+	gmSyncState        map[string]*grandMasterSyncState
+	outOfSpec          bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
+	frequencyTraceable bool
+	ReduceLog          bool // reduce logs for every announce
 }
 
 // EventChannel .. event channel to subscriber to events
 type EventChannel struct {
-	ProcessName EventSource               // ptp4l, gnss etc
-	State       PTPState                  // PTP locked etc
-	IFace       string                    // Interface that is causing the event
-	CfgName     string                    // ptp config profile name
-	Values      map[ValueType]interface{} // either offset or status , 3 information  offset , phase state and frequency state
-	ClockType   ClockType                 // oc bc gm
-	Time        int64                     // time.Unix.Now()
-	OutOfSpec   bool                      // out of Spec for offset
-	WriteToLog  bool                      // send to log in predefined format %s[%d]:[%s] %s %d
-	Reset       bool                      // reset data on ptp deletes or process died
-	SourceLost  bool
+	ProcessName        EventSource               // ptp4l, gnss etc
+	State              PTPState                  // PTP locked etc
+	IFace              string                    // Interface that is causing the event
+	CfgName            string                    // ptp config profile name
+	Values             map[ValueType]interface{} // either offset or status , 3 information  offset , phase state and frequency state
+	ClockType          ClockType                 // oc bc gm
+	Time               int64                     // time.Unix.Now()
+	OutOfSpec          bool                      // out of Spec for offset
+	WriteToLog         bool                      // send to log in predefined format %s[%d]:[%s] %s %d
+	Reset              bool                      // reset data on ptp deletes or process died
+	SourceLost         bool
+	FrequencyTraceable bool
 }
 
 var (
@@ -189,19 +192,20 @@ func (e *EventHandler) MockEnable() {
 func Init(nodeName string, stdOutToSocket bool, socketName string, processChannel chan EventChannel, closeCh chan bool,
 	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec, clockClassMetric *prometheus.GaugeVec) *EventHandler {
 	ptpEvent := &EventHandler{
-		nodeName:         nodeName,
-		stdoutSocket:     socketName,
-		stdoutToSocket:   stdOutToSocket,
-		closeCh:          closeCh,
-		processChannel:   processChannel,
-		data:             map[string][]*Data{},
-		clockMetric:      clockMetric,
-		offsetMetric:     offsetMetric,
-		clockClassMetric: clockClassMetric,
-		clockClass:       protocol.ClockClassUninitialized,
-		gmSyncState:      map[string]*grandMasterSyncState{},
-		outOfSpec:        false,
-		ReduceLog:        true,
+		nodeName:           nodeName,
+		stdoutSocket:       socketName,
+		stdoutToSocket:     stdOutToSocket,
+		closeCh:            closeCh,
+		processChannel:     processChannel,
+		data:               map[string][]*Data{},
+		clockMetric:        clockMetric,
+		offsetMetric:       offsetMetric,
+		clockClassMetric:   clockClassMetric,
+		clockClass:         protocol.ClockClassUninitialized,
+		gmSyncState:        map[string]*grandMasterSyncState{},
+		outOfSpec:          false,
+		frequencyTraceable: false,
+		ReduceLog:          true,
 	}
 	if clockClassMetric != nil {
 		clockClassMetric.With(prometheus.Labels{
@@ -304,7 +308,6 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 	ts2phcState := PTP_FREERUN
 	gnssSrcLost := e.isSourceLost(cfgName)
 	gmInterface := e.getGNSSInterface(cfgName)
-
 	if gmInterface == GM_INTERFACE_UNKNOWN {
 		glog.Infof("GM-GNSS interface is not yet identified, gm state reporting delayed.")
 		return grandMasterSyncState{gmIFace: gmInterface}
@@ -328,14 +331,14 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 				dpllState = d.State
 			case GNSS:
 				gnssState = d.State
-				// expecting to have atleast one enterfae
+				// expecting to have at least one interface
 			case TS2PHCProcessName:
 				ts2phcState = d.State
 			}
 		}
 	} else {
 		e.gmSyncState[cfgName].state = PTP_FREERUN
-		e.gmSyncState[cfgName].clockClass = 248
+		e.gmSyncState[cfgName].clockClass = protocol.ClockClassFreerun
 		e.gmSyncState[cfgName].lastLoggedTime = time.Now().Unix()
 		e.gmSyncState[cfgName].gmIFace = gmInterface
 		e.gmSyncState[cfgName].gmLog = fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", GM, e.gmSyncState[cfgName].lastLoggedTime, cfgName, gmInterface, e.gmSyncState[cfgName].state)
@@ -343,9 +346,11 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 	}
 	e.gmSyncState[cfgName].gmIFace = gmInterface
 	switch dpllState {
-	case PTP_FREERUN:
+	case PTP_FREERUN: // This is OVER ALL State with HOLDOVER having the highest priority
+		// add check so that clock class won't change if GM was in HOLDOVER state
 		e.gmSyncState[cfgName].state = dpllState
-		if e.outOfSpec {
+		// T-GM or T-BC in free-run mode
+		if e.outOfSpec && e.frequencyTraceable {
 			// T-GM in holdover, out of holdover specification
 			e.gmSyncState[cfgName].clockClass = protocol.ClockClassOutOfSpec
 		} else { // from holdover it goes to out of spec to free run
@@ -399,11 +404,11 @@ func (e *EventHandler) updateGMState(cfgName string) grandMasterSyncState {
 			}
 		case PTP_FREERUN:
 			switch ts2phcState {
-			case PTP_FREERUN, PTP_LOCKED:
+			case PTP_FREERUN, PTP_LOCKED, PTP_UNKNOWN, PTP_NOTSET: // when GNSS is lost ts2phc will stop printing and will wait to move to HOLDOVER
 				e.gmSyncState[cfgName].state = PTP_FREERUN
 				e.gmSyncState[cfgName].clockClass = protocol.ClockClassFreerun
 			}
-		default:
+		default: // bad case
 			e.gmSyncState[cfgName].state = ts2phcState
 			switch ts2phcState {
 			case PTP_FREERUN:
@@ -481,6 +486,7 @@ func (e *EventHandler) updateSpecState(event EventChannel) {
 	// update if DPLL holdover is out of spec
 	if event.ProcessName == DPLL {
 		e.outOfSpec = event.OutOfSpec
+		e.frequencyTraceable = event.FrequencyTraceable
 	}
 }
 func (e *EventHandler) toString() string {
@@ -538,7 +544,7 @@ func (e *EventHandler) ProcessEvents() {
 			}
 		}
 	}()
-
+	var lastgmState PTPState
 connect:
 	select {
 	case <-e.closeCh:
@@ -597,6 +603,7 @@ connect:
 			// ts2phc[123455]:[ts2phc.0.config] 12345 s0 offset/gps
 			// replace ts2phc logs here
 			if event.Reset { // clean up
+				debug.ClearState() // clear any state data used for debug
 				if event.ProcessName == TS2PHC {
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName) // this will delete all index
@@ -628,13 +635,32 @@ connect:
 			} else {
 				// Update the in MemData
 				dataDetails := e.addEvent(event)
+				// Computes GM state
+				gmState := e.updateGMState(event.CfgName)
+				// right now if GPS offset || mode is bad then consider source lost
+				if e.gmSyncState[event.CfgName] != nil {
+					e.gmSyncState[event.CfgName].sourceLost = event.OutOfSpec
+				}
+
 				logDataValues = dataDetails.logData
 
 				if event.WriteToLog && logDataValues != "" {
 					logOut = append(logOut, logDataValues)
 				}
-				// Computes GM state
-				gmState := e.updateGMState(event.CfgName)
+				// only if config has this special name
+				d := e.GetData(event.CfgName, event.ProcessName)
+
+				switch event.ProcessName {
+				case GNSS:
+					debug.UpdateGNSSState(string(event.State), event.Values[OFFSET])
+				case DPLL:
+					debug.UpdateDPLLState(string(event.State), event.Values[OFFSET], event.IFace)
+					debug.UpdateDPLLState(string(d.State), 0, debug.OverallDpllKey)
+				case TS2PHC:
+					debug.UpdateTs2phcState(string(event.State), event.Values[OFFSET], event.IFace)
+					debug.UpdateTs2phcState(string(d.State), 0, debug.OverallTs2phcKey)
+				}
+				debug.UpdateGMState(string(gmState.state))
 
 				if gmState.gmLog != "" && gmState.gmIFace != GM_INTERFACE_UNKNOWN {
 					logOut = append(logOut, gmState.gmLog)
@@ -650,6 +676,7 @@ connect:
 					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), eventIface)
 					//  update all metric that was sent to events
 					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
+
 					if gmState.gmIFace != GM_INTERFACE_UNKNOWN { // race condition ;
 						gmIface := gmState.gmIFace
 						if gmIface != "" {
@@ -660,8 +687,13 @@ connect:
 					}
 				}
 
-				if uint8(gmState.clockClass) != uint8(e.clockClass) {
-					glog.Infof("clock class change request from %d to %d", uint8(e.clockClass), uint8(gmState.clockClass))
+				// If the clockClass of gmState is not protocol.ClockClassUninitialized and there is a change in clockClass or clockAccuracy,
+				// log the change and update the clock class.
+				if gmState.clockClass != protocol.ClockClassUninitialized &&
+					uint8(gmState.clockClass) != uint8(e.clockClass) {
+					glog.Infof("clock class change request from %d to %d ",
+						uint8(e.clockClass), uint8(gmState.clockClass))
+					debug.UpdateClockClass(uint8(gmState.clockClass))
 					go func() {
 						select {
 						case clockClassRequestCh <- ClockClassRequest{
@@ -675,7 +707,11 @@ connect:
 						}
 					}()
 				}
-			} // end of GM congition
+				if lastgmState != gmState.state {
+					glog.Infof("PTP State: GM State %v, Clock Class %d Time %s sourceLost %v", gmState.state, gmState.clockClass, time.Now(), gmState.sourceLost)
+					lastgmState = gmState.state
+				}
+			}
 			if len(logOut) > 0 {
 				if e.stdoutToSocket {
 					for _, l := range logOut {
@@ -709,17 +745,16 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 	}
 	switch clockType {
 	case GM:
-		g.TimePropertiesDS.TimeTraceable = true
 		g.TimePropertiesDS.PtpTimescale = true
 		g.TimePropertiesDS.FrequencyTraceable = true
 		g.TimePropertiesDS.CurrentUtcOffsetValid = true
 		g.TimePropertiesDS.CurrentUtcOffset = int32(leap.GetUtcOffset())
 		switch clkClass {
 		case fbprotocol.ClockClass6: // T-GM connected to a PRTC in locked mode (e.g., PRTC traceable to GNSS)
-			// update only when ClockClass is changed
+			// update only when ClockClass is changed or clockAccuracy changes
 			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass6
-				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+				g.TimePropertiesDS.TimeTraceable = true
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
@@ -728,8 +763,8 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 		case protocol.ClockClassOutOfSpec: // GM out of holdover specification, traceable to Category 3
 			if g.ClockQuality.ClockClass != protocol.ClockClassOutOfSpec {
 				g.ClockQuality.ClockClass = protocol.ClockClassOutOfSpec
-				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
-				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
+				g.TimePropertiesDS.TimeTraceable = false
+				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)
@@ -737,8 +772,8 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 		case fbprotocol.ClockClass7: // T-GM in holdover, within holdover specification
 			if g.ClockQuality.ClockClass != fbprotocol.ClockClass7 {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass7
-				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
-				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
+				g.TimePropertiesDS.TimeTraceable = true
+				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)
@@ -746,8 +781,8 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 		case protocol.ClockClassFreerun: // T-GM or T-BC in free-run mode
 			if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
 				g.ClockQuality.ClockClass = protocol.ClockClassFreerun
-				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
-				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceNTP
+				g.TimePropertiesDS.TimeTraceable = false
+				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
 				err = gmSetterFn(cfgName, g)
@@ -757,7 +792,6 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 		}
 	default:
 	}
-
 	return err, g.ClockQuality.ClockClass
 }
 
@@ -775,8 +809,7 @@ func (e *EventHandler) GetPTPState(source EventSource, cfgName string) PTPState 
 
 // UpdateClockStateMetrics ...
 func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace string) {
-	labels := prometheus.Labels{}
-	labels = prometheus.Labels{
+	labels := prometheus.Labels{
 		"process": process, "node": e.nodeName, "iface": iFace}
 	if state == PTP_LOCKED {
 		e.clockMetric.With(labels).Set(1)
@@ -858,10 +891,9 @@ func (e *EventHandler) updateMetrics(cfgName string, process EventSource, proces
 			s.Labels = map[string]string{"from": pName, "node": e.nodeName,
 				"process": string(process), "iface": iface}
 			s.Value = dataValue
-			d.Metrics[dataType].GaugeMetric.With(s.Labels).Set(dataValue)
+			d.Metrics[dataType].GaugeMetric.With(s.Labels).Set(s.Value)
 		}
 	}
-
 }
 
 func registerMetrics(m *prometheus.GaugeVec) {
@@ -923,10 +955,11 @@ func (e *EventHandler) addEvent(event EventChannel) *DataDetails {
 func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 	classErr, clockClass := e.updateCLockClass(clk.cfgName, clk.clockClass, clk.clockType,
 		PMCGMGetter, PMCGMSetter)
+	glog.Infof("received %s,%v,%s", clk.cfgName, clk.clockClass, clk.clockType)
 	if classErr != nil {
 		glog.Errorf("error updating clock class %s", classErr)
 	} else {
-		glog.Infof("updated clock class for last clock class %d to %d ", e.clockClass, clockClass)
+		glog.Infof("updated clock class for last clock class %d to %d", e.clockClass, clockClass)
 		e.clockClass = clockClass
 		clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
 		if e.stdoutToSocket {
