@@ -15,9 +15,6 @@ import (
 	"github.com/openshift/linuxptp-daemon/pkg/leap"
 	"github.com/openshift/linuxptp-daemon/pkg/protocol"
 	"github.com/stretchr/testify/assert"
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	fake "k8s.io/client-go/kubernetes/fake"
 )
 
 var (
@@ -56,6 +53,7 @@ type PTPEvents struct {
 	processName      event.EventSource
 	clockState       event.PTPState
 	cfgName          string
+	iface            string
 	outOfSpec        bool
 	values           map[event.ValueType]interface{}
 	wantGMState      string // want is the expected output.
@@ -73,6 +71,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
 			outOfSpec:        false,
+			iface:            "ens1f0",
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 3, event.FREQUENCY_STATUS: 3, event.PPS_STATUS: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] unknown T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
@@ -83,6 +82,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.GNSS,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
+			iface:            "ens1f0",
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 3},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
@@ -93,6 +93,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
+			iface:            "ens1f0",
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
@@ -103,6 +104,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_FREERUN,
+			iface:            "ens1f0",
 			values:           map[event.ValueType]interface{}{event.OFFSET: 5000},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
@@ -113,6 +115,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
+			iface:            "ens1f0",
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
@@ -123,6 +126,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.GNSS,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_FREERUN,
+			iface:            "ens1f0",
 			outOfSpec:        false,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
@@ -131,11 +135,11 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			sourceLost:       true,
 			desc:             "GPS is free run ,source is lost when everything else is locked(Do nothing and wait  for DPLL to switch to HOLDOVER)",
 		},
-
 		{
 			processName:      event.DPLL,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_HOLDOVER,
+			iface:            "ens1f0",
 			outOfSpec:        false,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 4, event.FREQUENCY_STATUS: 4, event.PPS_STATUS: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
@@ -147,10 +151,11 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.DPLL,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_FREERUN,
+			iface:            "ens1f0",
 			outOfSpec:        true,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 1, event.FREQUENCY_STATUS: 1, event.PPS_STATUS: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 140",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 1 offset 0 phase_status 1 pps_status 1 s0",
 			desc:             "dpll move to FREERUN from holdover (out of spec)",
 		},
@@ -158,6 +163,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.GNSS,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
+			iface:            "ens1f0",
 			outOfSpec:        false,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 3},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
@@ -170,6 +176,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.DPLL,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
+			iface:            "ens1f0",
 			outOfSpec:        true,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 3, event.FREQUENCY_STATUS: 3, event.PPS_STATUS: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
@@ -181,6 +188,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_FREERUN,
+			iface:            "ens1f0",
 			outOfSpec:        true,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 99999, event.NMEA_STATUS: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
@@ -192,12 +200,86 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_LOCKED,
+			iface:            "ens1f0",
 			outOfSpec:        true,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.NMEA_STATUS: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 nmea_status 1 offset 0 s2",
 			desc:             "everything is in locked state",
+		},
+		{
+			processName:      event.TS2PHCProcessName,
+			cfgName:          "ts2phc.0.config",
+			clockState:       event.PTP_FREERUN,
+			outOfSpec:        true,
+			iface:            "ens2f0",
+			values:           map[event.ValueType]interface{}{event.OFFSET: 5000, event.PPS_STATUS: 1},
+			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
+			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens2f0 offset 5000 pps_status 1 s0",
+			desc:             "2nd card ts2phc offset spiked",
+		},
+		{
+			processName:      event.TS2PHCProcessName,
+			cfgName:          "ts2phc.0.config",
+			clockState:       event.PTP_LOCKED,
+			outOfSpec:        true,
+			iface:            "ens2f0",
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.NMEA_STATUS: 1},
+			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
+			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens2f0 nmea_status 1 offset 0 s2",
+			desc:             "2nd card restored ",
+		},
+		{ // add scenario where first GNSS is lost and then DPLL 1 and 2 both  is switching to HOLDOVER
+			processName:      event.GNSS,
+			cfgName:          "ts2phc.0.config",
+			clockState:       event.PTP_FREERUN,
+			outOfSpec:        false,
+			iface:            "ens1f0",
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 0},
+			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
+			wantProcessState: "gnss[0]:[ts2phc.0.config] ens1f0 gnss_status 0 offset 0 s0",
+			sourceLost:       true,
+			desc:             "Case 2: GPS is free run ,source is lost when everything else is locked(Do nothing and wait  for DPLL to switch to HOLDOVER)",
+		},
+		{
+			processName:      event.DPLL,
+			cfgName:          "ts2phc.0.config",
+			clockState:       event.PTP_HOLDOVER,
+			outOfSpec:        false,
+			iface:            "ens1f0",
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 4, event.FREQUENCY_STATUS: 4, event.PPS_STATUS: 1},
+			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
+			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 4 offset 0 phase_status 4 pps_status 1 s1",
+			desc:             "dpll is on Holdover, where source is lost, moving to holdover state",
+		},
+		{
+			processName:      event.DPLL,
+			cfgName:          "ts2phc.0.config",
+			clockState:       event.PTP_HOLDOVER,
+			outOfSpec:        false,
+			iface:            "ens2f0",
+			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 4, event.FREQUENCY_STATUS: 4, event.PPS_STATUS: 0},
+			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
+			wantProcessState: "dpll[0]:[ts2phc.0.config] ens2f0 frequency_status 4 offset 0 phase_status 4 pps_status 0 s1",
+			desc:             "dpll 2 is on Holdover, where source is lost, moving to holdover state",
+		},
+		{ // 2nd card spiking stay in holdover
+			processName:      event.TS2PHCProcessName,
+			cfgName:          "ts2phc.0.config",
+			clockState:       event.PTP_FREERUN,
+			outOfSpec:        false,
+			iface:            "ens2f0",
+			values:           map[event.ValueType]interface{}{event.OFFSET: 5000, event.PPS_STATUS: 0},
+			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
+			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens2f0 offset 5000 pps_status 0 s0",
+			desc:             "2nd card ts2phc offset spiked when in holdover",
 		},
 	}
 	logOut := make(chan string, 100)
@@ -212,7 +294,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	for _, test := range tests {
 		select {
-		case eChannel <- sendEvents(test.cfgName, test.processName, test.clockState, test.values, test.outOfSpec, test.sourceLost):
+		case eChannel <- sendEvents(test.cfgName, test.iface, test.processName, test.clockState, test.values, test.outOfSpec, test.sourceLost):
 			log.Println("sent data to channel")
 			log.Println(test.cfgName, test.processName, test.clockState, test.outOfSpec, test.values)
 			time.Sleep(1 * time.Second)
@@ -325,13 +407,13 @@ func ProcessTestEvents(c net.Conn, logOut chan<- string) {
 	}
 }
 
-func sendEvents(cfgName string, processName event.EventSource, state event.PTPState,
+func sendEvents(cfgName string, iface string, processName event.EventSource, state event.PTPState,
 	values map[event.ValueType]interface{}, outOfSpec bool, sourceLost bool) event.EventChannel {
 	glog.Info("sending Nav status event to event handler Process")
 	return event.EventChannel{
 		ProcessName: processName,
 		State:       state,
-		IFace:       "ens1f0",
+		IFace:       iface,
 		CfgName:     cfgName,
 		Values:      values,
 		SourceLost:  sourceLost,
@@ -341,25 +423,4 @@ func sendEvents(cfgName string, processName event.EventSource, state event.PTPSt
 		WriteToLog:  true,
 		Reset:       false,
 	}
-}
-
-func mockLeap() error {
-	cm := &v1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "openshift-ptp", Name: "leap-configmap"},
-		Data: map[string]string{
-			"test-node-name": `# Do not edit
-# This file is generated automatically by linuxptp-daemon
-#$	3927775672
-#@	4291747200
-3692217600     37    # 1 Jan 2017`,
-		},
-	}
-	os.Setenv("NODE_NAME", "test-node-name")
-	client := fake.NewSimpleClientset(cm)
-	lm, err := leap.New(client, "openshift-ptp")
-	if err != nil {
-		return err
-	}
-	go lm.Run()
-	return nil
 }
