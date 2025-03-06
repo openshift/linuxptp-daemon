@@ -1,7 +1,6 @@
 package intel
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
+	dpll_netlink "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
@@ -53,6 +53,12 @@ done
 
 echo "Disabled all SMA and U.FL Connections"
 `
+
+var unitTest bool
+var clockChain = &ClockChain{}
+
+// For mocking DPLL pin info
+var DpllPins = []*dpll_netlink.PinInfo{}
 
 func getDefaultUblxCmds() []E810UblxCmds {
 	// Ublx command to output NAV-CLOCK every second
@@ -124,7 +130,8 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			}
 			// for unit testing only, PtpSettings may include "unitTest" key. The value is
 			// the path where resulting configuration files will be written, instead of /var/run
-			_, unitTest := (*nodeProfile).PtpSettings["unitTest"]
+			_, unitTest = (*nodeProfile).PtpSettings["unitTest"]
+
 			if e810Opts.EnableDefaultConfig {
 				stdout, _ = exec.Command("/usr/bin/bash", "-c", EnableE810PTPConfig).Output()
 				glog.Infof(string(stdout))
@@ -134,11 +141,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			}
 			for device, pins := range e810Opts.DevicePins {
 				dpllClockIdStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				if unitTest {
-					buf := make([]byte, 8)
-					rand.Read(buf)
-					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(binary.LittleEndian.Uint64(buf), 10)
-				} else {
+				if !unitTest {
 					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getClockIdE810(device), 10)
 					for pin, value := range pins {
 						deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
@@ -147,13 +150,8 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 							glog.Error("e810 failed to read " + deviceDir + ": " + err.Error())
 							continue
 						}
-
 						for _, phc := range phcs {
-							if strings.HasPrefix(pin, "SDP") {
-								pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/period", device, phc.Name())
-							} else {
-								pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
-							}
+							pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
 							glog.Infof("echo %s > %s", value, pinPath)
 							err = os.WriteFile(pinPath, []byte(value), 0666)
 							if err != nil {
@@ -162,15 +160,6 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 						}
 					}
 				}
-			}
-
-			comps, err := findDelayCompensation(e810Opts, nodeProfile)
-			if err != nil {
-				glog.Errorf("fail to get delay compensations, %s", err)
-			}
-			err = sendDelayCompensation(comps)
-			if err != nil {
-				glog.Errorf("fail to send delay compensations, %s", err)
 			}
 
 			for k, v := range e810Opts.DpllSettings {
@@ -194,6 +183,16 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				for pinProperty, value := range properties {
 					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getClockIdE810(iface), 10), pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
+				}
+			}
+			if e810Opts.InputDelays != nil {
+				if unitTest {
+					// Mock clock chain DPLL pins in unit test
+					clockChain.DpllPins = DpllPins
+				}
+				clockChain, err = InitClockChain(e810Opts, nodeProfile)
+				if err != nil {
+					return err
 				}
 			}
 		}
