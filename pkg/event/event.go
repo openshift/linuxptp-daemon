@@ -717,7 +717,7 @@ connect:
 	}
 }
 
-func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.ClockClass, clockType ClockType,
+func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.ClockClass, clockType ClockType,
 	gmGetterFn func(string) (protocol.GrandmasterSettings, error),
 	gmSetterFn func(string, protocol.GrandmasterSettings) error) (err error, clockClass fbprotocol.ClockClass) {
 	g, err := gmGetterFn(cfgName)
@@ -733,8 +733,8 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 		g.TimePropertiesDS.CurrentUtcOffset = int32(leap.GetUtcOffset())
 		switch clkClass {
 		case fbprotocol.ClockClass6: // T-GM connected to a PRTC in locked mode (e.g., PRTC traceable to GNSS)
-			// update only when ClockClass is changed or clockAccuracy changes
-			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 {
+			// update only when ClockClass is changed
+			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 || g.TimePropertiesDS.TimeTraceable != true {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass6
 				g.TimePropertiesDS.TimeTraceable = true
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
@@ -936,7 +936,7 @@ func (e *EventHandler) addEvent(event EventChannel) *DataDetails {
 
 // UpdateClockClass ... update clock class
 func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
-	classErr, clockClass := e.updateCLockClass(clk.cfgName, clk.clockClass, clk.clockType,
+	classErr, clockClass := e.updateClockClass(clk.cfgName, clk.clockClass, clk.clockType,
 		PMCGMGetter, PMCGMSetter)
 	glog.Infof("received %s,%v,%s", clk.cfgName, clk.clockClass, clk.clockType)
 	if classErr != nil {
