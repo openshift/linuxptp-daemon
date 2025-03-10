@@ -815,7 +815,7 @@ func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.Cloc
 		switch clkClass {
 		case fbprotocol.ClockClass6: // T-GM connected to a PRTC in locked mode (e.g., PRTC traceable to GNSS)
 			// update only when ClockClass is changed or clockAccuracy changes
-			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 {
+			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 || g.TimePropertiesDS.TimeTraceable != true {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass6
 				g.TimePropertiesDS.TimeTraceable = true
 				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
