@@ -798,7 +798,7 @@ connect:
 	}
 }
 
-func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.ClockClass, clockType ClockType, clkAccuracy fbprotocol.ClockAccuracy,
+func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.ClockClass, clockType ClockType, clkAccuracy fbprotocol.ClockAccuracy,
 	gmGetterFn func(string) (protocol.GrandmasterSettings, error),
 	gmSetterFn func(string, protocol.GrandmasterSettings) error) (err error, clockClass fbprotocol.ClockClass, clockAccuracy fbprotocol.ClockAccuracy) {
 	g, err := gmGetterFn(cfgName)
@@ -1021,7 +1021,7 @@ func (e *EventHandler) addEvent(event EventChannel) *DataDetails {
 
 // UpdateClockClass ... update clock class
 func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
-	classErr, clockClass, clockAccuracy := e.updateCLockClass(clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy,
+	classErr, clockClass, clockAccuracy := e.updateClockClass(clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy,
 		PMCGMGetter, PMCGMSetter)
 	glog.Infof("received %s,%v,%s,%v", clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy)
 	if classErr != nil {
