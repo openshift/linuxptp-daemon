@@ -97,6 +97,15 @@ func NewProcessManager() *ProcessManager {
 	}
 }
 
+// NewDaemonForTests is used by unit tests
+func NewDaemonForTests(tracker *ReadyTracker, processManager *ProcessManager) *Daemon {
+	tracker.processManager = processManager
+	return &Daemon{
+		readyTracker:   tracker,
+		processManager: processManager,
+	}
+}
+
 // SetTestProfileProcess ...
 func (p *ProcessManager) SetTestProfileProcess(name string, ifaces config.IFaces, socketPath,
 	processConfigPath string, nodeProfile ptpv1.PtpProfile) {
@@ -151,27 +160,28 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 }
 
 type ptpProcess struct {
-	name              string
-	ifaces            config.IFaces
-	processSocketPath string
-	processConfigPath string
-	configName        string
-	messageTag        string
-	eventCh           chan event.EventChannel
-	exitCh            chan bool
-	execMutex         sync.Mutex
-	stopped           bool
-	logFilterRegex    string
-	cmd               *exec.Cmd
-	depProcess        []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
-	nodeProfile       ptpv1.PtpProfile
-	parentClockClass  float64
-	pmcCheck          bool
-	clockType         event.ClockType
-	ptpClockThreshold *ptpv1.PtpClockThreshold
-	haProfile         map[string][]string // stores list of interface name for each profile
-	syncERelations    *synce.Relations
-	c                 *net.Conn
+	name                string
+	ifaces              config.IFaces
+	processSocketPath   string
+	processConfigPath   string
+	configName          string
+	messageTag          string
+	eventCh             chan event.EventChannel
+	exitCh              chan bool
+	execMutex           sync.Mutex
+	stopped             bool
+	logFilterRegex      string
+	cmd                 *exec.Cmd
+	depProcess          []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
+	nodeProfile         ptpv1.PtpProfile
+	parentClockClass    float64
+	pmcCheck            bool
+	clockType           event.ClockType
+	ptpClockThreshold   *ptpv1.PtpClockThreshold
+	haProfile           map[string][]string // stores list of interface name for each profile
+	syncERelations      *synce.Relations
+	c                   *net.Conn
+	hasCollectedMetrics bool
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -202,6 +212,7 @@ type Daemon struct {
 	ptpUpdate *LinuxPTPConfUpdate
 
 	processManager *ProcessManager
+	readyTracker   *ReadyTracker
 
 	hwconfigs *[]ptpv1.HwConfig
 
@@ -230,6 +241,7 @@ func New(
 	refreshNodePtpDevice *bool,
 	closeManager chan bool,
 	pmcPollInterval int,
+	tracker *ReadyTracker,
 ) *Daemon {
 	if !stdoutToSocket {
 		RegisterMetrics(nodeName)
@@ -237,6 +249,12 @@ func New(
 	InitializeOffsetMaps()
 	pluginManager := registerPlugins(plugins)
 	eventChannel := make(chan event.EventChannel, 100)
+	pm := &ProcessManager{
+		process:         nil,
+		eventChannel:    eventChannel,
+		ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics),
+	}
+	tracker.processManager = pm
 	return &Daemon{
 		nodeName:             nodeName,
 		namespace:            namespace,
@@ -248,12 +266,9 @@ func New(
 		refreshNodePtpDevice: refreshNodePtpDevice,
 		pmcPollInterval:      pmcPollInterval,
 		//TODO:Enable only for GM
-		processManager: &ProcessManager{
-			process:         nil,
-			eventChannel:    eventChannel,
-			ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics),
-		},
-		stopCh: stopCh,
+		processManager: pm,
+		readyTracker:   tracker,
+		stopCh:         stopCh,
 	}
 }
 
@@ -305,9 +320,10 @@ func printWhenNotNil(p interface{}, description string) {
 	}
 }
 
-// SetProcessManager ...
+// SetProcessManager in tests
 func (dn *Daemon) SetProcessManager(p *ProcessManager) {
 	dn.processManager = p
+	dn.readyTracker.processManager = p
 }
 
 // Delete all socket and config files
@@ -329,6 +345,8 @@ func (dn *Daemon) cleanupTempFiles() error {
 }
 
 func (dn *Daemon) applyNodePTPProfiles() error {
+	dn.readyTracker.setConfig(false)
+
 	glog.Infof("in applyNodePTPProfiles")
 	for _, p := range dn.processManager.process {
 		if p != nil {
@@ -343,6 +361,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 				}
 			}
 			p.depProcess = nil
+			p.hasCollectedMetrics = false
 			//cleanup metrics
 			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName)
 			if p.name == syncEProcessName && p.syncERelations != nil {
@@ -427,6 +446,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	}
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
 	*dn.refreshNodePtpDevice = true
+	dn.readyTracker.setConfig(true)
 	return nil
 }
 
@@ -1009,6 +1029,7 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 		p.ProcessSynceEvents(logEntry)
 	} else {
 		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
+		p.hasCollectedMetrics = true
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
 			var values map[event.ValueType]interface{}
 			ifaceName := masterOffsetIface.getByAlias(configName, iface).name
