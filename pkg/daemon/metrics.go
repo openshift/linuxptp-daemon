@@ -668,7 +668,8 @@ func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 		role = MASTER
 	} else if strings.Contains(output, "FAULT_DETECTED") || strings.Contains(output, "SYNCHRONIZATION_FAULT") {
 		role = FAULTY
-	} else if strings.Contains(output, "UNCALIBRATED to LISTENING") || strings.Contains(output, "SLAVE to LISTENING") {
+	} else if strings.Contains(output, "UNCALIBRATED to LISTENING") || strings.Contains(output, "SLAVE to LISTENING") ||
+		strings.Contains(output, "INITIALIZING to LISTENING") {
 		role = LISTENING
 	} else {
 		portId = 0
