@@ -25,6 +25,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// Git commit of current build set at build time
+var GitCommit = "Undefined"
+
 type cliParams struct {
 	updateInterval  int
 	profileDir      string
@@ -42,6 +45,8 @@ func flagInit(cp *cliParams) {
 }
 
 func main() {
+
+	fmt.Printf("Git commit: %s\n", GitCommit)
 	cp := &cliParams{}
 	flag.Parse()
 	flagInit(cp)
