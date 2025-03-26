@@ -840,9 +840,10 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 func (p *ptpProcess) updateClockClass(c *net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
-			glog.Errorf("Recovered in f %#v", r)
+			glog.Errorf("updateClockClass Recovered in f %#v", r)
 		}
 	}()
+	var clockClassOut string
 	if _, matches, e := pmc.RunPMCExp(p.configName, pmc.CmdGetParentDataSet, pmc.ClockClassChangeRegEx); e == nil {
 		//regex: 'gm.ClockClass[[:space:]]+(\d+)'
 		//match  1: 'gm.ClockClass                         135'
@@ -854,16 +855,17 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 				if clockClass != p.parentClockClass {
 					p.parentClockClass = clockClass
 					glog.Infof("clock change event identified")
-					//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
-					clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, clockClass)
 					fmt.Printf("%s", clockClassOut)
-					if c == nil {
-						UpdateClockClassMetrics(clockClass) // no socket then update metrics
-					} else {
-						_, err := (*c).Write([]byte(clockClassOut))
-						if err != nil {
-							glog.Errorf("failed to write class change event %s", err.Error())
-						}
+				}
+				//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
+				// change to pint every minute or when the clock class changes
+				clockClassOut = fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, p.parentClockClass)
+				if c == nil {
+					UpdateClockClassMetrics(clockClass) // no socket then update metrics
+				} else {
+					_, err := (*c).Write([]byte(clockClassOut))
+					if err != nil {
+						glog.Errorf("failed to write class change event %s", err.Error())
 					}
 				}
 			} else {
