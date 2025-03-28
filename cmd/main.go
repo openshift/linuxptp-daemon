@@ -25,6 +25,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// Git commit of current build set at build time
+var GitCommit = "Undefined"
+
 type cliParams struct {
 	updateInterval  int
 	profileDir      string
@@ -42,6 +45,8 @@ func flagInit(cp *cliParams) {
 }
 
 func main() {
+
+	fmt.Printf("Git commit: %s\n", GitCommit)
 	cp := &cliParams{}
 	flag.Parse()
 	flagInit(cp)
@@ -118,6 +123,9 @@ func main() {
 	go lm.Run()
 
 	defer close(lm.Close)
+
+	tracker := &daemon.ReadyTracker{}
+
 	go daemon.New(
 		nodeName,
 		daemon.PtpNamespace,
@@ -130,6 +138,7 @@ func main() {
 		&refreshNodePtpDevice,
 		closeProcessManager,
 		cp.pmcPollInterval,
+		tracker,
 	).Run()
 
 	tickerPull := time.NewTicker(time.Second * time.Duration(cp.updateInterval))
@@ -142,6 +151,8 @@ func main() {
 	if !stdoutToSocket { // if not sending metrics (log) out to a socket then host metrics here
 		daemon.StartMetricsServer("0.0.0.0:9091")
 	}
+
+	daemon.StartReadyServer("0.0.0.0:8081", tracker)
 
 	for {
 		select {
