@@ -604,12 +604,29 @@ connect:
 					glog.Errorf("restored from clock class update: %s", err)
 				}
 			}()
+			cfgName := ""
+			classTicker := time.NewTicker(60 * time.Second)
 			for {
 				select {
 				case clk := <-clockClassRequestCh:
 					e.UpdateClockClass(c, clk)
+					cfgName = clk.cfgName
 				case <-e.closeCh:
 					return
+				case <-classTicker.C: // send clock class event 60 secs interval
+					if cfgName != "" {
+						clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), cfgName, e.clockClass)
+						if e.stdoutToSocket {
+							if c != nil {
+								_, err := c.Write([]byte(clockClassOut))
+								if err != nil {
+									glog.Errorf("failed to write class change event %s", err.Error())
+								}
+							} else {
+								glog.Errorf("failed to write class change event, connection is nil")
+							}
+						}
+					}
 				}
 			}
 		}(&c)
@@ -1027,7 +1044,7 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 	if classErr != nil {
 		glog.Errorf("error updating clock class %s", classErr)
 	} else {
-		glog.Infof("updated clock class for last clock class %d to %d with clock accuracy %d", e.clockClass, clockClass, clockAccuracy)
+		glog.Infof("updated clock class for last clock class %d to %d with clock accuracy %d", clk.clockClass, clockClass, clockAccuracy)
 		e.clockClass = clockClass
 		e.clockAccuracy = clockAccuracy
 		clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
