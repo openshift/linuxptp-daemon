@@ -10,19 +10,22 @@ on:
 
 jobs:
   lint:
-    if: false  # This prevents the job from running
     name: Run GolangCI-Lint
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.23  # Change this to match your Go version
+          go-version: 1.23 # Change this to match your Go version
 
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
       - name: lint test
         run: make lint
-          
+
