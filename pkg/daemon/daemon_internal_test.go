@@ -37,7 +37,7 @@ func clean(t *testing.T) {
 	err := os.RemoveAll("/tmp/test")
 	assert.NoError(t, err)
 }
-func applyProfileSyncE(t *testing.T, profile *ptpv1.PtpProfile) {
+func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 
 	stopCh := make(<-chan struct{})
 	assert.NoError(t, leap.MockLeapFile())
@@ -101,8 +101,24 @@ func Test_applyProfile_synce(t *testing.T) {
 		mkPath(t)
 		profile, err := loadProfile(testDataFiles[i])
 		assert.NoError(t, err)
-		applyProfileSyncE(t, profile)
+		applyTestProfile(t, profile)
 		testRequirements(t, profile)
+		clean(t)
+	}
+}
+
+func Test_applyProfile_TBC(t *testing.T) {
+	defer clean(t)
+	testDataFiles := []string{
+		"testdata/profile-tbc.yaml",
+	}
+
+	for i := range len(testDataFiles) {
+		mkPath(t)
+		profile, err := loadProfile(testDataFiles[i])
+		assert.NoError(t, err)
+		// Will assert inside in case of error:
+		applyTestProfile(t, profile)
 		clean(t)
 	}
 }

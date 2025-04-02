@@ -12,7 +12,6 @@ plugins:
     - id: ens4f0
       part: E810-XXVDA4T
       gnssInput: false
-      upstreamPort: ens4f1
       phaseOutputConnectors:
       - SMA1
       - SMA2
@@ -36,12 +35,12 @@ plugins:
         U.FL2: 0 2
       ens5f0:
         SMA1: 1 1
-        SMA2: 0 2
+        SMA2: 2 2
         U.FL1: 0 1
         U.FL2: 0 2
       ens8f0:
         SMA1: 1 1
-        SMA2: 0 2
+        SMA2: 2 2
         U.FL1: 0 1
         U.FL2: 0 2
     settings:
@@ -49,11 +48,17 @@ plugins:
       LocalMaxHoldoverOffSet: 1500
       MaxInSpecOffset: 1500
 ptp4lConf: |
-  [ens4f1]
-  masterOnly 0
-  [ens7f0]
+  [ens4f0]
   masterOnly 1
-  [ens7f1]
+  [ens4f1]
+  masterOnly 1
+  [ens5f0]
+  masterOnly 1
+  [ens5f1]
+  masterOnly 1
+  [ens8f0]
+  masterOnly 1
+  [ens8f1]
   masterOnly 1
   [global]
   #
@@ -144,7 +149,7 @@ ptp4lConf: |
   delay_filter_length 10
   egressLatency 0
   ingressLatency 0
-  boundary_clock_jbod 0
+  boundary_clock_jbod 1
   #
   # Clock description
   #
@@ -163,15 +168,15 @@ ts2phcConf: |
   logging_level 7
   ts2phc.pulsewidth 100000000
   leapfile  /usr/share/zoneinfo/leap-seconds.list
-  [ens7f0]
-  ts2phc.extts_polarity rising
-  ts2phc.extts_correction 0
-  ts2phc.master 0
   [ens4f0]
   ts2phc.extts_polarity rising
   ts2phc.extts_correction 0
   ts2phc.master 0
-  [ens2f0]
+  [ens5f0]
+  ts2phc.extts_polarity rising
+  ts2phc.extts_correction 0
+  ts2phc.master 0
+  [ens8f0]
   ts2phc.extts_polarity rising
   ts2phc.extts_correction 0
   ts2phc.master 0

@@ -182,6 +182,8 @@ type ptpProcess struct {
 	syncERelations      *synce.Relations
 	c                   *net.Conn
 	hasCollectedMetrics bool
+	trIfaceName         string // Time receiver interface name for T-BC clock monitoring
+	profileClockType    string
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -417,7 +419,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 			p.eventCh = dn.processManager.eventChannel
 			// start ptp4l process early , it doesn't have
 			if p.depProcess == nil {
-				go p.cmdRun(dn.stdoutToSocket)
+				go p.cmdRun(dn.stdoutToSocket, &dn.pluginManager)
 			} else {
 				for _, d := range p.depProcess {
 					if d != nil {
@@ -439,7 +441,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 						glog.Infof("enabling dep process %s with Max %d Min %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
 					}
 				}
-				go p.cmdRun(dn.stdoutToSocket)
+				go p.cmdRun(dn.stdoutToSocket, &dn.pluginManager)
 			}
 			dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.name)
 		}
@@ -546,25 +548,28 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			leap.LeapMgr.SetPtp4lConfigPath(fmt.Sprintf("ptp4l.%d.config", runID))
 			// DPLL is considered to be running along with ts2phc
 			maxInSpecOffset, maxHoldoverOffSet, maxHoldoverTimeout, inSpecTimer, frequencyTraceable := dpll.CalculateTimer(nodeProfile)
-			// update ts2phcOpts with the new config
-			if configOpts != nil && *configOpts != "" {
-				if !strings.Contains(*configOpts, "--ts2phc.holdover") {
-					if frequencyTraceable {
-						*configOpts += " --ts2phc.holdover " + strconv.FormatInt(maxHoldoverTimeout, 10)
-					} else {
-						*configOpts += " --ts2phc.holdover " + strconv.FormatInt(min(inSpecTimer, maxHoldoverTimeout), 10)
+			clockType, found := (*nodeProfile).PtpSettings["clockType"]
+			if !found || clockType != "T-BC" {
+				// update ts2phcOpts with the new config
+				if configOpts != nil && *configOpts != "" {
+					if !strings.Contains(*configOpts, "--ts2phc.holdover") {
+						if frequencyTraceable {
+							*configOpts += " --ts2phc.holdover " + strconv.FormatInt(maxHoldoverTimeout, 10)
+						} else {
+							*configOpts += " --ts2phc.holdover " + strconv.FormatInt(min(inSpecTimer, maxHoldoverTimeout), 10)
+						}
+					} // there is a 5s delay in the NMEA driver, accepting pulses 5s after the last valid NMEA message, so that might need to be subtracted from that value
+					// need more testing to confirm
+					if !strings.Contains(*configOpts, "--servo_offset_threshold") {
+						if frequencyTraceable {
+							*configOpts += " --servo_offset_threshold " + strconv.FormatInt(maxHoldoverOffSet, 10)
+						} else {
+							*configOpts += " --servo_offset_threshold " + strconv.FormatInt(min(maxInSpecOffset, maxHoldoverOffSet), 10)
+						}
 					}
-				} // there is a 5s delay in the NMEA driver, accepting pulses 5s after the last valid NMEA message, so that might need to be subtracted from that value
-				// need more testing to confirm
-				if !strings.Contains(*configOpts, "--servo_offset_threshold") {
-					if frequencyTraceable {
-						*configOpts += " --servo_offset_threshold " + strconv.FormatInt(maxHoldoverOffSet, 10)
-					} else {
-						*configOpts += " --servo_offset_threshold " + strconv.FormatInt(min(maxInSpecOffset, maxHoldoverOffSet), 10)
+					if !strings.Contains(*configOpts, "--servo_num_offset_values") { //if consecutive smaller offsets (less than the threshold) are not observed, the system stays in S2
+						*configOpts += " --servo_num_offset_values 10"
 					}
-				}
-				if !strings.Contains(*configOpts, "--servo_num_offset_values") { //if consecutive smaller offsets (less than the threshold) are not observed, the system stays in S2
-					*configOpts += " --servo_num_offset_values 10"
 				}
 			}
 		case syncEProcessName:
@@ -588,7 +593,18 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			return err
 		}
 
-		clockType := output.clock_type
+		var clockType event.ClockType
+		profileClockType, found := (*nodeProfile).PtpSettings["clockType"]
+		if found {
+			switch profileClockType {
+			case "T-GM":
+				clockType = "GM"
+			case "T-BC":
+				clockType = "BC"
+			}
+		} else {
+			clockType = output.clock_type
+		}
 		output.profile_name = *nodeProfile.Name
 
 		if nodeProfile.Interface != nil && *nodeProfile.Interface != "" {
@@ -659,53 +675,59 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			ptpClockThreshold: getPTPThreshold(nodeProfile),
 			haProfile:         haProfile,
 			syncERelations:    relations,
+			profileClockType:  profileClockType,
 		}
-
+		if pProcess == ptp4lProcessName {
+			if profileClockType == "T-BC" {
+				dprocess.trIfaceName, _ = (*nodeProfile).PtpSettings["upstreamPort"]
+			}
+		}
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
-			if output.gnss_serial_port == "" {
-				output.gnss_serial_port = GPSPIPE_SERIALPORT
-			}
-			// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
-			gmInterface := dprocess.ifaces.GetGMInterface().Name
+			if profileClockType == "T-GM" {
+				if output.gnss_serial_port == "" {
+					output.gnss_serial_port = GPSPIPE_SERIALPORT
+				}
+				// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
+				gmInterface := dprocess.ifaces.GetGMInterface().Name
 
-			if e := mkFifo(); e != nil {
-				glog.Errorf("Error creating named pipe, GNSS monitoring will not work as expected %s", e.Error())
-			}
+				if e := mkFifo(); e != nil {
+					glog.Errorf("Error creating named pipe, GNSS monitoring will not work as expected %s", e.Error())
+				}
 
-			gpsDaemon := &GPSD{
-				name:        GPSD_PROCESSNAME,
-				execMutex:   sync.Mutex{},
-				cmd:         nil,
-				serialPort:  output.gnss_serial_port,
-				exitCh:      make(chan struct{}),
-				gmInterface: gmInterface,
-				stopped:     false,
-				messageTag:  messageTag,
-				ublxTool:    nil,
-			}
-			gpsDaemon.CmdInit()
-			gpsDaemon.cmdLine = addScheduling(nodeProfile, gpsDaemon.cmdLine)
-			args = strings.Split(gpsDaemon.cmdLine, " ")
-			gpsDaemon.cmd = exec.Command(args[0], args[1:]...)
-			dprocess.depProcess = append(dprocess.depProcess, gpsDaemon)
+				gpsDaemon := &GPSD{
+					name:        GPSD_PROCESSNAME,
+					execMutex:   sync.Mutex{},
+					cmd:         nil,
+					serialPort:  output.gnss_serial_port,
+					exitCh:      make(chan struct{}),
+					gmInterface: gmInterface,
+					stopped:     false,
+					messageTag:  messageTag,
+					ublxTool:    nil,
+				}
+				gpsDaemon.CmdInit()
+				gpsDaemon.cmdLine = addScheduling(nodeProfile, gpsDaemon.cmdLine)
+				args = strings.Split(gpsDaemon.cmdLine, " ")
+				gpsDaemon.cmd = exec.Command(args[0], args[1:]...)
+				dprocess.depProcess = append(dprocess.depProcess, gpsDaemon)
 
-			// init gpspipe
-			gpsPipeDaemon := &gpspipe{
-				name:       GPSPIPE_PROCESSNAME,
-				execMutex:  sync.Mutex{},
-				cmd:        nil,
-				serialPort: GPSPIPE_SERIALPORT,
-				exitCh:     make(chan struct{}),
-				stopped:    false,
-				messageTag: messageTag,
+				// init gpspipe
+				gpsPipeDaemon := &gpspipe{
+					name:       GPSPIPE_PROCESSNAME,
+					execMutex:  sync.Mutex{},
+					cmd:        nil,
+					serialPort: GPSPIPE_SERIALPORT,
+					exitCh:     make(chan struct{}),
+					stopped:    false,
+					messageTag: messageTag,
+				}
+				gpsPipeDaemon.CmdInit()
+				gpsPipeDaemon.cmdLine = addScheduling(nodeProfile, gpsPipeDaemon.cmdLine)
+				args = strings.Split(gpsPipeDaemon.cmdLine, " ")
+				gpsPipeDaemon.cmd = exec.Command(args[0], args[1:]...)
+				dprocess.depProcess = append(dprocess.depProcess, gpsPipeDaemon)
 			}
-			gpsPipeDaemon.CmdInit()
-			gpsPipeDaemon.cmdLine = addScheduling(nodeProfile, gpsPipeDaemon.cmdLine)
-			args = strings.Split(gpsPipeDaemon.cmdLine, " ")
-			gpsPipeDaemon.cmd = exec.Command(args[0], args[1:]...)
-			dprocess.depProcess = append(dprocess.depProcess, gpsPipeDaemon)
-
 			// init dpll
 			// TODO: Try to inject DPLL depProcess via plugin ?
 			var localMaxHoldoverOffSet uint64 = dpll.LocalMaxHoldoverOffSet
@@ -880,7 +902,7 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
-func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
+func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
 	defer func() {
 		if stdoutToSocket && p.c != nil {
@@ -922,6 +944,16 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(nil)
+						}
+						if p.profileClockType == "T-BC" && strings.Contains(output, p.trIfaceName) {
+							if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
+								glog.Info("T-BC MOVE TO NORMAL")
+								pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
+							} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
+								strings.Contains(output, "SLAVE to") {
+								glog.Info("T-BC MOVE TO HOLDOVER")
+								pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
+							}
 						}
 					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
 						p.announceHAFailOver(nil, output) // do not use go routine since order of execution is important here
