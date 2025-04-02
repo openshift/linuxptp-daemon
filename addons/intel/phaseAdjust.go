@@ -25,6 +25,7 @@ type InputPhaseDelays struct {
 	Input                 *InputDelay `json:"inputPhaseDelay"`
 	GnssInput             bool        `json:"gnssInput"`
 	PhaseOutputConnectors []string    `json:"phaseOutputConnectors"`
+	UpstreamPort          string      `json:"upstreamPort"`
 }
 
 type InternalLink struct {

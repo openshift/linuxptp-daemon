@@ -131,6 +131,9 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			// for unit testing only, PtpSettings may include "unitTest" key. The value is
 			// the path where resulting configuration files will be written, instead of /var/run
 			_, unitTest = (*nodeProfile).PtpSettings["unitTest"]
+			if unitTest {
+				MockPins()
+			}
 
 			if e810Opts.EnableDefaultConfig {
 				stdout, _ = exec.Command("/usr/bin/bash", "-c", EnableE810PTPConfig).Output()
@@ -194,6 +197,10 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				if err != nil {
 					return err
 				}
+				(*nodeProfile).PtpSettings["leadingInterface"] = clockChain.LeadingNIC.Name
+				(*nodeProfile).PtpSettings["upstreamPort"] = clockChain.LeadingNIC.UpstreamPort
+			} else {
+				glog.Error("no clock chain set")
 			}
 		}
 	}
@@ -216,7 +223,8 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			if err != nil {
 				glog.Error("e810 failed to unmarshal opts: " + err.Error())
 			}
-			if command == "gpspipe" {
+			switch command {
+			case "gpspipe":
 				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
 				for _, ublxOpt := range append(e810Opts.UblxCmds, getDefaultUblxCmds()...) {
 					ublxArgs := ublxOpt.Args
@@ -234,7 +242,19 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 						glog.Infof("Not saving status to hwconfig: %s", string(stdout))
 					}
 				}
-			} else {
+			case "tbc-ho-exit":
+				_, err = clockChain.EnterNormalTBC()
+				if err != nil {
+					return fmt.Errorf("e810: failed to exit T-BC holdover")
+				}
+				glog.Info("e810: exit T-BC holdover")
+			case "tbc-ho-entry":
+				_, err = clockChain.EnterHoldoverTBC()
+				if err != nil {
+					return fmt.Errorf("e810: failed to enter T-BC holdover")
+				}
+				glog.Info("e810: enter T-BC holdover")
+			default:
 				glog.Infof("AfterRunPTPCommandE810 doing nothing for command: %s", command)
 			}
 		}
@@ -308,4 +328,14 @@ func getClockIdE810(device string) uint64 {
 		break
 	}
 	return binary.LittleEndian.Uint64(b[offset+PCI_EXT_CAP_DATA_OFFSET:])
+}
+
+func loadPins(path string) (*[]dpll_netlink.PinInfo, error) {
+	pins := &[]dpll_netlink.PinInfo{}
+	ptext, err := os.ReadFile(path)
+	if err != nil {
+		return pins, err
+	}
+	err = json.Unmarshal([]byte(ptext), pins)
+	return pins, err
 }

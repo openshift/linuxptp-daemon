@@ -14,14 +14,17 @@ import (
 
 type ClockChainType int
 type ClockChain struct {
-	Type       ClockChainType
-	LeadingNIC CardInfo
-	DpllPins   []*dpll.PinInfo
+	Type       ClockChainType  `json:"clockChainType"`
+	LeadingNIC CardInfo        `json:"leadingNIC"`
+	DpllPins   []*dpll.PinInfo `json:"dpllPins"`
 }
 type CardInfo struct {
-	name        string
-	dpllClockId string
-	pins        map[string]dpll.PinInfo
+	Name        string `json:"name"`
+	DpllClockId string `json:"dpllClockId"`
+	// upstreamPort specifies the slave port in the T-BC case. For example, if the "name"
+	// 	is ens4f0, the "upstreamPort" could be ens4f1, depending on ptp4l config
+	UpstreamPort string                  `json:"upstreamPort"`
+	Pins         map[string]dpll.PinInfo `json:"pins"`
 }
 
 const (
@@ -37,6 +40,28 @@ var ClockTypesMap = map[string]ClockChainType{
 	"T-GM": ClockTypeTGM,
 	"T-BC": ClockTypeTBC, // Use the same for T-TSC
 }
+
+const (
+	sdp20          = "CVL-SDP20"
+	sdp21          = "CVL-SDP21"
+	sdp22          = "CVL-SDP22"
+	sdp23          = "CVL-SDP23"
+	gnss           = "GNSS-1PPS"
+	eecDpllIndex   = 0
+	ppsDpllIndex   = 1
+	sdp22PpsEnable = "2 0 0 1 0"
+)
+
+type PinParentControl struct {
+	EecEnabled bool
+	PpsEnabled bool
+}
+type PinControl struct {
+	Label         string
+	ParentControl PinParentControl
+}
+
+var internalPinLabels = []string{sdp20, sdp21, sdp22, sdp23, gnss}
 
 func (ch *ClockChain) GetLiveDpllPinsInfo() error {
 	if !unitTest {
@@ -87,12 +112,13 @@ func (ch *ClockChain) ResolveInterconnections(e810Opts E810Opts, nodeProfile *pt
 				clockId:   *clockId,
 			})
 		} else {
-			ch.LeadingNIC.name = card.Id
+			ch.LeadingNIC.Name = card.Id
+			ch.LeadingNIC.UpstreamPort = card.UpstreamPort
 			clockId, err := addClockId(card.Id, nodeProfile)
 			if err != nil {
 				return nil, err
 			}
-			ch.LeadingNIC.dpllClockId = *clockId
+			ch.LeadingNIC.DpllClockId = *clockId
 			if card.GnssInput {
 				ch.Type = ClockTypeTGM
 				gnssLink := &delays.GnssInput
@@ -132,7 +158,7 @@ func (ch *ClockChain) ResolveInterconnections(e810Opts E810Opts, nodeProfile *pt
 func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockChain, error) {
 	var chain = &ClockChain{
 		LeadingNIC: CardInfo{
-			pins: make(map[string]dpll.PinInfo, 0),
+			Pins: make(map[string]dpll.PinInfo, 0),
 		},
 	}
 
@@ -140,7 +166,6 @@ func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockCha
 	if err != nil {
 		return chain, err
 	}
-
 	comps, err := chain.ResolveInterconnections(e810Opts, nodeProfile)
 	if err != nil {
 		glog.Errorf("fail to get delay compensations, %s", err)
@@ -156,38 +181,40 @@ func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockCha
 		return chain, err
 	}
 	if chain.Type == ClockTypeTBC {
+		(*nodeProfile).PtpSettings["clockType"] = "T-BC"
+		glog.Info("about to init TBC pins")
 		_, err = chain.InitPinsTBC()
+		if err != nil {
+			return chain, fmt.Errorf("failed to initialize pins for T-BC operation: %s", err.Error())
+		}
+		glog.Info("about to enter TBC Normal mode")
+		_, err = chain.EnterNormalTBC()
+		if err != nil {
+			return chain, fmt.Errorf("failed to enter T-BC normal mode: %s", err.Error())
+		}
 	} else {
+		(*nodeProfile).PtpSettings["clockType"] = "T-GM"
+		glog.Info("about to init TGM pins")
 		_, err = chain.InitPinsTGM()
 	}
 	return chain, err
 }
 
-const (
-	sdp20 = "CVL-SDP20"
-	sdp21 = "CVL-SDP21"
-	sdp22 = "CVL-SDP22"
-	sdp23 = "CVL-SDP23"
-	gnss  = "GNSS-1PPS"
-)
-
-var internalPinLabels = []string{sdp20, sdp21, sdp22, sdp23, gnss}
-
 func (ch *ClockChain) GetLeadingCardSDP() error {
-	clockId, err := strconv.ParseUint(ch.LeadingNIC.dpllClockId, 10, 64)
+	clockId, err := strconv.ParseUint(ch.LeadingNIC.DpllClockId, 10, 64)
 	if err != nil {
 		return err
 	}
 	for _, pin := range ch.DpllPins {
 		if pin.ClockId == clockId && slices.Contains(internalPinLabels, pin.BoardLabel) {
-			ch.LeadingNIC.pins[pin.BoardLabel] = *pin
+			ch.LeadingNIC.Pins[pin.BoardLabel] = *pin
 		}
 	}
-
 	return nil
 }
 
 func writeSysFs(path string, val string) error {
+	glog.Infof("writing " + val + " to " + path)
 	err := os.WriteFile(path, []byte(val), 0666)
 	if err != nil {
 		return fmt.Errorf("e810 failed to write " + val + " to " + path + ": " + err.Error())
@@ -195,15 +222,36 @@ func writeSysFs(path string, val string) error {
 	return nil
 }
 
-func SetPinControlData(pin dpll.PinInfo, enabled bool) *dpll.PinParentDeviceCtl {
+func (c *ClockChain) SetPinsControl(pins []PinControl) (*[]dpll.PinParentDeviceCtl, error) {
+	pinCommands := []dpll.PinParentDeviceCtl{}
+	for _, pinCtl := range pins {
+		dpllPin, found := c.LeadingNIC.Pins[pinCtl.Label]
+		if !found {
+			return nil, fmt.Errorf("%s pin not found in the leading card", pinCtl.Label)
+		}
+		pinCommand := SetPinControlData(dpllPin, pinCtl.ParentControl)
+		pinCommands = append(pinCommands, *pinCommand)
+	}
+	return &pinCommands, nil
+}
+
+func SetPinControlData(pin dpll.PinInfo, control PinParentControl) *dpll.PinParentDeviceCtl {
 	Pin := dpll.PinParentDeviceCtl{
 		Id:           pin.Id,
 		PinParentCtl: make([]dpll.PinControl, 0),
 	}
-	for _, pin := range pin.ParentDevice {
+	var enable bool
+	for deviceIndex, parentDevice := range pin.ParentDevice {
 		pc := dpll.PinControl{}
-		pc.PinParentId = pin.ParentId
-		if pin.Direction == dpll.DPLL_PIN_DIRECTION_INPUT {
+		pc.PinParentId = parentDevice.ParentId
+		switch deviceIndex {
+		case eecDpllIndex:
+			enable = control.EecEnabled
+		case ppsDpllIndex:
+			enable = control.PpsEnabled
+		}
+
+		if parentDevice.Direction == dpll.DPLL_PIN_DIRECTION_INPUT {
 			pc.Prio = func(enabled bool) *uint32 {
 				var p uint32
 				if enabled {
@@ -212,7 +260,7 @@ func SetPinControlData(pin dpll.PinInfo, enabled bool) *dpll.PinParentDeviceCtl 
 					p = PrioDisable
 				}
 				return &p
-			}(enabled)
+			}(enable)
 		} else {
 			pc.State = func(enabled bool) *uint32 {
 				var s uint32
@@ -222,40 +270,31 @@ func SetPinControlData(pin dpll.PinInfo, enabled bool) *dpll.PinParentDeviceCtl 
 					s = dpll.DPLL_PIN_STATE_DISCONNECTED
 				}
 				return &s
-			}(enabled)
+			}(enable)
 		}
 		Pin.PinParentCtl = append(Pin.PinParentCtl, pc)
 	}
 	return &Pin
 }
 
-func (c *ClockChain) SetPinsControlData(pins []string, enable []bool) (*[]dpll.PinParentDeviceCtl, error) {
-	pinCommands := []dpll.PinParentDeviceCtl{}
-	if len(pins) != len(enable) {
-		return nil, fmt.Errorf("pin control data invalid - 'pins' and 'enable' must be the same length")
-	}
-	for i := range pins {
-		pin, found := c.LeadingNIC.pins[pins[i]]
-		if !found {
-			return nil, fmt.Errorf("%s pin not found in the leading card", pins[i])
-		}
-		pinCommand := SetPinControlData(pin, enable[i])
-		pinCommands = append(pinCommands, *pinCommand)
-	}
-	return &pinCommands, nil
-}
-
 func (c *ClockChain) EnableE810Outputs() error {
-	// # echo 1 0 0 0 100 > /sys/class/net/$ETH/device/ptp/ptp*/period
 	// # echo 2 0 0 1 0 > /sys/class/net/$ETH/device/ptp/ptp*/period
-	pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/ptp*/period", c.LeadingNIC.name)
+	var pinPath string
 	if unitTest {
-		pinPath = "/tmp/pin"
-	}
-	for _, value := range []string{"1 0 0 0 100", "2 0 0 1 0"} {
-		err := writeSysFs(pinPath, value)
+		glog.Info("skip pin config in unit test")
+		return nil
+	} else {
+		deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", c.LeadingNIC.Name)
+		phcs, err := os.ReadDir(deviceDir)
 		if err != nil {
-			return err
+			return fmt.Errorf("e810 failed to read " + deviceDir + ": " + err.Error())
+		}
+		for _, phc := range phcs {
+			pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/period", c.LeadingNIC.Name, phc.Name())
+			err := writeSysFs(pinPath, sdp22PpsEnable)
+			if err != nil {
+				return fmt.Errorf("failed to write " + sdp22PpsEnable + " to " + pinPath + ": " + err.Error())
+			}
 		}
 	}
 	return nil
@@ -263,18 +302,36 @@ func (c *ClockChain) EnableE810Outputs() error {
 
 // InitPinsTBC initializes the leading card E810 and DPLL pins for T-BC operation
 func (c *ClockChain) InitPinsTBC() (*[]dpll.PinParentDeviceCtl, error) {
-	// Set periodic output on SDP20 and SDP22
+	// Enable 1PPS output on SDP22
 	// (To synchronize the DPLL1 to the E810 PHC synced by ptp4l):
 	err := c.EnableE810Outputs()
 	if err != nil {
 		return nil, err
 	}
-	// Disable GNSS-1PPS
-	// Enable DPLL inputs from e810 (SDP20, SDP22)
-	// Disable DPLL Outputs to e810 (SDP21, SDP23)
-	pins := []string{gnss, sdp21, sdp23, sdp20, sdp22}
-	enable := []bool{false, false, false, true, true}
-	commands, err := c.SetPinsControlData(pins, enable)
+	// Disable GNSS-1PPS, SDP20 and SDP21
+	commands, err := c.SetPinsControl([]PinControl{
+		{
+			Label: gnss,
+			ParentControl: PinParentControl{
+				EecEnabled: false,
+				PpsEnabled: false,
+			},
+		},
+		{
+			Label: sdp20,
+			ParentControl: PinParentControl{
+				EecEnabled: false,
+				PpsEnabled: false,
+			},
+		},
+		{
+			Label: sdp21,
+			ParentControl: PinParentControl{
+				EecEnabled: false,
+				PpsEnabled: false,
+			},
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -283,24 +340,64 @@ func (c *ClockChain) InitPinsTBC() (*[]dpll.PinParentDeviceCtl, error) {
 
 // EnterHoldoverTBC configures the leading card DPLL pins for T-BC holdover
 func (c *ClockChain) EnterHoldoverTBC() (*[]dpll.PinParentDeviceCtl, error) {
-	// Disable DPLL inputs from e810 (SDP20, SDP22)
+	// Disable DPLL inputs from e810 (SDP22)
 	// Enable DPLL Outputs to e810 (SDP21, SDP23)
-	pins := []string{sdp20, sdp22, sdp21, sdp23}
-	enable := []bool{false, false, true, true}
-	commands, err := c.SetPinsControlData(pins, enable)
+	commands, err := c.SetPinsControl([]PinControl{
+		{
+			Label: sdp22,
+			ParentControl: PinParentControl{
+				EecEnabled: false,
+				PpsEnabled: false,
+			},
+		},
+		{
+			Label: sdp23,
+			ParentControl: PinParentControl{
+				EecEnabled: true,
+				PpsEnabled: true,
+			},
+		},
+		{
+			Label: sdp21,
+			ParentControl: PinParentControl{
+				EecEnabled: true,
+				PpsEnabled: true,
+			},
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
 	return commands, BatchPinSet(commands)
 }
 
-// ExitHoldoverTBC configures the leading card DPLL pins for regular T-BC operation
-func (c *ClockChain) ExitHoldoverTBC() (*[]dpll.PinParentDeviceCtl, error) {
-	// Disable DPLL Outputs to e810 (SDP21, SDP23)
-	// Enable DPLL inputs from e810 (SDP20, SDP22)
-	pins := []string{sdp21, sdp23, sdp20, sdp22}
-	enable := []bool{false, false, true, true}
-	commands, err := c.SetPinsControlData(pins, enable)
+// EnterNormalTBC configures the leading card DPLL pins for regular T-BC operation
+func (c *ClockChain) EnterNormalTBC() (*[]dpll.PinParentDeviceCtl, error) {
+	// Disable DPLL Outputs to e810 (SDP23, SDP21)
+	// Enable DPLL inputs from e810 (SDP22)
+	commands, err := c.SetPinsControl([]PinControl{
+		{
+			Label: sdp22,
+			ParentControl: PinParentControl{
+				EecEnabled: false,
+				PpsEnabled: true,
+			},
+		},
+		{
+			Label: sdp21,
+			ParentControl: PinParentControl{
+				EecEnabled: false,
+				PpsEnabled: false,
+			},
+		},
+		{
+			Label: sdp23,
+			ParentControl: PinParentControl{
+				EecEnabled: false,
+				PpsEnabled: false,
+			},
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -311,9 +408,43 @@ func (c *ClockChain) InitPinsTGM() (*[]dpll.PinParentDeviceCtl, error) {
 	// Set GNSS-1PPS priority to 0 (max priority)
 	// Disable DPLL inputs from e810 (SDP20, SDP22)
 	// Enable DPLL Outputs to e810 (SDP21, SDP23)
-	pins := []string{sdp20, sdp22, gnss, sdp21, sdp23}
-	enable := []bool{false, false, true, true, true}
-	commands, err := c.SetPinsControlData(pins, enable)
+	commands, err := c.SetPinsControl([]PinControl{
+		{
+			Label: gnss,
+			ParentControl: PinParentControl{
+				EecEnabled: true,
+				PpsEnabled: true,
+			},
+		},
+		{
+			Label: sdp20,
+			ParentControl: PinParentControl{
+				EecEnabled: false,
+				PpsEnabled: false,
+			},
+		},
+		{
+			Label: sdp22,
+			ParentControl: PinParentControl{
+				EecEnabled: false,
+				PpsEnabled: false,
+			},
+		},
+		{
+			Label: sdp21,
+			ParentControl: PinParentControl{
+				EecEnabled: true,
+				PpsEnabled: true,
+			},
+		},
+		{
+			Label: sdp23,
+			ParentControl: PinParentControl{
+				EecEnabled: true,
+				PpsEnabled: true,
+			},
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -330,14 +461,27 @@ func BatchPinSet(commands *[]dpll.PinParentDeviceCtl) error {
 	}
 	defer conn.Close()
 	for _, command := range *commands {
+		glog.Infof("DPLL pin command %++v", command)
 		b, err := dpll.EncodePinControl(command)
 		if err != nil {
 			return err
 		}
 		err = conn.SendCommand(dpll.DPLL_CMD_PIN_SET, b)
 		if err != nil {
+			glog.Error("failed to send pin command: ", err)
 			return err
 		}
+		info, err := conn.DoPinGet(dpll.DoPinGetRequest{Id: command.Id})
+		if err != nil {
+			glog.Error("failed to get pin: ", err)
+			return err
+		}
+		reply, err := dpll.GetPinInfoHR(info)
+		if err != nil {
+			glog.Error("failed to convert pin reply to human readable: ", err)
+			return err
+		}
+		glog.Info("pin reply: ", string(reply))
 	}
 	return nil
 }
