@@ -183,7 +183,6 @@ type ptpProcess struct {
 	c                   *net.Conn
 	hasCollectedMetrics bool
 	trIfaceName         string // Time receiver interface name for T-BC clock monitoring
-	profileClockType    string
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -424,6 +423,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 				for _, d := range p.depProcess {
 					if d != nil {
 						time.Sleep(3 * time.Second)
+						glog.Infof("Starting %s", d.Name())
 						go d.CmdRun(false)
 						time.Sleep(3 * time.Second)
 						dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
@@ -513,6 +513,35 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 	ptpHAEnabled := len(listHaProfiles(nodeProfile)) > 0
 
+	var clockType event.ClockType
+	profileClockType, found := (*nodeProfile).PtpSettings["clockType"]
+	if found {
+		switch profileClockType {
+		case "T-GM":
+			clockType = event.GM
+		case "T-BC":
+			clockType = event.BC
+		default:
+			clockType = event.ClockUnset
+		}
+	} else {
+		clockType = event.ClockUnset
+	}
+
+	// If unset default to clock type inferred from ptp4l
+	if clockType == event.ClockUnset {
+		ptp4lOutput := &ptp4lConf{}
+		// Parsing ptp4l needs to be done here to get the fallback clock type.
+		// Needs to be done outside the loop as we need to guarantee clockType
+		// set before the ts2phcProcessName case where it is used.
+		err = ptp4lOutput.populatePtp4lConf(nodeProfile.Ptp4lConf)
+		if err != nil {
+			printNodeProfile(nodeProfile)
+			return err
+		}
+		clockType = ptp4lOutput.clock_type
+	}
+
 	for _, p := range ptpProcesses {
 		pProcess = p
 		switch pProcess {
@@ -548,8 +577,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			leap.LeapMgr.SetPtp4lConfigPath(fmt.Sprintf("ptp4l.%d.config", runID))
 			// DPLL is considered to be running along with ts2phc
 			maxInSpecOffset, maxHoldoverOffSet, maxHoldoverTimeout, inSpecTimer, frequencyTraceable := dpll.CalculateTimer(nodeProfile)
-			clockType, found := (*nodeProfile).PtpSettings["clockType"]
-			if !found || clockType != "T-BC" {
+			if clockType == event.GM {
 				// update ts2phcOpts with the new config
 				if configOpts != nil && *configOpts != "" {
 					if !strings.Contains(*configOpts, "--ts2phc.holdover") {
@@ -581,31 +609,18 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			messageTag = fmt.Sprintf("[synce4l.%d.config]", runID)
 		}
 
-		if configOpts == nil || *configOpts == "" {
-			glog.Infof("configOpts empty, skipping: %s", pProcess)
-			continue
-		}
-
 		output := &ptp4lConf{}
 		err = output.populatePtp4lConf(configInput)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return err
 		}
-
-		var clockType event.ClockType
-		profileClockType, found := (*nodeProfile).PtpSettings["clockType"]
-		if found {
-			switch profileClockType {
-			case "T-GM":
-				clockType = "GM"
-			case "T-BC":
-				clockType = "BC"
-			}
-		} else {
-			clockType = output.clock_type
-		}
 		output.profile_name = *nodeProfile.Name
+
+		if configOpts == nil || *configOpts == "" {
+			glog.Infof("configOpts empty, skipping: %s", pProcess)
+			continue
+		}
 
 		if nodeProfile.Interface != nil && *nodeProfile.Interface != "" {
 			output.sections = append([]ptp4lConfSection{{
@@ -675,16 +690,16 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			ptpClockThreshold: getPTPThreshold(nodeProfile),
 			haProfile:         haProfile,
 			syncERelations:    relations,
-			profileClockType:  profileClockType,
 		}
+
 		if pProcess == ptp4lProcessName {
-			if profileClockType == "T-BC" {
-				dprocess.trIfaceName, _ = (*nodeProfile).PtpSettings["upstreamPort"]
+			if port, ok := (*nodeProfile).PtpSettings["upstreamPort"]; ok && clockType == event.BC {
+				dprocess.trIfaceName = port
 			}
 		}
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
-			if profileClockType == "T-GM" {
+			if clockType == event.GM {
 				if output.gnss_serial_port == "" {
 					output.gnss_serial_port = GPSPIPE_SERIALPORT
 				}
@@ -945,7 +960,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(nil)
 						}
-						if p.profileClockType == "T-BC" && strings.Contains(output, p.trIfaceName) {
+						if p.clockType == event.BC && strings.Contains(output, p.trIfaceName) {
 							if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
 								glog.Info("T-BC MOVE TO NORMAL")
 								pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")

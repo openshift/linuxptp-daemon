@@ -2,13 +2,14 @@ package event
 
 import (
 	"fmt"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/debug"
 	"net"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/debug"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
@@ -91,6 +92,8 @@ const (
 	BC ClockType = "BC"
 	// OC ...
 	OC ClockType = "OC"
+	// ClockUnset ...
+	ClockUnset ClockType = ""
 )
 
 // PTP4lProcessName ...
