@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -781,14 +782,9 @@ func (m *masterOffsetInterface) getAliasByName(configName string, name string) p
 func (m *masterOffsetInterface) set(configName string, value string) {
 	m.Lock()
 	defer m.Unlock()
-	alias := ""
-	if value != "" {
-		r := []rune(value)
-		alias = string(r[:len(r)-1]) + "x"
-	}
 	m.iface[configName] = ptpInterface{
 		name:  value,
-		alias: alias,
+		alias: utils.GetAlias(value),
 	}
 }
 
