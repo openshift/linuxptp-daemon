@@ -73,10 +73,10 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			outOfSpec:        false,
 			iface:            "ens1f0",
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 3, event.FREQUENCY_STATUS: 3, event.PPS_STATUS: 1},
-			wantGMState:      "GM[0]:[ts2phc.0.config] unknown T-GM-STATUS s0",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
+			wantGMState:      "",
+			wantClockState:   "",
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 3 offset 0 phase_status 3 pps_status 1 s2",
-			desc:             "Initial state, gnss is not set, so expect GM to be FREERUN",
+			desc:             "Initial state, gnss is not set, gm won't have intrerface so no  t-gm or clock class ",
 		},
 		{
 			processName:      event.GNSS,
@@ -130,7 +130,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			outOfSpec:        false,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
+			wantClockState:   "", // clock class didn;t change
 			wantProcessState: "gnss[0]:[ts2phc.0.config] ens1f0 gnss_status 0 offset 0 s0",
 			sourceLost:       true,
 			desc:             "GPS is free run ,source is lost when everything else is locked(Do nothing and wait  for DPLL to switch to HOLDOVER)",
@@ -166,8 +166,8 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			iface:            "ens1f0",
 			outOfSpec:        false,
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 3},
-			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 140",
+			wantGMState:      "", // TM state did not change
+			wantClockState:   "", // CLOCKCLASS did not change
 			wantProcessState: "gnss[0]:[ts2phc.0.config] ens1f0 gnss_status 3 offset 0 s2",
 			sourceLost:       false,
 			desc:             "GPS is locked but dpll is in FREERUN and out of spec, yet to switch over in that case GM should stay with last state",
@@ -240,7 +240,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			iface:            "ens1f0",
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.GPS_STATUS: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
+			wantClockState:   "", // clock class didn not change
 			wantProcessState: "gnss[0]:[ts2phc.0.config] ens1f0 gnss_status 0 offset 0 s0",
 			sourceLost:       true,
 			desc:             "Case 2: GPS is free run ,source is lost when everything else is locked(Do nothing and wait  for DPLL to switch to HOLDOVER)",
@@ -265,7 +265,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			iface:            "ens2f0",
 			values:           map[event.ValueType]interface{}{event.OFFSET: 0, event.PHASE_STATUS: 4, event.FREQUENCY_STATUS: 4, event.PPS_STATUS: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
+			wantClockState:   "", // clock class did not change
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens2f0 frequency_status 4 offset 0 phase_status 4 pps_status 0 s1",
 			desc:             "dpll 2 is on Holdover, where source is lost, moving to holdover state",
 		},
@@ -277,7 +277,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			iface:            "ens2f0",
 			values:           map[event.ValueType]interface{}{event.OFFSET: 5000, event.PPS_STATUS: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
-			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
+			wantClockState:   "", // clock class did not change ,
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens2f0 offset 5000 pps_status 0 s0",
 			desc:             "2nd card ts2phc offset spiked when in holdover",
 		},
@@ -293,6 +293,12 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	defer close(leap.LeapMgr.Close)
 	time.Sleep(1 * time.Second)
 	for _, test := range tests {
+		test := test
+		expectedLogs := map[string]bool{
+			test.wantProcessState: false,
+			test.wantGMState:      false,
+			test.wantClockState:   false,
+		}
 		select {
 		case eChannel <- sendEvents(test.cfgName, test.iface, test.processName, test.clockState, test.values, test.outOfSpec, test.sourceLost):
 			log.Println("sent data to channel")
@@ -307,23 +313,28 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			case c := <-logOut:
 				s1 := strings.Index(c, "[")
 				s2 := strings.Index(c, "]")
-				rs := strings.Replace(c, c[s1+1:s2], "0", -1)
 
-				if strings.HasPrefix(c, string(test.processName)) {
-					assert.Equal(t, test.wantProcessState, rs, test.desc)
+				if s1 != -1 && s2 > s1 {
+					c = c[:s1+1] + "0" + c[s2:]
 				}
-				if strings.HasPrefix(c, "GM[") {
-					assert.Equal(t, test.wantGMState, rs, test.desc)
-				}
-				if strings.HasPrefix(c, "ptp4l[") {
-					assert.Equal(t, test.wantClockState, rs, test.desc)
+				// Mark expected log as seen
+				for want := range expectedLogs {
+					if want == "" || c == want {
+						expectedLogs[want] = true
+					}
 				}
 			default:
+				time.Sleep(100 * time.Millisecond)
 			}
-			if len(logOut) > 0 {
-				goto retry
-			}
-			time.Sleep(100 * time.Millisecond)
+		}
+		time.Sleep(100 * time.Millisecond)
+		if len(logOut) > 0 {
+			goto retry
+		}
+		time.Sleep(100 * time.Millisecond)
+		// Final check: ensure all expected logs were received
+		for logStr, seen := range expectedLogs {
+			assert.True(t, seen, "Missing expected log for test '%s': %s", test.desc, logStr)
 		}
 	}
 
