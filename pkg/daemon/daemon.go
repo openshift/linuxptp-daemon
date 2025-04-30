@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openshift/linuxptp-daemon/pkg/utils"
+
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/dpll"
 	"github.com/openshift/linuxptp-daemon/pkg/leap"
@@ -995,8 +997,7 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 		}
 	} else {
 		if iface != "" && iface != clockRealTime {
-			r := []rune(iface)
-			iface = string(r[:len(r)-1]) + "x"
+			iface = utils.GetAlias(iface)
 		}
 		if ptpState == event.PTP_LOCKED {
 			updateClockStateMetrics(p.name, iface, LOCKED)
