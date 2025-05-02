@@ -635,9 +635,6 @@ connect:
 			// Update the in MemData
 			dataDetails := e.addEvent(event)
 
-			if event.WriteToLog && logDataValues != "" {
-				logOut = append(logOut, logDataValues)
-			}
 			// Computes GM state
 			gmState := e.updateGMState(event.CfgName)
 			// right now if GPS offset || mode is bad then consider source lost
@@ -646,9 +643,8 @@ connect:
 			}
 
 			logDataValues = dataDetails.logData
-
-			if gmState.gmLog != "" && gmState.gmIFace != GM_INTERFACE_UNKNOWN {
-				logOut = append(logOut, gmState.gmLog)
+			if event.WriteToLog && logDataValues != "" {
+				logOut = append(logOut, logDataValues)
 			}
 
 			// only if config has this special name
@@ -665,6 +661,11 @@ connect:
 				debug.UpdateTs2phcState(string(d.State), 0, debug.OverallTs2phcKey)
 			}
 			debug.UpdateGMState(string(gmState.state))
+
+			if gmState.gmLog != "" && gmState.gmIFace != GM_INTERFACE_UNKNOWN {
+				logOut = append(logOut, gmState.gmLog)
+			}
+
 			// Update the metrics
 			if !e.stdoutToSocket { // if events not enabled
 				eventIface := event.IFace
