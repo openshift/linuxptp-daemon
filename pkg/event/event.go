@@ -58,10 +58,11 @@ type ClockType string
 
 // ClockClassRequest ...
 type ClockClassRequest struct {
-	cfgName    string
-	gmState    PTPState
-	clockType  ClockType
-	clockClass fbprotocol.ClockClass
+	cfgName       string
+	gmState       PTPState
+	clockType     ClockType
+	clockClass    fbprotocol.ClockClass
+	clockAccuracy fbprotocol.ClockAccuracy
 }
 
 var (
@@ -141,6 +142,7 @@ type grandMasterSyncState struct {
 	gmLog          string
 	lastLoggedTime int64
 	gmIFace        string
+	clockAccuracy  fbprotocol.ClockAccuracy
 }
 
 // EventHandler ... event handler to process events
@@ -703,21 +705,28 @@ connect:
 						e.UpdateClockStateMetrics(gmState.state, string(GM), gmIface)
 					}
 				}
+				sendUpdate := false
+				offset, found := event.Values["offset"]
+				if found {
+					clockAccuracy := fbprotocol.ClockAccuracyFromOffset(time.Duration(offset.(int)) * time.Nanosecond)
+					if clockAccuracy != gmState.clockAccuracy {
+						sendUpdate = true
+					}
+					gmState.clockAccuracy = clockAccuracy
+				}
 
-				// If the clockClass of gmState is not protocol.ClockClassUninitialized and there is a change in clockClass or clockAccuracy,
-				// log the change and update the clock class.
-				if gmState.clockClass != protocol.ClockClassUninitialized &&
-					uint8(gmState.clockClass) != uint8(e.clockClass) {
-					glog.Infof("clock class change request from %d to %d ",
-						uint8(e.clockClass), uint8(gmState.clockClass))
+				if e.clockClass != protocol.ClockClassUninitialized &&
+					(uint8(gmState.clockClass) != uint8(e.clockClass) || sendUpdate) {
+					glog.Infof("clock class change request from %d to %d", uint8(e.clockClass), uint8(gmState.clockClass))
 					debug.UpdateClockClass(uint8(gmState.clockClass))
 					go func() {
 						select {
 						case clockClassRequestCh <- ClockClassRequest{
-							cfgName:    event.CfgName,
-							gmState:    gmState.state,
-							clockType:  event.ClockType,
-							clockClass: gmState.clockClass,
+							cfgName:       event.CfgName,
+							gmState:       gmState.state,
+							clockType:     event.ClockType,
+							clockClass:    gmState.clockClass,
+							clockAccuracy: gmState.clockAccuracy,
 						}:
 						default:
 							glog.Error("clock class request busy updating previous request, will try next event")
@@ -752,7 +761,7 @@ connect:
 	}
 }
 
-func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.ClockClass, clockType ClockType,
+func (e *EventHandler) updateCLockClass(cfgName string, clkClass fbprotocol.ClockClass, clockType ClockType, clockAccuracy fbprotocol.ClockAccuracy,
 	gmGetterFn func(string) (protocol.GrandmasterSettings, error),
 	gmSetterFn func(string, protocol.GrandmasterSettings) error) (err error, clockClass fbprotocol.ClockClass) {
 	g, err := gmGetterFn(cfgName)
@@ -769,9 +778,10 @@ func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.Cloc
 		switch clkClass {
 		case fbprotocol.ClockClass6: // T-GM connected to a PRTC in locked mode (e.g., PRTC traceable to GNSS)
 			// update only when ClockClass is changed or clockAccuracy changes
-			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 || g.TimePropertiesDS.TimeTraceable != true {
+			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass6
 				g.TimePropertiesDS.TimeTraceable = true
+				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
@@ -781,6 +791,7 @@ func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.Cloc
 			if g.ClockQuality.ClockClass != protocol.ClockClassOutOfSpec {
 				g.ClockQuality.ClockClass = protocol.ClockClassOutOfSpec
 				g.TimePropertiesDS.TimeTraceable = false
+				g.ClockQuality.ClockAccuracy = clockAccuracy
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
@@ -790,6 +801,7 @@ func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.Cloc
 			if g.ClockQuality.ClockClass != fbprotocol.ClockClass7 {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass7
 				g.TimePropertiesDS.TimeTraceable = true
+				g.ClockQuality.ClockAccuracy = clockAccuracy
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
@@ -799,6 +811,7 @@ func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.Cloc
 			if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
 				g.ClockQuality.ClockClass = protocol.ClockClassFreerun
 				g.TimePropertiesDS.TimeTraceable = false
+				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 				// T-REC-G.8275.1-202211-I section 6.3.5
 				g.ClockQuality.OffsetScaledLogVariance = 0xffff
@@ -970,7 +983,7 @@ func (e *EventHandler) addEvent(event EventChannel) *DataDetails {
 
 // UpdateClockClass ... update clock class
 func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
-	classErr, clockClass := e.updateClockClass(clk.cfgName, clk.clockClass, clk.clockType,
+	classErr, clockClass := e.updateCLockClass(clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy,
 		PMCGMGetter, PMCGMSetter)
 	glog.Infof("received %s,%v,%s", clk.cfgName, clk.clockClass, clk.clockType)
 	if classErr != nil {
