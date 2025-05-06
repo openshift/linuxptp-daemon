@@ -42,11 +42,12 @@ type DpllTestCase struct {
 func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 	return []DpllTestCase{{
 		reply: &nl.DoDeviceGetReply{
-			Id:            id,
-			ModuleName:    moduleName,
-			Mode:          1,
+			Id:         id,
+			ModuleName: moduleName,
+			Mode:       1,
+
 			ModeSupported: 0,
-			LockStatus:    2, //LOCKED,
+			LockStatus:    3, //LHAQ,
 			ClockId:       clockid,
 			Type:          2, //1 pps 2 eec
 		},
@@ -57,16 +58,16 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		expectedState:             event.PTP_FREERUN,
 		expectedPhaseStatus:       0, //no phase status event for eec
 		expectedPhaseOffset:       dpll.FaultyPhaseOffset * 1000000,
-		expectedFrequencyStatus:   2, // locked
-		expectedInSpecState:       true,
-		desc:                      "1.locked frequency status, unknonw Phase status ",
+		expectedFrequencyStatus:   3, // LHAQ
+		expectedInSpecState:       false,
+		desc:                      fmt.Sprintf("1.LHAQ frequency status, unknown Phase status : pin %d ", pinType),
 	}, {
 		reply: &nl.DoDeviceGetReply{
 			Id:            id,
 			ModuleName:    moduleName,
 			Mode:          1,
 			ModeSupported: 0,
-			LockStatus:    2, //LOCKED,
+			LockStatus:    3, //LHAQ,
 			ClockId:       clockid,
 			Type:          1, //1 pps 2 eec
 		},
@@ -75,11 +76,11 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		offset:                    5,
 		expectedIntermediateState: event.PTP_LOCKED,
 		expectedState:             event.PTP_LOCKED,
-		expectedPhaseStatus:       2, //no phase status event for eec
+		expectedPhaseStatus:       3, //no phase status event for eec
 		expectedPhaseOffset:       50,
-		expectedFrequencyStatus:   2, // locked
+		expectedFrequencyStatus:   3, // LHAQ
 		expectedInSpecState:       true,
-		desc:                      "2. with locked frequency status, reading phase status ",
+		desc:                      fmt.Sprintf("2. with LHAQ frequency status, reading phase status  : pin %d ", pinType),
 	},
 		{
 			reply: &nl.DoDeviceGetReply{
@@ -91,7 +92,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 					if pinType == 2 {
 						return 4 // holdover
 					} else {
-						return 4 // locked
+						return 4 // holdover
 					}
 				}(), // holdover,
 				ClockId: clockid,
@@ -105,9 +106,9 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 			expectedState:             event.PTP_FREERUN,
 			expectedPhaseStatus: func() int64 {
 				if pinType == 2 {
-					return 2 // locked
+					return 3 // LHAQ
 				} else {
-					return 4 //holdover
+					return 4 // holdover
 				}
 			}(), //no phase status event for eec
 			expectedPhaseOffset: dpll.FaultyPhaseOffset * 1000000,
@@ -115,7 +116,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 				if pinType == 2 {
 					return 4
 				} else {
-					return 2
+					return 3
 				}
 			}(), // holdover to free run
 			expectedInSpecState: func() bool {
@@ -145,7 +146,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 			expectedState:             event.PTP_FREERUN,
 			expectedPhaseStatus: func() int64 {
 				if pinType == 2 {
-					return 2
+					return 3
 				} else {
 					return 4
 				}
@@ -155,7 +156,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 				if pinType == 2 {
 					return 4
 				} else {
-					return 2
+					return 3
 				}
 			}(),
 			expectedInSpecState: func() bool {
@@ -169,6 +170,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		},
 	}
 }
+
 func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
 	assert.True(t, dpll.MockDpllReplies != nil)
@@ -196,10 +198,11 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 	for _, tt := range getTestData(event.GNSS, 2) {
 		d.SetSourceLost(tt.sourceLost)
 		d.SetPhaseOffset(tt.expectedPhaseOffset)
-		d.SetDependsOn([]event.EventSource{tt.source})
 		dpll.MockDpllReplies <- tt.reply
+		time.Sleep(10 * time.Millisecond)
+		d.SetDependsOn([]event.EventSource{tt.source})
 		d.MonitorDpllMock()
-		time.Sleep(1 * time.Second)
+		time.Sleep(10 * time.Millisecond)
 		assert.Equal(t, tt.expectedIntermediateState, d.State(), tt.desc)
 		time.Sleep(tt.sleep * time.Second)
 		assert.Equal(t, tt.expectedPhaseStatus, d.PhaseStatus(), tt.desc)
