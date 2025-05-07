@@ -704,15 +704,14 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 		glog.Infof("Starting %s...", p.name)
 		glog.Infof("%s cmd: %+v", p.name, p.cmd)
 
-		//
-		// don't discard process stderr output
-		//
-		p.cmd.Stderr = os.Stderr
 		cmdReader, err := p.cmd.StdoutPipe()
+
 		if err != nil {
 			glog.Errorf("CmdRun() error creating StdoutPipe for %s: %v", p.name, err)
 			break
 		}
+		// don't discard process stderr output
+		p.cmd.Stderr = p.cmd.Stdout
 		if !stdoutToSocket {
 			scanner := bufio.NewScanner(cmdReader)
 			processStatus(nil, p.name, p.messageTag, PtpProcessUp)
