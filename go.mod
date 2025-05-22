@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.24.1
 
 require (
+	github.com/Masterminds/semver/v3 v3.3.0
 	github.com/bigkevmcd/go-configparser v0.0.0-20240624060122-ccd05f93a9d2
 	github.com/facebook/time v0.0.0-20241030181404-3e1b98825c29
 	github.com/golang/glog v1.2.4
@@ -26,7 +27,6 @@ require (
 )
 
 require (
-	github.com/Masterminds/semver/v3 v3.3.0 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
