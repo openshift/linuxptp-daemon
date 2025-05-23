@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -353,8 +354,8 @@ func extractSummaryMetrics(configName, processName, output string) (iface string
 		fields = append(fields, "") // Making space for the new element
 		//  0             1     2
 		//ptp4l.0.config rms   53 max   74 freq -16642 +/-  40 delay  1089 +/-  20
-		copy(fields[2:], fields[1:])                       // Shifting elements
-		fields[1] = masterOffsetIface.get(configName).name // Copying/inserting the value
+		copy(fields[2:], fields[1:])                        // Shifting elements
+		fields[1] = masterOffsetIface.get(configName).alias // Copying/inserting the value
 		//  0             0       1   2
 		//ptp4l.0.config master rms   53 max   74 freq -16642 +/-  40 delay  1089 +/-  20
 	} else if fields[1] != "CLOCK_REALTIME" {
@@ -781,14 +782,9 @@ func (m *masterOffsetInterface) getAliasByName(configName string, name string) p
 func (m *masterOffsetInterface) set(configName string, value string) {
 	m.Lock()
 	defer m.Unlock()
-	alias := ""
-	if value != "" {
-		r := []rune(value)
-		alias = string(r[:len(r)-1]) + "x"
-	}
 	m.iface[configName] = ptpInterface{
 		name:  value,
-		alias: alias,
+		alias: utils.GetAlias(value),
 	}
 }
 

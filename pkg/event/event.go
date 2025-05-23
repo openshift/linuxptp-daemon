@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/debug"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
@@ -726,23 +727,13 @@ connect:
 
 				// Update the metrics
 				if !e.stdoutToSocket { // if events not enabled
-					eventIface := event.IFace
-					if eventIface != "" {
-						r := []rune(eventIface)
-						eventIface = string(r[:len(r)-1]) + "x"
-					}
-					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), eventIface)
+					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), utils.GetAlias(event.IFace))
 					//  update all metric that was sent to events
 					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
 
 					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
 					if gmState.gmIFace != GM_INTERFACE_UNKNOWN { // race condition ;
-						gmIface := gmState.gmIFace
-						if gmIface != "" {
-							r := []rune(gmIface)
-							gmIface = string(r[:len(r)-1]) + "x"
-						}
-						e.UpdateClockStateMetrics(gmState.state, string(GM), gmIface)
+						e.UpdateClockStateMetrics(gmState.state, string(GM), utils.GetAlias(gmState.gmIFace))
 					}
 				}
 
@@ -910,11 +901,7 @@ func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace st
 }
 
 func (e *EventHandler) updateMetrics(cfgName string, process EventSource, processData map[ValueType]interface{}, d *DataDetails) {
-	iface := d.IFace
-	if len(d.IFace) > 0 {
-		r := []rune(iface)
-		iface = string(r[:len(r)-1]) + "x"
-	}
+	iface := utils.GetAlias(d.IFace)
 
 	for dataType, value := range processData { // update process with metrics
 		var dataValue float64

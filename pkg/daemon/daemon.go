@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 
@@ -1189,8 +1190,7 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 
 	} else {
 		if iface != "" && iface != clockRealTime {
-			r := []rune(iface)
-			iface = string(r[:len(r)-1]) + "x"
+			iface = utils.GetAlias(iface)
 		}
 		switch ptpState {
 		case event.PTP_LOCKED:
