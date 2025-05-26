@@ -531,11 +531,11 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 	// If unset default to clock type inferred from ptp4l
 	if clockType == event.ClockUnset {
-		ptp4lOutput := &ptp4lConf{}
+		ptp4lOutput := &Ptp4lConf{}
 		// Parsing ptp4l needs to be done here to get the fallback clock type.
 		// Needs to be done outside the loop as we need to guarantee clockType
 		// set before the ts2phcProcessName case where it is used.
-		err = ptp4lOutput.populatePtp4lConf(nodeProfile.Ptp4lConf)
+		err = ptp4lOutput.PopulatePtp4lConf(nodeProfile.Ptp4lConf)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return err
@@ -610,13 +610,12 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			messageTag = fmt.Sprintf("[synce4l.%d.config]", runID)
 		}
 
-		output := &ptp4lConf{}
-		err = output.populatePtp4lConf(configInput)
+		output := &Ptp4lConf{}
+		err = output.PopulatePtp4lConf(configInput)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return err
 		}
-		output.profile_name = *nodeProfile.Name
 
 		if configOpts == nil || *configOpts == "" {
 			glog.Infof("configOpts empty, skipping: %s", pProcess)
@@ -624,30 +623,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 
 		if nodeProfile.Interface != nil && *nodeProfile.Interface != "" {
-			output.sections = append([]ptp4lConfSection{{
-				options:     map[string]string{},
-				sectionName: fmt.Sprintf("[%s]", *nodeProfile.Interface)}}, output.sections...)
+			output.AddInterfaceSection(*nodeProfile.Interface)
 		} else {
 			iface := string("")
 			nodeProfile.Interface = &iface
 		}
 
-		for index, section := range output.sections {
-			if section.sectionName == "[global]" {
-				section.options["message_tag"] = messageTag
-				if socketPath != "" {
-					section.options["uds_address"] = socketPath
-				}
-				if gnssSerialPort, ok := section.options["ts2phc.nmea_serialport"]; ok {
-					output.gnss_serial_port = strings.TrimSpace(gnssSerialPort)
-					section.options["ts2phc.nmea_serialport"] = GPSPIPE_SERIALPORT
-				}
-				if _, ok := section.options["leapfile"]; ok || pProcess == ts2phcProcessName { // not required to check process if leapfile is always included
-					section.options["leapfile"] = fmt.Sprintf("%s/%s", config.DefaultLeapConfigPath, os.Getenv("NODE_NAME"))
-				}
-				output.sections[index] = section
-			}
-		}
+		output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+
+		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
 		// This adds the flags needed for monitor
 		addFlagsForMonitor(p, configOpts, output, dn.stdoutToSocket)
@@ -655,9 +639,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		var relations *synce.Relations
 		var ifaces config.IFaces
 		if pProcess == syncEProcessName {
-			configOutput, relations = output.renderSyncE4lConf(nodeProfile.PtpSettings)
+			configOutput, relations = output.RenderSyncE4lConf(nodeProfile.PtpSettings)
 		} else {
-			configOutput, ifaces = output.renderPtp4lConf()
+			configOutput, ifaces = output.RenderPtp4lConf()
 			for i := range ifaces {
 				ifaces[i].PhcId = ptpnetwork.GetPhcId(ifaces[i].Name)
 			}
