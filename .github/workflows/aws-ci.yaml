@@ -1,7 +1,7 @@
 name: CI tests AWS
 on:
   pull_request_target:
-    types: [labeled, synchronize]  # Triggered when the PR is labeled or synchronized
+    types: [labeled, synchronize]  # Triggered when the PR is labeled or synchronized (PR code changed)
 permissions:
   id-token: write
   contents: read
@@ -17,15 +17,27 @@ jobs:
           script: |
             const label = "ok-to-test";
             const pr = context.payload.pull_request;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
             const labels = pr.labels.map(l => l.name);
-            if (labels.includes(label)) {
+
+            if (!labels.includes(label)) {
+              core.setFailed(`Missing required '${label}' label. PR is not ok to test.`);
+              return;
+            }
+            console.log(`eventName='${context.eventName}', action='${context.payload.action}'.`)
+            // Only remove the label if this is a new commit
+            if (context.eventName === 'pull_request_target' && context.payload.action === 'synchronize') {
               await github.rest.issues.removeLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner,
+                repo,
                 issue_number: pr.number,
-                name: label
+                name: label,
               });
-              console.log(`Removed ${label} due to new push`);
+              core.setFailed(`Removed '${label}' due to new push to PR. Please add new ok-to-test label to test.`);
+            } else {
+              console.log(`Label '${label}' found — code not changed, still ok to test.`);
             }
       - name: Checkout the code
         uses: actions/checkout@v3
