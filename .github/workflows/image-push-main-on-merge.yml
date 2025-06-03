@@ -3,7 +3,7 @@ name: "Push linuxptp daemon on merge to main"
 permissions:
   contents: read
   packages: write  # This gives GitHub Actions permission to push to GHCR
-  
+
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
   BUILD_PLATFORMS: linux/amd64
@@ -16,7 +16,7 @@ on:
 
 jobs:
   build-and-push-image-linuxptp-daemon:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
         uses: actions/checkout@v3
@@ -29,20 +29,19 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username:  ${{github.repository_owner}}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-               
 
       - name: Build and push linuxptp-daemon
         if: ${{ github.repository_owner == env.image-push-owner }}
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true 
+          push: true
           platforms: ${{ env.BUILD_PLATFORMS }}
-          sbom: false 
-          provenance: false 
+          sbom: false
+          provenance: false
           tags: |
-             ${{ env.IMAGE_NAME }}:latest
-             ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
           file: ./Dockerfile
