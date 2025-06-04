@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/openshift/linuxptp-daemon/pkg/synce"
+	"github.com/openshift/linuxptp-daemon/pkg/utils"
 
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 
@@ -1090,8 +1091,7 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 
 	} else {
 		if iface != "" && iface != clockRealTime {
-			r := []rune(iface)
-			iface = string(r[:len(r)-1]) + "x"
+			iface = utils.GetAlias(iface)
 		}
 		switch ptpState {
 		case event.PTP_LOCKED:
