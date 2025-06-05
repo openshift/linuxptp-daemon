@@ -12,10 +12,11 @@ const (
 
 // Comparible versions the semver version we compare to
 var (
-	VersionLinuxPTP3112 = mustGetSemver(linuxPTPVersion3112)
-	VersionLinuxPTP3116 = mustGetSemver(linuxPTPVersion3116)
-	VersionLinuxPTP422  = mustGetSemver(linuxPTPVersion422)
-	VersionLinuxPTP441  = mustGetSemver(linuxPTPVersion441)
+	VersionLinuxPTP3112   = mustGetSemver(linuxPTPVersion3112)
+	VersionLinuxPTP3116   = mustGetSemver(linuxPTPVersion3116)
+	VersionLinuxPTP422    = mustGetSemver(linuxPTPVersion422)
+	VersionLinuxPTP441    = mustGetSemver(linuxPTPVersion441)
+	LatestLinuxPTPVersion = VersionLinuxPTP441
 )
 
 func getLinuxPTPFeatures(versionStr string) *Features {
