@@ -18,6 +18,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/daemon"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/features"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
@@ -125,6 +126,18 @@ func main() {
 	defer close(lm.Close)
 
 	tracker := &daemon.ReadyTracker{}
+
+	version := features.GetLinuxPTPPackageVersion()
+	ocpVersion := os.Getenv("BUILD_VERSION")
+	if ocpVersion == "" {
+		ocpVersion = features.LatestOCPInMatrix
+	} else {
+		ocpVersion, _ = strings.CutPrefix(ocpVersion, "v")
+		ocpVersion = strings.Join(strings.Split(ocpVersion, ".")[:2], ".")
+	}
+	// TODO: version needs to be sent to cloud event proxy when we intergrate feature flags there
+	features.SetFlags(version, ocpVersion)
+	features.Flags.Print()
 
 	go daemon.New(
 		nodeName,
