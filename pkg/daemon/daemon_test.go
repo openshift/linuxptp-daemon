@@ -470,3 +470,74 @@ func TestDaemon_ProcessSynceLogs(t *testing.T) {
 
 	}
 }
+
+type populateAndRenderPtp4lConfTestCase struct {
+	profileName    string
+	testConf       string
+	expectedOutput string
+	testName       string
+	iface          string
+	messageTag     string
+	socketPath     string
+	pProcess       string
+}
+
+func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCase {
+	ret := []populateAndRenderPtp4lConfTestCase{
+		{
+			profileName:    "OC",
+			testConf:       "[global]\nslaveOnly 1",
+			expectedOutput: "#profile: OC\n\n[global]\nslaveOnly 1\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens2f0]",
+			testName:       "Basic OC test",
+			iface:          "ens2f0",
+			messageTag:     "test message_tag",
+			socketPath:     "/var/run/ptp4l.0.socket",
+			pProcess:       "",
+		},
+		{
+			profileName:    "BC",
+			testConf:       "[global]\nslaveOnly 0\n[ens1f0]\nmasterOnly 0\n[ens1f1]\nmasterOnly 1",
+			expectedOutput: "#profile: BC\n\n[global]\nslaveOnly 0\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens1f0]\nmasterOnly 0\n[ens1f1]\nmasterOnly 1",
+			testName:       "Basic BC test",
+			iface:          "",
+			messageTag:     "test message_tag",
+			socketPath:     "/var/run/ptp4l.0.socket",
+			pProcess:       "",
+		},
+		{
+			profileName:    "GM",
+			testConf:       "[global]\nslaveOnly 0\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 1",
+			expectedOutput: "#profile: GM\n\n[global]\nslaveOnly 0\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 1",
+			testName:       "Basic GM test",
+			iface:          "",
+			messageTag:     "test message_tag",
+			socketPath:     "/var/run/ptp4l.0.socket",
+			pProcess:       "",
+		},
+		{
+			profileName:    "SyncE",
+			testConf:       "[global]\nlogging_level 7\nuse_syslog 0\nverbose 1\n[<synce1>]\ndnu_prio 0xFF\nnetwork_option 2\nextended_tlv 1\nrecover_time 60\nclock_id\nmodule_name ice\n[enp59s0f0np0]\n[{SMA1}]\nboard_label SMA1\ninput_QL 0x1",
+			expectedOutput: "#profile: SyncE\n\n[global]\nlogging_level 7\nuse_syslog 0\nverbose 1\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[<synce1>]\ndnu_prio 0xFF\nnetwork_option 2\nextended_tlv 1\nrecover_time 60\nmodule_name ice\n[enp59s0f0np0]\n[{SMA1}]\nboard_label SMA1\ninput_QL 0x1",
+			testName:       "Basic SyncE test",
+			iface:          "",
+			messageTag:     "test message_tag",
+			socketPath:     "/var/run/ptp4l.0.socket",
+			pProcess:       "",
+		},
+	}
+	return ret
+}
+
+func TestDaemon_PopulateAndRenderPtp4lConf(t *testing.T) {
+	testCases := initPopulateAndRenderPtp4lConfTestCase()
+	for _, tc := range testCases {
+		conf := &daemon.Ptp4lConf{}
+		conf.PopulatePtp4lConf(&tc.testConf)
+		if tc.iface != "" {
+			conf.AddInterfaceSection(tc.iface)
+		}
+		conf.ExtendGlobalSection(tc.profileName, tc.messageTag, tc.socketPath, tc.pProcess)
+		actualOutput, _ := conf.RenderPtp4lConf()
+		assert.Equal(t, tc.expectedOutput, actualOutput, fmt.Sprintf("Rendered output doesn't match expected: %s", tc.testName))
+	}
+}
