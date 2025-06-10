@@ -241,6 +241,13 @@ var testCases = []TestCase{
 }
 
 func Test_ProcessPTPMetrics(t *testing.T) {
+	skip, teardownTest := testhelpers.SetupForTestGM()
+	defer teardownTest()
+	if skip {
+		t.Skip("GM is not supported")
+		t.SkipNow()
+	}
+
 	leap.MockLeapFile()
 	defer func() {
 		close(leap.LeapMgr.Close)
@@ -288,6 +295,13 @@ func Test_ProcessPTPMetrics(t *testing.T) {
 }
 
 func TestDaemon_ApplyHaProfiles(t *testing.T) {
+	skip, teardownTest := testhelpers.SetupForTestBCPTPHA()
+	defer teardownTest()
+	if skip {
+		t.Skip("BC PTP-HA is not supported")
+		t.SkipNow()
+	}
+
 	p1 := ptpv1.PtpProfile{
 		Name: pointer.String("profile1"),
 	}
@@ -439,6 +453,13 @@ func InitSynceLogTestCase() {
 func TestDaemon_ProcessSynceLogs(t *testing.T) {
 	// Printing results
 	InitSynceLogTestCase()
+	skip, teardownTest := testhelpers.SetupForTestGMSyncE()
+	defer teardownTest()
+	if skip {
+		t.Skip("SyncE is not enabled")
+		t.SkipNow()
+	}
+
 	pm = daemon.NewProcessManager()
 	relations := synce.Relations{Devices: make([]*synce.Config, 1)}
 	relations.Devices[0] = &synce.Config{
