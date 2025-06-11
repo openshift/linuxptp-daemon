@@ -40,7 +40,7 @@ jobs:
               console.log(`Label '${label}' found — code not changed, still ok to test.`);
             }
       - name: Checkout the code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: k8snetworkplumbingwg/ptp-operator
           ref: main
@@ -50,7 +50,7 @@ jobs:
         id: sha
         run: |
           sed -i '/^RUN git clone -b main https:\/\/github.com\/k8snetworkplumbingwg\/linuxptp-daemon.git  \/go\/src\/github.com\/k8snetworkplumbingwg\/linuxptp-daemon$/c\
-          RUN git clone -b main https://github.com/k8snetworkplumbingwg/linuxptp-daemon.git  /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon\nRUN git checkout ${{ github.sha }}' ./ptp-operator/ptp-tools/Dockerfile.lptpd
+          RUN git clone -b ${{ github.event.pull_request.head.ref }} ${{ github.event.pull_request.head.repo.full_name }}  /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon' ./ptp-operator/ptp-tools/Dockerfile.lptpd
           cat ./ptp-operator/ptp-tools/Dockerfile.lptpd
 
       - name: Configure AWS credentials
