@@ -109,13 +109,13 @@ func sendDelayCompensation(comp *[]delayCompensation, DpllPins []*dpll.PinInfo) 
 			if err != nil {
 				return fmt.Errorf("failed to parse clock id %s: %v", dc.clockId, err)
 			}
-			if desiredClockId == pin.ClockId && strings.EqualFold(pin.BoardLabel, dc.pinLabel) {
-				err = conn.PinPhaseAdjust(dpll.PinPhaseAdjustRequest{Id: pin.Id, PhaseAdjust: dc.DelayPs})
+			if desiredClockId == pin.ClockID && strings.EqualFold(pin.BoardLabel, dc.pinLabel) {
+				err = conn.PinPhaseAdjust(dpll.PinPhaseAdjustRequest{ID: pin.ID, PhaseAdjust: dc.DelayPs})
 				if err != nil {
 					return fmt.Errorf("failed to send phase adjustment to %s clock id %d: %v",
 						pin.BoardLabel, desiredClockId, err)
 				}
-				glog.Infof("set phaseAdjust of pin %s at clock ID %x to %d ps", pin.BoardLabel, pin.ClockId, dc.DelayPs)
+				glog.Infof("set phaseAdjust of pin %s at clock ID %x to %d ps", pin.BoardLabel, pin.ClockID, dc.DelayPs)
 			} else {
 			}
 		}
