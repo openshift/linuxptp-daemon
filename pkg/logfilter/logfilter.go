@@ -61,8 +61,9 @@ func logFilterFromRegex(regex string, reducers []string, batchLengthStr string, 
 		reducerRegex, reducerRegexErr := regexp.Compile(reducer)
 		if reducerRegexErr != nil {
 			glog.Infof("Failed parsing reducer %s: %d.", reducer, reducerRegexErr)
+		} else {
+			filter.logFilterReducerRegexes = append(filter.logFilterReducerRegexes, reducerRegex)
 		}
-		filter.logFilterReducerRegexes = append(filter.logFilterReducerRegexes, reducerRegex)
 	}
 	return &filter
 }
