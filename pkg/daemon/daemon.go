@@ -509,7 +509,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	var configOpts *string
 	var messageTag string
 	var cmd *exec.Cmd
-	var pProcess string
 	var haProfile map[string][]string
 
 	ptpHAEnabled := len(listHaProfiles(nodeProfile)) > 0
@@ -543,8 +542,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		clockType = ptp4lOutput.clock_type
 	}
 
-	for _, p := range ptpProcesses {
-		pProcess = p
+	for _, pProcess := range ptpProcesses {
 		switch pProcess {
 		case ptp4lProcessName:
 			configInput = nodeProfile.Ptp4lConf
@@ -634,7 +632,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
 		// This adds the flags needed for monitor
-		addFlagsForMonitor(p, configOpts, output, dn.stdoutToSocket)
+		addFlagsForMonitor(pProcess, configOpts, output, dn.stdoutToSocket)
 		var configOutput string
 		var relations *synce.Relations
 		var ifaces config.IFaces
@@ -659,7 +657,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		args := strings.Split(cmdLine, " ")
 		cmd = exec.Command(args[0], args[1:]...)
 		dprocess := ptpProcess{
-			name:              p,
+			name:              pProcess,
 			ifaces:            ifaces,
 			processConfigPath: configPath,
 			processSocketPath: socketPath,
