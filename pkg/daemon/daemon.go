@@ -28,6 +28,8 @@ import (
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
+
 	"github.com/golang/glog"
 	"k8s.io/client-go/kubernetes"
 
@@ -171,7 +173,7 @@ type ptpProcess struct {
 	exitCh              chan bool
 	execMutex           sync.Mutex
 	stopped             bool
-	logFilterRegex      string
+	logFilters          []*logfilter.LogFilter // List of filters to apply to logs
 	cmd                 *exec.Cmd
 	depProcess          []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
 	nodeProfile         ptpv1.PtpProfile
@@ -322,6 +324,12 @@ func printWhenNotNil(p interface{}, description string) {
 	}
 }
 
+func printWhenNotEmpty(output string) {
+	if output != "" {
+		fmt.Printf("%s\n", output)
+	}
+}
+
 // SetProcessManager in tests
 func (dn *Daemon) SetProcessManager(p *ProcessManager) {
 	dn.processManager = p
@@ -453,22 +461,6 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	return nil
 }
 
-func getLogFilterRegex(nodeProfile *ptpv1.PtpProfile) string {
-	logFilterRegex := "^$"
-	if filter, ok := (*nodeProfile).PtpSettings["stdoutFilter"]; ok {
-		logFilterRegex = filter
-	}
-	if logReduce, ok := (*nodeProfile).PtpSettings["logReduce"]; ok {
-		if strings.ToLower(logReduce) == "true" {
-			logFilterRegex = fmt.Sprintf("%s|^.*master offset.*$", logFilterRegex)
-		}
-	}
-	if logFilterRegex != "^$" {
-		glog.Infof("%s logFilterRegex='%s'\n", *nodeProfile.Name, logFilterRegex)
-	}
-	return logFilterRegex
-}
-
 func printNodeProfile(nodeProfile *ptpv1.PtpProfile) {
 	glog.Infof("------------------------------------")
 	printWhenNotNil(nodeProfile.Name, "Profile Name")
@@ -509,7 +501,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	var configOpts *string
 	var messageTag string
 	var cmd *exec.Cmd
-	var pProcess string
 	var haProfile map[string][]string
 
 	ptpHAEnabled := len(listHaProfiles(nodeProfile)) > 0
@@ -543,8 +534,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		clockType = ptp4lOutput.clock_type
 	}
 
-	for _, p := range ptpProcesses {
-		pProcess = p
+	for _, pProcess := range ptpProcesses {
 		switch pProcess {
 		case ptp4lProcessName:
 			configInput = nodeProfile.Ptp4lConf
@@ -634,7 +624,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
 		// This adds the flags needed for monitor
-		addFlagsForMonitor(p, configOpts, output, dn.stdoutToSocket)
+		addFlagsForMonitor(pProcess, configOpts, output, dn.stdoutToSocket)
 		var configOutput string
 		var relations *synce.Relations
 		var ifaces config.IFaces
@@ -659,7 +649,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		args := strings.Split(cmdLine, " ")
 		cmd = exec.Command(args[0], args[1:]...)
 		dprocess := ptpProcess{
-			name:              p,
+			name:              pProcess,
 			ifaces:            ifaces,
 			processConfigPath: configPath,
 			processSocketPath: socketPath,
@@ -667,7 +657,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			messageTag:        messageTag,
 			exitCh:            make(chan bool),
 			stopped:           false,
-			logFilterRegex:    getLogFilterRegex(nodeProfile),
+			logFilters:        logfilter.GetLogFilters(pProcess, messageTag, (*nodeProfile).PtpSettings),
 			cmd:               cmd,
 			depProcess:        []process{},
 			nodeProfile:       *nodeProfile,
@@ -913,11 +903,6 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 		p.exitCh <- true
 	}()
 
-	logFilterRegex, regexErr := regexp.Compile(p.logFilterRegex)
-	if regexErr != nil {
-		glog.Infof("Failed parsing regex %s for %s: %d.  Defaulting to accept all", p.logFilterRegex, p.configName, regexErr)
-	}
-
 	for {
 		glog.Infof("Starting %s...", p.name)
 		glog.Infof("%s cmd: %+v", p.name, p.cmd)
@@ -937,9 +922,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
-					if regexErr != nil || !logFilterRegex.MatchString(output) {
-						fmt.Printf("%s\n", output)
-					}
+					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
@@ -989,10 +972,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 						p.pmcCheck = false
 						go p.updateClockClass(p.c)
 					}
-
-					if regexErr != nil || !logFilterRegex.MatchString(output) {
-						fmt.Printf("%s\n", output)
-					}
+					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
 					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
 					// for ts2phc, we need to extract metrics to identify GM state
