@@ -322,6 +322,12 @@ func printWhenNotNil(p interface{}, description string) {
 	}
 }
 
+func printWhenNotEmpty(output string) {
+	if output != "" {
+		fmt.Printf("%s\n", output)
+	}
+}
+
 // SetProcessManager in tests
 func (dn *Daemon) SetProcessManager(p *ProcessManager) {
 	dn.processManager = p
@@ -936,7 +942,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 				for scanner.Scan() {
 					output := scanner.Text()
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
-						fmt.Printf("%s\n", output)
+						printWhenNotEmpty(output)
 					}
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
@@ -989,7 +995,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 					}
 
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
-						fmt.Printf("%s\n", output)
+						printWhenNotEmpty(output)
 					}
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
 					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
