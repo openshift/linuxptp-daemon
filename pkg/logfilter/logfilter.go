@@ -136,9 +136,18 @@ func parseOffsetStats(offsets []float64, fields []string) []any {
 		case "cnt":
 			val = len(offsets)
 		case "min":
-			val = int64(offsets[0])
+			if len(offsets) > 0 {
+				val = int64(offsets[0])
+			} else {
+				val = 0
+			}
+
 		case "max":
-			val = int64(offsets[len(offsets)-1])
+			if len(offsets) > 0 {
+				val = int64(offsets[len(offsets)-1])
+			} else {
+				val = 0
+			}
 		case "avg":
 			val = stat.Mean(offsets, nil)
 		case "med":
@@ -176,15 +185,14 @@ func FilterOutput(logFilters []*LogFilter, output string) string {
 					filteredVal = f
 				} else {
 					glog.Errorf("error parsing filtered value %s", err.Error())
+					continue
 				}
 			}
 			if filter.summaryText == "" {
 				skipOutput = true
 			} else if len(filter.offsets) > 0 && time.Now().After(filter.expiryTime) {
-				offsetStats := parseOffsetStats(filter.offsets, filter.summaryFields)
-				ret = fmt.Sprintf(filter.summaryText, offsetStats...)
-				filter.offsets = make([]float64, 0)
-				filter.expiryTime = time.Now().Add(filter.batchLength)
+				filter.offsets = append(filter.offsets, filteredVal)
+				ret = filter.FlushOutput()
 			} else {
 				filter.offsets = append(filter.offsets, filteredVal)
 				skipOutput = true
@@ -194,5 +202,14 @@ func FilterOutput(logFilters []*LogFilter, output string) string {
 	if skipOutput {
 		ret = ""
 	}
+	return ret
+}
+
+// FlushOutput will get offset stats and reset list
+func (filter *LogFilter) FlushOutput() string {
+	offsetStats := parseOffsetStats(filter.offsets, filter.summaryFields)
+	ret := fmt.Sprintf(filter.summaryText, offsetStats...)
+	filter.offsets = make([]float64, 0)
+	filter.expiryTime = time.Now().Add(filter.batchLength)
 	return ret
 }
