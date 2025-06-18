@@ -360,7 +360,7 @@ func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.Pi
 				glog.Info("discarding on invalid lock status: ", replyHr)
 				continue
 			}
-			glog.Info(replyHr, " ", d.iface)
+			glog.Info(string(replyHr), " ", d.iface)
 			switch nl.GetDpllType(reply.Type) {
 			case "eec":
 				d.frequencyStatus = int64(reply.LockStatus)
