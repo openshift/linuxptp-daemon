@@ -864,14 +864,14 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 			var parseError error
 			var clockClass float64
 			if clockClass, parseError = strconv.ParseFloat(matches[1], 64); parseError == nil {
+				// ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
+				// print every minute or when the clock class changes
+				clockClassOut = fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, clockClass)
 				if clockClass != p.parentClockClass {
 					p.parentClockClass = clockClass
 					glog.Infof("clock change event identified")
-					fmt.Printf("%s", clockClassOut)
+					glog.Infof("%s", clockClassOut)
 				}
-				//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
-				// change to pint every minute or when the clock class changes
-				clockClassOut = fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, p.parentClockClass)
 				if c == nil {
 					UpdateClockClassMetrics(clockClass) // no socket then update metrics
 				} else {
