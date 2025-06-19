@@ -2,10 +2,18 @@ package constants
 
 // Process names used across the parser package
 const (
-	PTP4L   = "ptp4l"
+	// PTP4L ...
+	PTP4L = "ptp4l"
+	// PHC2SYS ...
 	PHC2SYS = "phc2sys"
-	TS2PHC  = "ts2phc"
-	GM      = "gm"
-	GNSS    = "gnss"
-	SYNCE   = "synce"
+	// TS2PHC ...
+	TS2PHC = "ts2phc"
+	// GM ...
+	GM = "gm"
+	// GNSS ...
+	GNSS = "gnss"
+	// SYNCE ...
+	SYNCE = "synce"
+	// DPLL ...
+	DPLL = "dpll"
 )

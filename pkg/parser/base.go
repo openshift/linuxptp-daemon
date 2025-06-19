@@ -1,9 +1,7 @@
 package parser
 
 import (
-	"fmt"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/state"
-	"strings"
+	"regexp"
 )
 
 // MetricsExtractor is an interface for extracting metrics from log lines.
@@ -12,66 +10,48 @@ type MetricsExtractor interface {
 	Extract(logLine string) (*Metrics, error)
 }
 
+// Populatable ...
+type Populatable interface {
+	Populate(line string, matched, fields []string) error
+}
+
+// RegexExtractorPair ...
+type RegexExtractorPair[P Populatable] struct {
+	Regex     *regexp.Regexp
+	Extractor func(P) (*Metrics, *PTPEvent, error)
+}
+
 // BaseMetricsExtractor is a base struct for all metrics extractors.
 // It provides common functionality for extracting metrics from log lines.
-type BaseMetricsExtractor struct {
-	ProcessNameStr   string                                 // Process name (e.g., "ptp4l", "phc2sys")
-	ExtractSummaryFn func(logLine string) (*Metrics, error) // Function to extract summary metrics
-	ExtractRegularFn func(logLine string) (*Metrics, error) // Function to extract regular metrics
-	ExtraEventFn     func(logLine string) (*PTPEvent, error) // Function to extract events
-	State            *state.SharedState                      // Shared state for tracking PTP configuration
+type BaseMetricsExtractor[P Populatable] struct {
+	ProcessNameStr      string // Process name (e.g., "ptp4l", "phc2sys")
+	NewParsed           func() P
+	RegexExtractorPairs []RegexExtractorPair[P]
 }
 
 // ProcessName returns the name of the process that is being extracted.
-func (b *BaseMetricsExtractor) ProcessName() string {
+func (b *BaseMetricsExtractor[P]) ProcessName() string {
 	return b.ProcessNameStr
 }
 
 // Extract extracts metrics from a log line.
 // It determines the type of log line and calls the appropriate extraction function.
-func (b *BaseMetricsExtractor) Extract(output string) (*Metrics, *PTPEvent, error) {
-	if output == "" {
-		return nil, nil, fmt.Errorf("empty log line")
+func (b *BaseMetricsExtractor[P]) Extract(logLine string) (*Metrics, *PTPEvent, error) {
+	if logLine == "" {
+		return nil, nil, nil
 	}
-
-	output = removeMessageSuffix(output)
-
-	// Determine log line type and extract accordingly
-	if strings.Contains(output, " max ") {
-		metrics, err := b.ExtractSummaryFn(output)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to extract summary metrics: %v", err)
+	for _, pair := range b.RegexExtractorPairs {
+		match := pair.Regex.FindStringSubmatch(logLine)
+		if match == nil { // No match move on to next one
+			continue
 		}
-		return metrics, nil, nil
-	} else if strings.Contains(output, " offset ") {
-		metrics, err := b.ExtractRegularFn(output)
+		groups := pair.Regex.SubexpNames()
+		result := b.NewParsed()
+		err := result.Populate(logLine, match, groups)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to extract regular metrics: %v", err)
+			return nil, nil, err
 		}
-		return metrics, nil, nil
-	} else if b.ExtraEventFn != nil {
-		event, err := b.ExtraEventFn(output)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to extract event: %v", err)
-		}
-		return nil, event, nil
+		return pair.Extractor(result)
 	}
-
-	return nil, nil, fmt.Errorf("log output is not parsable: %s", output)
-}
-
-// ExtractEvent extracts an event from a log line.
-func (b *BaseMetricsExtractor) ExtractEvent(output string) (*PTPEvent, error) {
-	if output == "" {
-		return nil, fmt.Errorf("empty log line")
-	}
-
-	if b.ExtraEventFn != nil {
-		event, err := b.ExtraEventFn(output)
-		if err != nil {
-			return nil, fmt.Errorf("failed to extract event: %v", err)
-		}
-		return event, nil
-	}
-	return nil, fmt.Errorf("event extraction not supported for this extractor")
+	return nil, nil, nil
 }

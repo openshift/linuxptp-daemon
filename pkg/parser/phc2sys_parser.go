@@ -1,139 +1,183 @@
 package parser
 
 import (
-	"fmt"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
-	sstate "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/state"
+	"errors"
 	"regexp"
+	"strconv"
+
+	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
 // MetricsExtractor is an interface for extracting metrics from log lines.
 var (
 	// phc2sys[3560354.300]: [ptp4l.0.config] CLOCK_REALTIME rms 4 max 4 freq -76829 +/- 0 delay 1085 +/- 0
-	summaryPhc2SysRegex = regexp.MustCompile(`^phc2sys\[\d+\.\d+\]:\s+\[.*\.\d+\.config:?\d*\]\s*(?P<interface>\w+)?\s+(?P<clock>\w+)\s+rms\s+(?P<rms>\d+)\s+max\s+(?P<max>-?\d+)\s+freq\s+(?P<freq_adj>[-+]\d+)\s+\+/-\s+\d+\s*(?:delay\s+(?P<delay>\d+)\s+\+/-\s+\d+)?$`)
-	regularPhc2SysRegex = regexp.MustCompile(`^phc2sys\[\d+\.\d+\]:\s+\[.*\.\d+\.config:?\d*\]\s*(?P<interface>\w+)?\s+(?P<clock>\w+)\s+(?P<offset_type>phc|sys)\s+offset\s+(?P<offset>\d+)\s(?P<status>s\d)\s+freq\s+(?P<freq_adj>[-+]\d+)\s*(?:delay\s+(?P<delay>\d+))?$`)
+	summaryPhc2SysRegex = regexp.MustCompile(
+		`^phc2sys\[\d+\.\d+\]:` +
+			`\s+\[.*\.\d+\.config:?\d*\]` +
+			`\s+CLOCK_REALTIME` +
+			`\s+rms\s+(?P<offset>\d+)` +
+			`\s+max\s+(?P<max>-?\d+)` +
+			`\s+freq\s+(?P<freq_adj>[-+]\d+)\s+(?:\+/-\s+\d+)` +
+			`\s*(?:delay\s+(?P<delay>\d+)\s+\+/-\s+\d+)?$`,
+	)
+	regularPhc2SysRegex = regexp.MustCompile(
+		`^phc2sys\[\d+\.\d+\]:` +
+			`\s+\[.*\.\d+\.config:?\d*\]` +
+			`\s+CLOCK_REALTIME` +
+			`\s+(?P<source>phc|sys)` +
+			`\s+offset\s+(?P<offset>\d+)` +
+			`\s+(?P<clock_state>s\d)` +
+			`\s+freq\s+(?P<freq_adj>[-+]\d+)` +
+			`\s*(?:delay\s+(?P<delay>\d+))?$`,
+	)
 )
 
+type phc2sysParsed struct {
+	Raw        string
+	Offset     *float64
+	MaxOffset  *float64
+	FreqAdj    *float64
+	Delay      *float64
+	ClockState string
+	Source     string
+}
+
+// Populate ...
+func (p *phc2sysParsed) Populate(line string, matched, feilds []string) error {
+	p.Raw = line
+	for i, field := range feilds {
+		switch field {
+		case "offset":
+			if matched[i] == "" {
+				return errors.New("offset cannot be empty")
+			}
+			offset, err := strconv.ParseFloat(matched[i], 64)
+			if err != nil {
+				return err
+			}
+			p.Offset = &offset
+		case "max":
+			if matched[i] == "" {
+				return errors.New("max cannot be empty")
+			}
+			maxOffset, err := strconv.ParseFloat(matched[i], 64)
+			if err != nil {
+				return err
+			}
+			p.MaxOffset = &maxOffset
+		case "freq_adj":
+			if matched[i] == "" {
+				return errors.New("freq_adj cannot be empty")
+			}
+			freqAdj, err := strconv.ParseFloat(matched[i], 64)
+			if err != nil {
+				return err
+			}
+			p.FreqAdj = &freqAdj
+		case "delay":
+			if matched[i] == "" { // Delay is optional
+				continue
+			}
+			delay, err := strconv.ParseFloat(matched[i], 64)
+			if err != nil {
+				return err
+			}
+			p.Delay = &delay
+		case "clock_state":
+			p.ClockState = matched[i]
+		case "source":
+			p.Source = matched[i]
+		}
+	}
+	return nil
+}
+
 // NewPhc2SysExtractor creates a new metrics extractor for phc2sys process
-func NewPhc2SysExtractor(state *sstate.SharedState) *BaseMetricsExtractor {
-	return &BaseMetricsExtractor{
+func NewPhc2SysExtractor() *BaseMetricsExtractor[*phc2sysParsed] {
+	return &BaseMetricsExtractor[*phc2sysParsed]{
 		ProcessNameStr: constants.PHC2SYS,
-		ExtractSummaryFn: func(logLine string) (*Metrics, error) {
-			return extractSummaryPhc2Sys(logLine)
+		NewParsed:      func() *phc2sysParsed { return &phc2sysParsed{} },
+		RegexExtractorPairs: []RegexExtractorPair[*phc2sysParsed]{
+			{
+				Regex: summaryPhc2SysRegex,
+				Extractor: func(parsed *phc2sysParsed) (*Metrics, *PTPEvent, error) {
+					metric, err := extractSummaryPhc2Sys(parsed)
+					return metric, nil, err
+				},
+			},
+			{
+				Regex: regularPhc2SysRegex,
+				Extractor: func(parsed *phc2sysParsed) (*Metrics, *PTPEvent, error) {
+					metric, err := extractRegularPhc2Sys(parsed)
+					return metric, nil, err
+				},
+			},
 		},
-		ExtractRegularFn: func(logLine string) (*Metrics, error) {
-			return extractRegularPhc2Sys(logLine)
-		},
-		ExtraEventFn: nil,
-		State:        state,
 	}
 }
 
 // extractSummaryPhc2Sys parses summary metrics from phc2sys output
 // Expected format: phc2sys[3560354.300]: [ptp4l.0.config] CLOCK_REALTIME rms 4 max 4 freq -76829 +/- 0 delay 1085 +/- 0
-func extractSummaryPhc2Sys(output string) (*Metrics, error) {
-	if output == "" {
-		return nil, fmt.Errorf("empty output")
+func extractSummaryPhc2Sys(parsed *phc2sysParsed) (*Metrics, error) {
+	if parsed.Offset == nil {
+		return nil, errors.New("failed to find offset")
 	}
 
-	match := summaryPhc2SysRegex.FindStringSubmatch(output)
-	if match == nil {
-		return nil, fmt.Errorf("no match for summary regex: %s", output)
+	if parsed.MaxOffset == nil {
+		return nil, errors.New("failed to find max offset")
 	}
 
-	groups := summaryPhc2SysRegex.SubexpNames()
-	result := map[string]string{}
-	for i, name := range groups {
-		if i > 0 && name != "" {
-			result[name] = match[i]
-		}
+	if parsed.FreqAdj == nil {
+		return nil, errors.New("failed to find freq adj")
 	}
 
-	if result["clock"] != clockRealTime {
-		return nil, fmt.Errorf("non-realtime clock: %s", result["clock"])
-	}
-
-	rmsOffset, err := validateFloat(result["rms"], "rms offset")
-	if err != nil {
-		return nil, err
-	}
-
-	maxOffset, err := validateFloat(result["max"], "max offset")
-	if err != nil {
-		return nil, err
-	}
-
-	freqAdj, err := validateFloat(result["freq_adj"], "frequency adjustment")
-	if err != nil {
-		return nil, err
-	}
-
-	delay, err := validateFloat(result["delay"], "delay")
-	if err != nil {
-		// Delay is optional, set to 0 if not present
-		delay = 0
+	var delay float64
+	if parsed.Delay == nil {
+		glog.Warning("delay is missing")
+	} else {
+		delay = *parsed.Delay
 	}
 
 	return &Metrics{
-		Iface:     result["clock"],
-		Offset:    rmsOffset,
-		MaxOffset: maxOffset,
-		FreqAdj:   freqAdj,
+		Iface:     constants.ClockRealTime,
+		Offset:    *parsed.Offset,
+		MaxOffset: *parsed.MaxOffset,
+		FreqAdj:   *parsed.FreqAdj,
 		Delay:     delay,
-		Source:    master,
+		Source:    constants.Master,
 	}, nil
 }
 
 // extractRegularPhc2Sys parses regular metrics from phc2sys output
 // Expected format: phc2sys[10522413.392]: [ptp4l.0.config:6] CLOCK_REALTIME phc offset 8 s2 freq -6990 delay 502
-func extractRegularPhc2Sys(output string) (*Metrics, error) {
-	if output == "" {
-		return nil, fmt.Errorf("empty output")
+func extractRegularPhc2Sys(parsed *phc2sysParsed) (*Metrics, error) {
+	if parsed.Offset == nil {
+		return nil, errors.New("failed to find offset")
+	}
+	if parsed.FreqAdj == nil {
+		return nil, errors.New("failed to find freq adj")
 	}
 
-	match := regularPhc2SysRegex.FindStringSubmatch(output)
-	if match == nil {
-		return nil, fmt.Errorf("no match for regular regex: %s", output)
+	var delay float64
+	if parsed.Delay == nil {
+		glog.Warning("delay is missing")
+	} else {
+		delay = *parsed.Delay
 	}
 
-	groups := regularPhc2SysRegex.SubexpNames()
-	result := map[string]string{}
-	for i, name := range groups {
-		if i > 0 && name != "" {
-			result[name] = match[i]
-		}
+	if parsed.Source == "" {
+		return nil, errors.New("failed to find source")
 	}
-
-	if result["clock"] != clockRealTime {
-		return nil, fmt.Errorf("ignore non CLOCK_REALTIME: %s", output)
-	}
-
-	ptpOffset, err := validateFloat(result["offset"], "offset")
-	if err != nil {
-		return nil, err
-	}
-
-	freqAdj, err := validateFloat(result["freq_adj"], "frequency adjustment")
-	if err != nil {
-		return nil, err
-	}
-
-	delay, err := validateFloat(result["delay"], "delay")
-	if err != nil {
-		// Delay is optional, set to 0 if not present
-		delay = 0
-	}
-
-	clockState := parseClockState(result["status"])
-	source := result["offset_type"] // phc or sys
+	clockState := parseClockState(parsed.ClockState)
 
 	return &Metrics{
-		Iface:      result["clock"],
-		Offset:     ptpOffset,
-		MaxOffset:  ptpOffset,
-		FreqAdj:    freqAdj,
+		Iface:      constants.ClockRealTime,
+		Offset:     *parsed.Offset,
+		MaxOffset:  *parsed.Offset,
+		FreqAdj:    *parsed.FreqAdj,
 		Delay:      delay,
 		ClockState: clockState,
-		Source:     source,
+		Source:     parsed.Source,
 	}, nil
 }

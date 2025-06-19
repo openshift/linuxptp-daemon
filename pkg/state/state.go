@@ -5,9 +5,10 @@ package state
 
 import (
 	"fmt"
+	"sync"
+
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
-	"sync"
 )
 
 // PtpInterface represents a PTP interface with its name and alias
@@ -34,7 +35,6 @@ type masterOffsetSourceProcess struct { // current slave iface name
 // It handles synchronization of interface states, master-slave relationships,
 // and offset tracking across the PTP daemon.
 type SharedState struct {
-	sync.Mutex
 	masterOffsetIface  *masterOffsetInterface
 	slaveIface         *slaveInterface
 	masterOffsetSource *masterOffsetSourceProcess
@@ -44,16 +44,13 @@ type SharedState struct {
 func NewSharedState() *SharedState {
 	return &SharedState{
 		masterOffsetIface: &masterOffsetInterface{
-			RWMutex: sync.RWMutex{},
-			iface:   map[string]PtpInterface{},
+			iface: map[string]PtpInterface{},
 		},
 		slaveIface: &slaveInterface{
-			RWMutex: sync.RWMutex{},
-			name:    map[string]string{},
+			name: map[string]string{},
 		},
 		masterOffsetSource: &masterOffsetSourceProcess{
-			RWMutex: sync.RWMutex{},
-			name:    map[string]string{},
+			name: map[string]string{},
 		},
 	}
 }

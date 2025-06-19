@@ -1,10 +1,12 @@
 package parser
 
+import "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
+
 // PTPEvent represents an event extracted from a log line.
 type PTPEvent struct {
 	PortID int
 	Iface  string
-	Role   PTPPortRole // e.g. SLAVE, MASTER, FAULTY
+	Role   constants.PTPPortRole // e.g. SLAVE, MASTER, FAULTY
 	Raw    string
 	// original line
 }
@@ -18,6 +20,6 @@ type Metrics struct {
 	MaxOffset  float64
 	FreqAdj    float64
 	Delay      float64
-	ClockState string // e.g. LOCKED, FREERUN, HOLDOVER
-	Source     string // e.g. "phc", "sys", or "master"
+	ClockState constants.ClockState // e.g. LOCKED, FREERUN, HOLDOVER
+	Source     string               // e.g. "phc", "sys", or "master"
 }

@@ -2,32 +2,30 @@ package parser
 
 import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
-	sstate "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/state"
 )
 
-// NewGNSSExtractor NewGNSSTExtractor creates a new metrics extractor for GNSS process
-func NewGNSSExtractor(state *sstate.SharedState) *BaseMetricsExtractor {
-	return &BaseMetricsExtractor{
-		ProcessNameStr: constants.GNSS,
-		ExtractSummaryFn: func(logLine string) (*Metrics, error) {
-			return extractSummaryGNSS(logLine)
-		},
-		ExtractRegularFn: func(logLine string) (*Metrics, error) {
-			return extractRegularGNSS(logLine)
-		},
-		ExtraEventFn: nil,
-		State:        state,
+type gnssParsed struct {
+	Raw       string
+	Interface string
+}
+
+// Populate ...
+func (p *gnssParsed) Populate(line string, matched, fields []string) error {
+	p.Raw = line
+	for i, field := range fields {
+		switch field {
+		case constants.Interface:
+			p.Interface = matched[i]
+		}
 	}
+	return nil
 }
 
-// extractSummaryGNSS parses summary metrics from GNSS output
-func extractSummaryGNSS(output string) (*Metrics, error) {
-	// TODO: Implement GNSS summary metrics extraction
-	return nil, nil
-}
-
-// extractRegularGNSS parses regular metrics from GNSS output
-func extractRegularGNSS(output string) (*Metrics, error) {
-	// TODO: Implement GNSS regular metrics extraction
-	return nil, nil
+// NewGNSSExtractor NewGNSSTExtractor creates a new metrics extractor for GNSS process
+func NewGNSSExtractor() *BaseMetricsExtractor[*gnssParsed] {
+	return &BaseMetricsExtractor[*gnssParsed]{
+		ProcessNameStr:      constants.GNSS,
+		NewParsed:           func() *gnssParsed { return &gnssParsed{} },
+		RegexExtractorPairs: []RegexExtractorPair[*gnssParsed]{},
+	}
 }

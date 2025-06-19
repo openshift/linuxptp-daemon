@@ -2,37 +2,29 @@ package parser
 
 import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
-	_ "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/metrics"
-	sstate "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/state"
 )
 
-func NewSynceExtractor(state *sstate.SharedState) *BaseMetricsExtractor {
-	return &BaseMetricsExtractor{
-		ProcessNameStr: constants.SYNCE,
-		ExtractSummaryFn: func(logLine string) (*Metrics, error) {
-			return extractSummarySynce(logLine)
-		},
-		ExtractRegularFn: func(logLine string) (*Metrics, error) {
-			return extractRegularSynce(logLine)
-		},
-		ExtraEventFn: func(output string) (*PTPEvent, error) {
-			return extractEventSynce(output)
-		},
-		State: state,
+type syncEParsed struct {
+	Raw       string
+	Interface string
+}
+
+func (p *syncEParsed) Populate(line string, matched, fields []string) error {
+	p.Raw = line
+	for i, field := range fields {
+		switch field {
+		case constants.Interface:
+			p.Interface = matched[i]
+		}
 	}
+	return nil
 }
 
-func extractEventSynce(output string) (*PTPEvent, error) {
-	// TODO: Implement event extraction for synce
-	return nil, nil
-}
-
-func extractSummarySynce(output string) (*Metrics, error) {
-	// TODO: Implement summary extraction for synce
-	return nil, nil
-}
-
-func extractRegularSynce(output string) (*Metrics, error) {
-	// TODO: Implement regular extraction for synce
-	return nil, nil
+// NewSynceExtractor ...
+func NewSynceExtractor() *BaseMetricsExtractor[*syncEParsed] {
+	return &BaseMetricsExtractor[*syncEParsed]{
+		ProcessNameStr:      constants.SYNCE,
+		NewParsed:           func() *syncEParsed { return &syncEParsed{} },
+		RegexExtractorPairs: []RegexExtractorPair[*syncEParsed]{},
+	}
 }

@@ -1,36 +1,29 @@
 package parser
 
-import (
-	sstate "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/state"
-)
+import "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 
-func NewDPLLExtractor(state *sstate.SharedState) *BaseMetricsExtractor {
-	return &BaseMetricsExtractor{
-		ProcessNameStr: DPLL,
-		ExtractSummaryFn: func(logLine string) (*Metrics, error) {
-			return extractSummaryDPLL(logLine)
-		},
-		ExtractRegularFn: func(logLine string) (*Metrics, error) {
-			return extractRegularDPLL(logLine)
-		},
-		ExtraEventFn: func(logLine string) (*PTPEvent, error) {
-			return extractEventDPLL(logLine)
-		},
-		State: state,
+type dpllParsed struct {
+	Raw       string
+	Interface string
+}
+
+// Populate ...
+func (p *dpllParsed) Populate(line string, matched, fields []string) error {
+	p.Raw = line
+	for i, field := range fields {
+		switch field {
+		case constants.Interface:
+			p.Interface = matched[i]
+		}
 	}
+	return nil
 }
 
-func extractEventDPLL(logLine string) (*PTPEvent, error) {
-	// TODO: Implement DPLL event extraction
-	return nil, nil
-}
-
-func extractSummaryDPLL(logLine string) (*Metrics, error) {
-	// TODO: Implement DPLL summary extraction
-	return nil, nil
-}
-
-func extractRegularDPLL(logLine string) (*Metrics, error) {
-	// TODO: Implement DPLL regular extraction
-	return nil, nil
+// NewDPLLExtractor ...
+func NewDPLLExtractor() *BaseMetricsExtractor[*dpllParsed] {
+	return &BaseMetricsExtractor[*dpllParsed]{
+		ProcessNameStr:      constants.DPLL,
+		NewParsed:           func() *dpllParsed { return &dpllParsed{} },
+		RegexExtractorPairs: []RegexExtractorPair[*dpllParsed]{},
+	}
 }

@@ -1,12 +1,14 @@
 package metrics
 
 import (
+	"strconv"
+
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/prometheus/client_golang/prometheus"
-	"strconv"
 )
 
+// DeleteSynceMetrics ...
 func DeleteSynceMetrics(process, configName string, relations *synce.Relations) {
 	for _, device := range relations.Devices {
 		for _, iface := range device.Ifaces {
@@ -24,6 +26,7 @@ func DeleteSynceMetrics(process, configName string, relations *synce.Relations) 
 	}
 }
 
+// DeleteMetrics ...
 func DeleteMetrics(ifaces config.IFaces, haProfiles map[string][]string, process, config string) {
 	if process == "phc2sys" {
 		deleteOsClockStateMetrics(haProfiles)
@@ -49,6 +52,7 @@ func deleteOsClockStateMetrics(profiles map[string][]string) {
 	}
 }
 
+// DeleteProcessStatusMetrics ...
 func DeleteProcessStatusMetrics(config, process string) {
 	ProcessStatus.Delete(prometheus.Labels{"process": process, "node": NodeName, "config": config})
 	ProcessRestartCount.Delete(prometheus.Labels{"process": process, "node": NodeName, "config": config})

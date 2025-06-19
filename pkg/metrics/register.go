@@ -1,19 +1,23 @@
 package metrics
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
-	"sync"
 )
 
 var registerMetrics sync.Once
 
 const (
+	// PTPNamespace ...
 	PTPNamespace = "openshift"
+	// PTPSubsystem ...
 	PTPSubsystem = "ptp"
 )
 
 var (
+	// Offset ...
 	Offset = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: PTPNamespace,
@@ -22,6 +26,7 @@ var (
 			Help:      "",
 		}, []string{"from", "process", "node", "iface"})
 
+	// MaxOffset ...
 	MaxOffset = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: PTPNamespace,
@@ -30,6 +35,7 @@ var (
 			Help:      "",
 		}, []string{"from", "process", "node", "iface"})
 
+	// FrequencyAdjustment ...
 	FrequencyAdjustment = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: PTPNamespace,
@@ -38,6 +44,7 @@ var (
 			Help:      "",
 		}, []string{"from", "process", "node", "iface"})
 
+	// Delay ...
 	Delay = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: PTPNamespace,
@@ -73,6 +80,7 @@ var (
 			Help:      "0 = PASSIVE, 1 = SLAVE, 2 = MASTER, 3 = FAULTY, 4 = UNKNOWN, 5 = LISTENING",
 		}, []string{"process", "node", "iface"})
 
+	// ProcessStatus ...
 	ProcessStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: PTPNamespace,
@@ -81,6 +89,7 @@ var (
 			Help:      "0 = DOWN, 1 = UP",
 		}, []string{"process", "node", "config"})
 
+	// ProcessRestartCount ...
 	ProcessRestartCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: PTPNamespace,
@@ -140,5 +149,4 @@ func RegisterMetrics(nodeName string) {
 
 		NodeName = nodeName
 	})
-
 }
