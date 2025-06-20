@@ -165,13 +165,6 @@ func TestPTP4LEventParser(t *testing.T) {
 			logLine:       "ptp4l[4268779.809]: [ptp4l.0.config] port 1: INVALID_STATE",
 			expectedError: true,
 		},
-		// Regex skips this
-		//{
-		// 	name:          "Invalid port number",
-		// 	configName:    "ptp4l.0.config",
-		// 	logLine:       "ptp4l[4268779.809]: [ptp4l.0.config] port invalid: UNCALIBRATED to SLAVE",
-		// 	expectedError: true,
-		// },
 	}
 
 	for _, tt := range tests {
@@ -194,58 +187,3 @@ func TestPTP4LEventParser(t *testing.T) {
 		})
 	}
 }
-
-// Regex skips these.
-// func TestPTP4LParserErrorCases(t *testing.T) {
-// 	extractor := NewPTP4LExtractor()
-
-// 	tests := []struct {
-// 		name        string
-// 		logLine     string
-// 		configName  string
-// 		expectError bool
-// 	}{
-// 		{
-// 			name:        "Malformed summary metrics",
-// 			logLine:     "ptp4l[74737.942]: [ptp4l.0.config] rms invalid max 74 freq -16642",
-// 			configName:  "ptp4l.0.config",
-// 			expectError: true,
-// 		},
-// 		{
-// 			name:        "Malformed regular metrics",
-// 			logLine:     "ptp4l[365195.391]: [ptp4l.0.config] master offset invalid s2 freq -3972",
-// 			configName:  "ptp4l.0.config",
-// 			expectError: true,
-// 		},
-// 		{
-// 			name:        "Missing required fields",
-// 			logLine:     "ptp4l[74737.942]: [ptp4l.0.config]",
-// 			configName:  "ptp4l.0.config",
-// 			expectError: true,
-// 		},
-// 		{
-// 			name:        "Invalid clock state",
-// 			logLine:     "ptp4l[365195.391]: [ptp4l.0.config] master offset -1 invalid freq -3972",
-// 			configName:  "ptp4l.0.config",
-// 			expectError: true,
-// 		},
-// 	}
-
-// 	for _, tt := range tests {
-// 		t.Run(tt.name, func(t *testing.T) {
-// 			_, _, err := extractor.Extract(tt.logLine)
-// 			if tt.expectError {
-// 				assert.Error(t, err)
-// 			} else {
-// 				assert.NoError(t, err)
-// 			}
-
-// 			_, _, err = extractor.Extract(tt.logLine)
-// 			if tt.expectError {
-// 				assert.Error(t, err)
-// 			} else {
-// 				assert.NoError(t, err)
-// 			}
-// 		})
-// 	}
-// }

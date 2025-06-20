@@ -41,17 +41,30 @@ func (b *BaseMetricsExtractor[P]) Extract(logLine string) (*Metrics, *PTPEvent, 
 		return nil, nil, nil
 	}
 	for _, pair := range b.RegexExtractorPairs {
-		match := pair.Regex.FindStringSubmatch(logLine)
-		if match == nil { // No match move on to next one
-			continue
-		}
-		groups := pair.Regex.SubexpNames()
-		result := b.NewParsed()
-		err := result.Populate(logLine, match, groups)
+		parseResult, lineParsed, err := parseLine(logLine, pair.Regex, b.NewParsed)
 		if err != nil {
 			return nil, nil, err
 		}
-		return pair.Extractor(result)
+		if !lineParsed {
+			continue
+		}
+		return pair.Extractor(parseResult)
 	}
 	return nil, nil, nil
+}
+
+func parseLine[P Populatable](logLine string, regex *regexp.Regexp, newParseResult func() P) (P, bool, error) {
+	match := regex.FindStringSubmatch(logLine)
+
+	if match == nil { // No match move on to next one
+		return newParseResult(), false, nil
+	}
+	groups := regex.SubexpNames()
+
+	result := newParseResult()
+	err := result.Populate(logLine, match, groups)
+	if err != nil {
+		return newParseResult(), false, err
+	}
+	return result, true, nil
 }

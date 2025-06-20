@@ -65,19 +65,6 @@ func TestPhc2SysParser(t *testing.T) {
 				Source:     constants.Sys,
 			},
 		},
-		// With current approch these are just skipped
-		// {
-		// 	name:          "Invalid log line",
-		// 	configName:    "ptp4l.0.config",
-		// 	logLine:       "invalid log line",
-		// 	expectedError: true,
-		// },
-		// {
-		// 	name:          "Empty log line",
-		// 	configName:    "ptp4l.0.config",
-		// 	logLine:       "",
-		// 	expectedError: true,
-		// },
 	}
 
 	for _, tt := range tests {
@@ -107,52 +94,3 @@ func TestPhc2SysParser(t *testing.T) {
 		})
 	}
 }
-
-// These are just skipped
-// func TestPhc2SysParserErrorCases(t *testing.T) {
-// 	extractor := NewPhc2SysExtractor()
-
-// 	tests := []struct {
-// 		name        string
-// 		logLine     string
-// 		configName  string
-// 		expectError bool
-// 	}{
-// 		{
-// 			name:        "Malformed summary metrics",
-// 			logLine:     "phc2sys[3560354.300]: [ptp4l.0.config] CLOCK_REALTIME rms invalid max 4 freq -76829",
-// 			configName:  "ptp4l.0.config",
-// 			expectError: true,
-// 		},
-// 		{
-// 			name:        "Malformed regular metrics",
-// 			logLine:     "phc2sys[10522413.392]: [ptp4l.0.config:6] CLOCK_REALTIME phc offset invalid s2 freq -6990",
-// 			configName:  "ptp4l.0.config",
-// 			expectError: true,
-// 		},
-// 		{
-// 			name:        "Missing required fields",
-// 			logLine:     "phc2sys[3560354.300]: [ptp4l.0.config] CLOCK_REALTIME",
-// 			configName:  "ptp4l.0.config",
-// 			expectError: true,
-// 		},
-// 	}
-
-// 	for _, tt := range tests {
-// 		t.Run(tt.name, func(t *testing.T) {
-// 			_, _, err := extractor.Extract(tt.logLine)
-// 			if tt.expectError {
-// 				assert.Error(t, err)
-// 			} else {
-// 				assert.NoError(t, err)
-// 			}
-
-// 			_, _, err = extractor.Extract(tt.logLine)
-// 			if tt.expectError {
-// 				assert.Error(t, err)
-// 			} else {
-// 				assert.NoError(t, err)
-// 			}
-// 		})
-// 	}
-// }

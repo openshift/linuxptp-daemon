@@ -13,34 +13,38 @@ import (
 var (
 	// phc2sys[3560354.300]: [ptp4l.0.config] CLOCK_REALTIME rms 4 max 4 freq -76829 +/- 0 delay 1085 +/- 0
 	summaryPhc2SysRegex = regexp.MustCompile(
-		`^phc2sys\[\d+\.\d+\]:` +
-			`\s+\[.*\.\d+\.config:?\d*\]` +
-			`\s+CLOCK_REALTIME` +
+		`^phc2sys\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
+			`\s+(?P<clock_name>CLOCK_REALTIME)` +
 			`\s+rms\s+(?P<offset>\d+)` +
 			`\s+max\s+(?P<max>-?\d+)` +
 			`\s+freq\s+(?P<freq_adj>[-+]\d+)\s+(?:\+/-\s+\d+)` +
 			`\s*(?:delay\s+(?P<delay>\d+)\s+\+/-\s+\d+)?$`,
 	)
 	regularPhc2SysRegex = regexp.MustCompile(
-		`^phc2sys\[\d+\.\d+\]:` +
-			`\s+\[.*\.\d+\.config:?\d*\]` +
-			`\s+CLOCK_REALTIME` +
+		`^phc2sys\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
+			`\s+(?P<clock_name>CLOCK_REALTIME)` +
 			`\s+(?P<source>phc|sys)` +
 			`\s+offset\s+(?P<offset>\d+)` +
-			`\s+(?P<clock_state>s\d)` +
+			`\s+(?P<servo_state>s\d)` +
 			`\s+freq\s+(?P<freq_adj>[-+]\d+)` +
 			`\s*(?:delay\s+(?P<delay>\d+))?$`,
 	)
 )
 
 type phc2sysParsed struct {
-	Raw        string
-	Offset     *float64
-	MaxOffset  *float64
-	FreqAdj    *float64
-	Delay      *float64
-	ClockState string
-	Source     string
+	Raw            string
+	Timestamp      string
+	ConfigName     string
+	ServerityLevel *int
+	ClockName      string
+	Offset         *float64
+	MaxOffset      *float64
+	FreqAdj        *float64
+	Delay          *float64
+	ServoState     string
+	Source         string
 }
 
 // Populate ...
@@ -48,6 +52,21 @@ func (p *phc2sysParsed) Populate(line string, matched, feilds []string) error {
 	p.Raw = line
 	for i, field := range feilds {
 		switch field {
+		case "timestamp":
+			p.Timestamp = matched[i]
+		case "config_name":
+			p.ConfigName = matched[i]
+		case "serverity":
+			if matched[i] == "" { // serverity is optional
+				continue
+			}
+			serverityLevel, err := strconv.Atoi(matched[i])
+			if err != nil {
+				return err
+			}
+			p.ServerityLevel = &serverityLevel
+		case "clock_name":
+			p.ClockName = matched[i]
 		case "offset":
 			if matched[i] == "" {
 				return errors.New("offset cannot be empty")
@@ -84,8 +103,8 @@ func (p *phc2sysParsed) Populate(line string, matched, feilds []string) error {
 				return err
 			}
 			p.Delay = &delay
-		case "clock_state":
-			p.ClockState = matched[i]
+		case "servo_state":
+			p.ServoState = matched[i]
 		case "source":
 			p.Source = matched[i]
 		}
@@ -169,7 +188,7 @@ func extractRegularPhc2Sys(parsed *phc2sysParsed) (*Metrics, error) {
 	if parsed.Source == "" {
 		return nil, errors.New("failed to find source")
 	}
-	clockState := parseClockState(parsed.ClockState)
+	clockState := clockStateFromServo(parsed.ServoState)
 
 	return &Metrics{
 		Iface:      constants.ClockRealTime,

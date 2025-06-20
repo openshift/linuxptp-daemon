@@ -13,15 +13,15 @@ import (
 
 var (
 	ptp4lEventRegex = regexp.MustCompile(
-		`^ptp4l\[\d+\.\d+\]:` +
-			`\s+\[.*?\]` +
+		`^ptp4l\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
 			`\s+port\s+(?P<port>\d+):` +
 			`\s+(?P<event>.+)`,
 	)
 	// ptp4l rms regex
-	summaryRegex = regexp.MustCompile(
-		`^ptp4l\[\d+\.\d+\]:` +
-			`\s+\[.*\.\d+\.config\]` +
+	summaryPTP4LRegex = regexp.MustCompile(
+		`^ptp4l\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
 			`\s*(?P<interface>\w+)?` +
 			`\s+rms\s+(?P<offset>-?\d+)` +
 			`\s+max\s+(?P<max>-?\d+)` +
@@ -30,12 +30,12 @@ var (
 			`$`,
 	)
 	// ptp4l master offset regex
-	regularRegex = regexp.MustCompile(
-		`^ptp4l\[\d+\.\d+\]:` +
-			`\s+\[.*\.\d+\.config\]` +
+	regularPTP4LRegex = regexp.MustCompile(
+		`^ptp4l\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
 			`\s*(?P<interface>\w+)?` +
 			`\s+offset\s+(?P<offset>-?\d+)` +
-			`\s+(?P<clock_state>s\d)` +
+			`\s+(?P<servo_state>s\d)` +
 			`\s+freq\s+(?P<freq_adj>[-+]\d+)` +
 			`\s*(?:path\s+delay\s+(?P<delay>\d+))?` +
 			`$`,
@@ -44,7 +44,10 @@ var (
 
 type ptp4lParsed struct {
 	// Common
-	Raw string
+	Raw            string
+	Timestamp      string
+	ConfigName     string
+	ServerityLevel *int
 
 	// Metric
 	Interface  string
@@ -52,7 +55,7 @@ type ptp4lParsed struct {
 	MaxOffset  *float64
 	FreqAdj    *float64
 	Delay      *float64
-	ClockState string
+	ServoState string
 
 	// Event Fields
 	PortID *int
@@ -64,6 +67,19 @@ func (p *ptp4lParsed) Populate(line string, matched, feilds []string) error {
 	p.Raw = line
 	for i, field := range feilds {
 		switch field {
+		case "timestamp":
+			p.Timestamp = matched[i]
+		case "config_name":
+			p.ConfigName = matched[i]
+		case "serverity":
+			if matched[i] == "" { // serverity is optional
+				continue
+			}
+			serverityLevel, err := strconv.Atoi(matched[i])
+			if err != nil {
+				return err
+			}
+			p.ServerityLevel = &serverityLevel
 		case constants.Interface:
 			p.Interface = matched[i]
 		case "offset":
@@ -102,8 +118,8 @@ func (p *ptp4lParsed) Populate(line string, matched, feilds []string) error {
 				return err
 			}
 			p.Delay = &delay
-		case "clock_state":
-			p.ClockState = matched[i]
+		case "servo_state":
+			p.ServoState = matched[i]
 		case "port":
 			port, err := strconv.Atoi(matched[i])
 			if err != nil {
@@ -131,14 +147,14 @@ func NewPTP4LExtractor() *BaseMetricsExtractor[*ptp4lParsed] {
 				},
 			},
 			{
-				Regex: summaryRegex,
+				Regex: summaryPTP4LRegex,
 				Extractor: func(parsed *ptp4lParsed) (*Metrics, *PTPEvent, error) {
 					metric, err := extractSummaryPTP4l(parsed)
 					return metric, nil, err
 				},
 			},
 			{
-				Regex: regularRegex,
+				Regex: regularPTP4LRegex,
 				Extractor: func(parsed *ptp4lParsed) (*Metrics, *PTPEvent, error) {
 					metric, err := extractRegularPTP4l(parsed)
 					return metric, nil, err
@@ -215,10 +231,10 @@ func extractRegularPTP4l(parsed *ptp4lParsed) (*Metrics, error) {
 		delay = *parsed.Delay
 	}
 
-	if parsed.ClockState == "" {
+	if parsed.ServoState == "" {
 		return nil, errors.New("failed to find clock state")
 	}
-	clockState := parseClockState(parsed.ClockState)
+	clockState := clockStateFromServo(parsed.ServoState)
 
 	return &Metrics{
 		Iface:      parsed.Interface,
