@@ -206,7 +206,7 @@ func (conf *Ptp4lConf) PopulatePtp4lConf(config *string) error {
 					key := line[:split]
 					value := strings.TrimSpace(line[split:])
 					conf.setPtp4lConfOption(currentSectionName, key, value, false)
-					if (key == "masterOnly" && value == "0") ||
+					if (key == "masterOnly" && value == "0" && currentSectionName != GlobalSectionName) ||
 						(key == "serverOnly" && value == "0") ||
 						(key == "slaveOnly" && value == "1") ||
 						(key == "clientOnly" && value == "1") {
