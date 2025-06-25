@@ -8,12 +8,19 @@ import (
 	"time"
 
 	leaphash "github.com/facebook/time/leaphash"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	fake "k8s.io/client-go/kubernetes/fake"
 )
+
+func TestMain(m *testing.M) {
+	teardownTests := testhelpers.SetupTests()
+	defer teardownTests()
+	os.Exit(m.Run())
+}
 
 func readTestData(t *testing.T) *LeapFile {
 	leapFile := "testdata/leap-seconds.list"

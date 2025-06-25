@@ -2,11 +2,19 @@ package utils_test
 
 import (
 	"fmt"
+	"os"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestMain(m *testing.M) {
+	teardownTests := testhelpers.SetupTests()
+	defer teardownTests()
+	os.Exit(m.Run())
+}
 
 type testCase struct {
 	ifname        string

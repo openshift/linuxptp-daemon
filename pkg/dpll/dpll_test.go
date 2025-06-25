@@ -2,12 +2,14 @@ package dpll_test
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	nl "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
@@ -20,6 +22,12 @@ const (
 	id         = 123456
 	moduleName = "test"
 )
+
+func TestMain(m *testing.M) {
+	teardownTests := testhelpers.SetupTests()
+	defer teardownTests()
+	os.Exit(m.Run())
+}
 
 type DpllTestCase struct {
 	reply                     *nl.DoDeviceGetReply
