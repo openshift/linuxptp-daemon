@@ -41,12 +41,12 @@ type DpllTestCase struct {
 func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 	return []DpllTestCase{{
 		reply: &nl.DoDeviceGetReply{
-			Id:            id,
+			ID:            id,
 			ModuleName:    moduleName,
 			Mode:          1,
 			ModeSupported: []uint32{0},
 			LockStatus:    3, //LHAQ,
-			ClockId:       clockid,
+			ClockID:       clockid,
 			Type:          2, //1 pps 2 eec
 		},
 		sourceLost:                false,
@@ -61,12 +61,12 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		desc:                      fmt.Sprintf("1.LHAQ frequency status, unknown Phase status : pin %d ", pinType),
 	}, {
 		reply: &nl.DoDeviceGetReply{
-			Id:            id,
+			ID:            id,
 			ModuleName:    moduleName,
 			Mode:          1,
 			ModeSupported: []uint32{0},
 			LockStatus:    3, //LHAQ,
-			ClockId:       clockid,
+			ClockID:       clockid,
 			Type:          1, //1 pps 2 eec
 		},
 		sourceLost:                false,
@@ -82,7 +82,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 	},
 		{
 			reply: &nl.DoDeviceGetReply{
-				Id:            id,
+				ID:            id,
 				ModuleName:    moduleName,
 				Mode:          1,
 				ModeSupported: []uint32{0},
@@ -93,7 +93,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 						return 4 // holdover
 					}
 				}(), // holdover,
-				ClockId: clockid,
+				ClockID: clockid,
 				Type:    pinType, //1 pps 2 eec
 			},
 			sourceLost:                true,
@@ -128,12 +128,12 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		},
 		{
 			reply: &nl.DoDeviceGetReply{
-				Id:            id,
+				ID:            id,
 				ModuleName:    moduleName,
 				Mode:          1,
 				ModeSupported: []uint32{0},
 				LockStatus:    4, // holdover,
-				ClockId:       clockid,
+				ClockID:       clockid,
 				Type:          pinType, //1 pps 2 eec
 			},
 			sourceLost:                true,
