@@ -231,18 +231,7 @@ func (dn *Daemon) Run() {
 		case <-tickerPmc.C:
 			dn.HandlePmcTicker()
 		case <-dn.stopCh:
-			for _, p := range dn.processManager.process {
-				if p != nil {
-					for _, d := range p.depProcess {
-						if d != nil {
-							d.CmdStop()
-							d = nil
-						}
-					}
-					p.cmdStop()
-					p = nil
-				}
-			}
+			dn.stopAllProcesses()
 			glog.Infof("linuxPTP stop signal received, existing..")
 			return
 		}
@@ -271,25 +260,7 @@ func (dn *Daemon) SetProcessManager(p *ProcessManager) {
 
 func (dn *Daemon) applyNodePTPProfiles() error {
 	glog.Infof("in applyNodePTPProfiles")
-	for _, p := range dn.processManager.process {
-		if p != nil {
-			glog.Infof("stopping process.... %s", p.name)
-			p.cmdStop()
-			if p.depProcess != nil {
-				for _, d := range p.depProcess {
-					if d != nil {
-						d.CmdStop()
-						d = nil
-					}
-				}
-			}
-			p.depProcess = nil
-			//cleanup metrics
-			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName)
-			p = nil
-		}
-	}
-
+	dn.stopAllProcesses()
 	// All process should have been stopped,
 	// clear process in process manager.
 	// Assigning processManager.process to nil releases
@@ -298,6 +269,8 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// references).
 	dn.processManager.process = nil
 
+	// All configs will be rebuild, and sockets recreated, so they can all be deleted
+	_ = dn.cleanupTempFiles()
 	// TODO:
 	// compare nodeProfile with previous config,
 	// only apply when nodeProfile changes
@@ -540,8 +513,45 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
-			if output.gnss_serial_port == "" {
-				output.gnss_serial_port = GPSPIPE_SERIALPORT
+			if clockType == event.GM {
+				if output.gnss_serial_port == "" {
+					output.gnss_serial_port = GPSPIPE_SERIALPORT
+				}
+				// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
+				gmInterface := dprocess.ifaces.GetGMInterface().Name
+
+				gpsDaemon := &GPSD{
+					name:        GPSD_PROCESSNAME,
+					execMutex:   sync.Mutex{},
+					cmd:         nil,
+					serialPort:  output.gnss_serial_port,
+					exitCh:      make(chan struct{}),
+					gmInterface: gmInterface,
+					stopped:     false,
+					messageTag:  messageTag,
+					ublxTool:    nil,
+				}
+				gpsDaemon.CmdInit()
+				gpsDaemon.cmdLine = addScheduling(nodeProfile, gpsDaemon.cmdLine)
+				args = strings.Split(gpsDaemon.cmdLine, " ")
+				gpsDaemon.cmd = exec.Command(args[0], args[1:]...)
+				dprocess.depProcess = append(dprocess.depProcess, gpsDaemon)
+
+				// init gpspipe
+				gpsPipeDaemon := &gpspipe{
+					name:       GPSPIPE_PROCESSNAME,
+					execMutex:  sync.Mutex{},
+					cmd:        nil,
+					serialPort: GPSPIPE_SERIALPORT,
+					exitCh:     make(chan struct{}),
+					stopped:    false,
+					messageTag: messageTag,
+				}
+				gpsPipeDaemon.CmdInit()
+				gpsPipeDaemon.cmdLine = addScheduling(nodeProfile, gpsPipeDaemon.cmdLine)
+				args = strings.Split(gpsPipeDaemon.cmdLine, " ")
+				gpsPipeDaemon.cmd = exec.Command(args[0], args[1:]...)
+				dprocess.depProcess = append(dprocess.depProcess, gpsPipeDaemon)
 			}
 			// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
 			gmInterface := dprocess.ifaces.GetGMInterface().Name
@@ -1161,5 +1171,183 @@ func (p *ptpProcess) updateGMStatusOnProcessDown(process string) {
 		// ts2phc process dead should update GM-STATUS
 		iface := p.ifaces.GetGMInterface().Name
 		p.ProcessTs2PhcEvents(faultyOffset, ts2phcProcessName, iface, map[event.ValueType]interface{}{event.PROCESS_STATUS: int64(0)})
+	}
+	}
+
+func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
+	//                                          STATE  VALUE  DEVICE   SOURCE EXTSOURCE
+	//------------------------------------------------------------------------------------
+	// synce4l[627685.138]: [synce4l.0.config] LOCKED   0     synce1            GNSS
+	// synce4l[627685.138]: [synce4l.0.config] LOCKED   0     synce1  ens7f0
+	// synce4l[627602.593]: [synce4l.0.config] EXT_QL  255    synce1  ens7f0
+	// synce4l[627602.593]: [synce4l.0.config] QL  255    synce1  ens7f0
+	// synce4l[627602.593]: [synce4l.0.config] CLOCK_QUALITY  PRS    synce1  ens7f0
+	// synce4l[627602.540]: [synce4l.0.config] LOCKED   0     synce1
+
+	extraValue := map[event.ValueType]interface{}{}
+	state := event.PTP_UNKNOWN
+
+	clockQuality := ""
+	iface := ""
+
+	// synce4l[627602.540]: [synce4l.0.config] LOCKED   0     synce1
+	if logEntry.State != nil && logEntry.Source != nil {
+		if sDeviceConfig := p.SyncEDeviceByInterface(*logEntry.Source); sDeviceConfig != nil {
+			extraValue[event.DEVICE] = sDeviceConfig.Name
+			extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
+			iface = *logEntry.Source
+			tState := synce.StringToEECState(strings.ReplaceAll(*logEntry.State, "EEC_LOCKED_HO_ACQ", "EEC_LOCKED"))
+			glog.Infof("STATE %s", tState)
+			state = tState.ToPTPState()
+			sDeviceConfig.LastClockState = state
+			extraValue[event.EEC_STATE] = *logEntry.State
+		}
+	} else if logEntry.State == nil && logEntry.Source != nil && (logEntry.QL != synce.QL_DEFAULT_SSM || logEntry.ExtQl != synce.QL_DEFAULT_SSM) {
+		if sDeviceConfig := p.SyncEDeviceByInterface(*logEntry.Source); sDeviceConfig != nil {
+			iface = *logEntry.Source
+			// now decide on clock quality
+			if sDeviceConfig.ExtendedTlv == synce.ExtendedTLV_DISABLED && logEntry.QL != synce.QL_DEFAULT_SSM {
+				extraValue[event.DEVICE] = sDeviceConfig.Name
+				extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
+				extraValue[event.QL] = logEntry.QL
+				sDeviceConfig.LastQLState[*logEntry.Source] = &synce.QualityLevelInfo{
+					Priority:    0,
+					SSM:         logEntry.QL,
+					ExtendedSSM: synce.QL_DEFAULT_ENHSSM,
+				}
+				clockQuality, _ = sDeviceConfig.ClockQuality(synce.QualityLevelInfo{
+					Priority:    0,
+					SSM:         logEntry.QL,
+					ExtendedSSM: 0,
+				})
+				state = sDeviceConfig.LastClockState
+				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", logEntry.QL)
+				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.QL_DEFAULT_ENHSSM)
+				UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.QL_DEFAULT_ENHSSM))
+
+			} else if sDeviceConfig.ExtendedTlv == synce.ExtendedTLV_ENABLED {
+				var lastQLState *synce.QualityLevelInfo
+				var ok bool
+				iface = *logEntry.Source
+				if lastQLState, ok = sDeviceConfig.LastQLState[*logEntry.Source]; !ok || lastQLState == nil {
+					lastQLState = &synce.QualityLevelInfo{
+						Priority:    0,
+						SSM:         logEntry.QL,
+						ExtendedSSM: logEntry.ExtQl,
+					}
+					sDeviceConfig.LastQLState[*logEntry.Source] = lastQLState
+				}
+				if lastQLState.SSM != synce.QL_DEFAULT_SSM && logEntry.ExtQl != synce.QL_DEFAULT_SSM { // then have both ql
+					extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
+					extraValue[event.DEVICE] = sDeviceConfig.Name
+					extraValue[event.EXT_QL] = logEntry.ExtQl
+					extraValue[event.QL] = lastQLState.SSM
+					sDeviceConfig.LastQLState[*logEntry.Source].ExtendedSSM = logEntry.ExtQl
+					clockQuality, _ = sDeviceConfig.ClockQuality(synce.QualityLevelInfo{
+						SSM:         lastQLState.SSM,
+						ExtendedSSM: lastQLState.ExtendedSSM,
+						Priority:    0,
+					})
+					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", lastQLState.SSM)
+					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", logEntry.ExtQl)
+					UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(lastQLState.SSM)+int(logEntry.ExtQl))
+
+					state = sDeviceConfig.LastClockState
+				} else if logEntry.QL != synce.QL_DEFAULT_SSM { //else we have only QL
+					lastQLState.SSM = logEntry.QL // wait for extTlv
+				}
+			}
+			if clockQuality != "" {
+				extraValue[event.CLOCK_QUALITY] = clockQuality
+			}
+		}
+	}
+	if len(extraValue) > 0 {
+		glog.Info(extraValue)
+		select {
+		case p.eventCh <- event.EventChannel{
+			ProcessName: event.SYNCE,
+			State:       state,
+			CfgName:     p.configName,
+			IFace:       iface,
+			Values:      extraValue,
+			Time:        time.Now().UnixMilli(),
+			WriteToLog: func() bool { // only write to log if there is something extra
+				if len(extraValue) > 0 {
+					return true
+				}
+				return false
+			}(),
+			Reset: false,
+		}:
+		default:
+		}
+	}
+
+}
+func (p *ptpProcess) SyncEDeviceByInterface(iface string) *synce.Config {
+	if p.syncERelations != nil {
+		for _, sConfig := range p.syncERelations.Devices {
+			for _, name := range sConfig.Ifaces {
+				if name == iface {
+					return sConfig
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// SyncEDeviceByName ....
+func (p *ptpProcess) SyncEDeviceByName(name string) *synce.Config {
+	if p.syncERelations != nil {
+		for _, sConfig := range p.syncERelations.Devices {
+			if sConfig.Name == name {
+				return sConfig
+			}
+		}
+	}
+	return nil
+}
+
+func containsAny(output string, indicators ...string) bool {
+	for _, indicator := range indicators {
+		if strings.Contains(output, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+func (dn *Daemon) stopAllProcesses() {
+	for _, p := range dn.processManager.process {
+		if p != nil {
+			glog.Infof("stopping process.... %s", p.name)
+
+			// Stop dependencies in reverse order first
+			if p.depProcess != nil {
+				for i := len(p.depProcess) - 1; i >= 0; i-- {
+					d := p.depProcess[i]
+					if d != nil {
+						d.CmdStop()
+						d = nil
+					}
+				}
+			}
+
+			// Stop parent process
+			p.cmdStop()
+			p.depProcess = nil
+			p.hasCollectedMetrics = false
+
+			// Cleanup metrics
+			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName)
+
+			if p.name == syncEProcessName && p.syncERelations != nil {
+				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
+			}
+
+			p = nil
+		}
 	}
 }
