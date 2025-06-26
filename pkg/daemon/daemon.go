@@ -253,18 +253,7 @@ func (dn *Daemon) Run() {
 		case <-tickerPmc.C:
 			dn.HandlePmcTicker()
 		case <-dn.stopCh:
-			for _, p := range dn.processManager.process {
-				if p != nil {
-					for _, d := range p.depProcess {
-						if d != nil {
-							d.CmdStop()
-							d = nil
-						}
-					}
-					p.cmdStop()
-					p = nil
-				}
-			}
+			dn.stopAllProcesses()
 			glog.Infof("linuxPTP stop signal received, existing..")
 			return
 		}
@@ -293,28 +282,7 @@ func (dn *Daemon) SetProcessManager(p *ProcessManager) {
 
 func (dn *Daemon) applyNodePTPProfiles() error {
 	glog.Infof("in applyNodePTPProfiles")
-	for _, p := range dn.processManager.process {
-		if p != nil {
-			glog.Infof("stopping process.... %s", p.name)
-			p.cmdStop()
-			if p.depProcess != nil {
-				for _, d := range p.depProcess {
-					if d != nil {
-						d.CmdStop()
-						d = nil
-					}
-				}
-			}
-			p.depProcess = nil
-			//cleanup metrics
-			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName)
-			if p.name == syncEProcessName && p.syncERelations != nil {
-				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
-			}
-			p = nil
-		}
-	}
-
+	dn.stopAllProcesses()
 	// All process should have been stopped,
 	// clear process in process manager.
 	// Assigning processManager.process to nil releases
@@ -590,8 +558,45 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
-			if output.gnss_serial_port == "" {
-				output.gnss_serial_port = GPSPIPE_SERIALPORT
+			if clockType == event.GM {
+				if output.gnss_serial_port == "" {
+					output.gnss_serial_port = GPSPIPE_SERIALPORT
+				}
+				// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
+				gmInterface := dprocess.ifaces.GetGMInterface().Name
+
+				gpsDaemon := &GPSD{
+					name:        GPSD_PROCESSNAME,
+					execMutex:   sync.Mutex{},
+					cmd:         nil,
+					serialPort:  output.gnss_serial_port,
+					exitCh:      make(chan struct{}),
+					gmInterface: gmInterface,
+					stopped:     false,
+					messageTag:  messageTag,
+					ublxTool:    nil,
+				}
+				gpsDaemon.CmdInit()
+				gpsDaemon.cmdLine = addScheduling(nodeProfile, gpsDaemon.cmdLine)
+				args = strings.Split(gpsDaemon.cmdLine, " ")
+				gpsDaemon.cmd = exec.Command(args[0], args[1:]...)
+				dprocess.depProcess = append(dprocess.depProcess, gpsDaemon)
+
+				// init gpspipe
+				gpsPipeDaemon := &gpspipe{
+					name:       GPSPIPE_PROCESSNAME,
+					execMutex:  sync.Mutex{},
+					cmd:        nil,
+					serialPort: GPSPIPE_SERIALPORT,
+					exitCh:     make(chan struct{}),
+					stopped:    false,
+					messageTag: messageTag,
+				}
+				gpsPipeDaemon.CmdInit()
+				gpsPipeDaemon.cmdLine = addScheduling(nodeProfile, gpsPipeDaemon.cmdLine)
+				args = strings.Split(gpsPipeDaemon.cmdLine, " ")
+				gpsPipeDaemon.cmd = exec.Command(args[0], args[1:]...)
+				dprocess.depProcess = append(dprocess.depProcess, gpsPipeDaemon)
 			}
 			// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
 			gmInterface := dprocess.ifaces.GetGMInterface().Name
@@ -1357,4 +1362,45 @@ func (p *ptpProcess) SyncEDeviceByName(name string) *synce.Config {
 		}
 	}
 	return nil
+}
+
+func containsAny(output string, indicators ...string) bool {
+	for _, indicator := range indicators {
+		if strings.Contains(output, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+func (dn *Daemon) stopAllProcesses() {
+	for _, p := range dn.processManager.process {
+		if p != nil {
+			glog.Infof("stopping process.... %s", p.name)
+
+			// Stop dependencies in reverse order first
+			if p.depProcess != nil {
+				for i := len(p.depProcess) - 1; i >= 0; i-- {
+					d := p.depProcess[i]
+					if d != nil {
+						d.CmdStop()
+						d = nil
+					}
+				}
+			}
+
+			// Stop parent process
+			p.cmdStop()
+			p.depProcess = nil
+
+			// Cleanup metrics
+			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName)
+
+			if p.name == syncEProcessName && p.syncERelations != nil {
+				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
+			}
+
+			p = nil
+		}
+	}
 }
