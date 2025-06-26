@@ -291,18 +291,7 @@ func (dn *Daemon) Run() {
 		case <-tickerPmc.C:
 			dn.HandlePmcTicker()
 		case <-dn.stopCh:
-			for _, p := range dn.processManager.process {
-				if p != nil {
-					for _, d := range p.depProcess {
-						if d != nil {
-							d.CmdStop()
-							d = nil
-						}
-					}
-					p.cmdStop()
-					p = nil
-				}
-			}
+			dn.stopAllProcesses()
 			glog.Infof("linuxPTP stop signal received, existing..")
 			return
 		}
@@ -358,29 +347,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.readyTracker.setConfig(false)
 
 	glog.Infof("in applyNodePTPProfiles")
-	for _, p := range dn.processManager.process {
-		if p != nil {
-			glog.Infof("stopping process.... %s", p.name)
-			p.cmdStop()
-			if p.depProcess != nil {
-				for _, d := range p.depProcess {
-					if d != nil {
-						d.CmdStop()
-						d = nil
-					}
-				}
-			}
-			p.depProcess = nil
-			p.hasCollectedMetrics = false
-			//cleanup metrics
-			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName)
-			if p.name == syncEProcessName && p.syncERelations != nil {
-				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
-			}
-			p = nil
-		}
-	}
-
+	dn.stopAllProcesses()
 	// All process should have been stopped,
 	// clear process in process manager.
 	// Assigning processManager.process to nil releases
@@ -390,7 +357,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.processManager.process = nil
 
 	// All configs will be rebuild, and sockets recreated, so they can all be deleted
-	dn.cleanupTempFiles()
+	_ = dn.cleanupTempFiles()
 
 	// TODO:
 	// compare nodeProfile with previous config,
@@ -680,10 +647,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				}
 				// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
 				gmInterface := dprocess.ifaces.GetGMInterface().Name
-
-				if e := mkFifo(); e != nil {
-					glog.Errorf("Error creating named pipe, GNSS monitoring will not work as expected %s", e.Error())
-				}
 
 				gpsDaemon := &GPSD{
 					name:        GPSD_PROCESSNAME,
@@ -1467,4 +1430,37 @@ func containsAny(output string, indicators ...string) bool {
 		}
 	}
 	return false
+}
+
+func (dn *Daemon) stopAllProcesses() {
+	for _, p := range dn.processManager.process {
+		if p != nil {
+			glog.Infof("stopping process.... %s", p.name)
+
+			// Stop dependencies in reverse order first
+			if p.depProcess != nil {
+				for i := len(p.depProcess) - 1; i >= 0; i-- {
+					d := p.depProcess[i]
+					if d != nil {
+						d.CmdStop()
+						d = nil
+					}
+				}
+			}
+
+			// Stop parent process
+			p.cmdStop()
+			p.depProcess = nil
+			p.hasCollectedMetrics = false
+
+			// Cleanup metrics
+			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName)
+
+			if p.name == syncEProcessName && p.syncERelations != nil {
+				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
+			}
+
+			p = nil
+		}
+	}
 }
