@@ -2,11 +2,20 @@ package synce_test
 
 import (
 	"fmt"
+	"os"
+	"testing"
+
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/utils/pointer"
-	"testing"
 )
+
+func TestMain(m *testing.M) {
+	teardownTests := testhelpers.SetupTests()
+	defer teardownTests()
+	os.Exit(m.Run())
+}
 
 type testCase struct {
 	sms              byte

@@ -151,7 +151,7 @@ func (d *DpllConfig) State() event.PTPState {
 // The units are picoseconds.
 // We further divide it by 1000 to report nanoseconds
 func (d *DpllConfig) SetPhaseOffset(phaseOffset int64) {
-	d.phaseOffset = int64(math.Round(float64(phaseOffset / nl.DPLL_PHASE_OFFSET_DIVIDER / 1000)))
+	d.phaseOffset = int64(math.Round(float64(phaseOffset / nl.DpllPhaseOffsetDivider / 1000)))
 }
 
 // SourceLost ... get source status
@@ -329,7 +329,7 @@ func (d *DpllConfig) Timer() int64 {
 
 func (d *DpllConfig) PhaseOffsetPin(pin *nl.PinInfo) bool {
 
-	if pin.ClockId == d.clockId && pin.ParentDevice[PPS_PIN_INDEX].PhaseOffset != math.MaxInt64 {
+	if pin.ClockID == d.clockId && pin.ParentDevice[PPS_PIN_INDEX].PhaseOffset != math.MaxInt64 {
 		for k, v := range d.phaseOffsetPinFilter[strconv.FormatUint(d.clockId, 10)] {
 			switch k {
 			case "boardLabel":
@@ -354,12 +354,13 @@ func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.Pi
 	valid := false
 
 	for _, reply := range devices {
-		if reply.ClockId == d.clockId {
-			if reply.LockStatus == DPLL_INVALID {
-				glog.Info("discarding on invalid lock status: ", nl.GetDpllStatusHR(reply))
+		if reply.ClockID == d.clockId {
+			replyHr, err := nl.GetDpllStatusHR(reply, time.Now())
+			if err != nil || reply.LockStatus == DPLL_INVALID {
+				glog.Info("discarding on invalid lock status: ", replyHr)
 				continue
 			}
-			glog.Info(nl.GetDpllStatusHR(reply), " ", d.iface)
+			glog.Info(string(replyHr), " ", d.iface)
 			switch nl.GetDpllType(reply.Type) {
 			case "eec":
 				d.frequencyStatus = int64(reply.LockStatus)
@@ -368,8 +369,6 @@ func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.Pi
 				d.phaseStatus = int64(reply.LockStatus)
 				valid = true
 			}
-		} else {
-			glog.Infof("discarding on clock ID %v (%s): ", nl.GetDpllStatusHR(reply), d.iface)
 		}
 	}
 	for _, pin := range pins {
@@ -399,13 +398,13 @@ func (d *DpllConfig) monitorNtf(c *genetlink.Conn) {
 		for _, msg := range msgs {
 			devices, pins = []*nl.DoDeviceGetReply{}, []*nl.PinInfo{}
 			switch msg.Header.Command {
-			case nl.DPLL_CMD_DEVICE_CHANGE_NTF:
+			case nl.DpllCmdDeviceChangeNtf:
 				devices, err = nl.ParseDeviceReplies([]genetlink.Message{msg})
 				if err != nil {
 					glog.Error(err)
 					return
 				}
-			case nl.DPLL_CMD_PIN_CHANGE_NTF:
+			case nl.DpllCmdPinChangeNtf:
 				pins, err = nl.ParsePinReplies([]genetlink.Message{msg})
 				if err != nil {
 					glog.Error(err)
@@ -482,9 +481,9 @@ func (d *DpllConfig) MonitorDpllNetlink() {
 			}
 
 			c := d.conn.GetGenetlinkConn()
-			mcastId, found := d.conn.GetMcastGroupId(nl.DPLL_MCGRP_MONITOR)
+			mcastID, found := d.conn.GetMcastGroupID(nl.DpllMCGRPMonitor)
 			if !found {
-				glog.Warning("multicast ID ", nl.DPLL_MCGRP_MONITOR, " not found")
+				glog.Warning("multicast ID ", nl.DpllMCGRPMonitor, " not found")
 				goto abort
 			}
 
@@ -497,7 +496,7 @@ func (d *DpllConfig) MonitorDpllNetlink() {
 				d.stateDecision()
 			}
 
-			err = c.JoinGroup(mcastId)
+			err = c.JoinGroup(mcastID)
 			if err != nil {
 				goto abort
 			}

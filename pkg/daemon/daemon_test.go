@@ -11,6 +11,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/sirupsen/logrus"
 	"k8s.io/utils/pointer"
@@ -21,6 +22,28 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestMain(m *testing.M) {
+	teardownTests := testhelpers.SetupTests()
+	defer teardownTests()
+	setup()
+	code := m.Run()
+	teardown()
+	os.Exit(code)
+}
+
+func setup() {
+	flag.Set("alsologtostderr", fmt.Sprintf("%t", true))
+	var logLevel string
+	flag.StringVar(&logLevel, "logLevel", "4", "test")
+	flag.Lookup("v").Value.Set(logLevel)
+	daemon.InitializeOffsetMaps()
+	pm = daemon.NewProcessManager()
+	daemon.RegisterMetrics(MYNODE)
+}
+
+func teardown() {
+}
 
 const (
 	s0     = 0.0
@@ -217,27 +240,14 @@ var testCases = []TestCase{
 	},
 }
 
-func setup() {
-	flag.Set("alsologtostderr", fmt.Sprintf("%t", true))
-	var logLevel string
-	flag.StringVar(&logLevel, "logLevel", "4", "test")
-	flag.Lookup("v").Value.Set(logLevel)
-	daemon.InitializeOffsetMaps()
-	pm = daemon.NewProcessManager()
-	daemon.RegisterMetrics(MYNODE)
-}
-
-func teardown() {
-}
-
-func TestMain(m *testing.M) {
-	setup()
-	code := m.Run()
-	teardown()
-	os.Exit(code)
-}
-
 func Test_ProcessPTPMetrics(t *testing.T) {
+	skip, teardownTest := testhelpers.SetupForTestGM()
+	defer teardownTest()
+	if skip {
+		t.Skip("GM is not supported")
+		t.SkipNow()
+	}
+
 	leap.MockLeapFile()
 	defer func() {
 		close(leap.LeapMgr.Close)
@@ -285,6 +295,13 @@ func Test_ProcessPTPMetrics(t *testing.T) {
 }
 
 func TestDaemon_ApplyHaProfiles(t *testing.T) {
+	skip, teardownTest := testhelpers.SetupForTestBCPTPHA()
+	defer teardownTest()
+	if skip {
+		t.Skip("BC PTP-HA is not supported")
+		t.SkipNow()
+	}
+
 	p1 := ptpv1.PtpProfile{
 		Name: pointer.String("profile1"),
 	}
@@ -436,6 +453,13 @@ func InitSynceLogTestCase() {
 func TestDaemon_ProcessSynceLogs(t *testing.T) {
 	// Printing results
 	InitSynceLogTestCase()
+	skip, teardownTest := testhelpers.SetupForTestGMSyncE()
+	defer teardownTest()
+	if skip {
+		t.Skip("SyncE is not enabled")
+		t.SkipNow()
+	}
+
 	pm = daemon.NewProcessManager()
 	relations := synce.Relations{Devices: make([]*synce.Config, 1)}
 	relations.Devices[0] = &synce.Config{

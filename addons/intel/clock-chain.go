@@ -5,6 +5,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/golang/glog"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
@@ -206,7 +207,7 @@ func (ch *ClockChain) GetLeadingCardSDP() error {
 		return err
 	}
 	for _, pin := range ch.DpllPins {
-		if pin.ClockId == clockId && slices.Contains(internalPinLabels, pin.BoardLabel) {
+		if pin.ClockID == clockId && slices.Contains(internalPinLabels, pin.BoardLabel) {
 			ch.LeadingNIC.Pins[pin.BoardLabel] = *pin
 		}
 	}
@@ -237,13 +238,13 @@ func (c *ClockChain) SetPinsControl(pins []PinControl) (*[]dpll.PinParentDeviceC
 
 func SetPinControlData(pin dpll.PinInfo, control PinParentControl) *dpll.PinParentDeviceCtl {
 	Pin := dpll.PinParentDeviceCtl{
-		Id:           pin.Id,
+		ID:           pin.ID,
 		PinParentCtl: make([]dpll.PinControl, 0),
 	}
 	var enable bool
 	for deviceIndex, parentDevice := range pin.ParentDevice {
 		pc := dpll.PinControl{}
-		pc.PinParentId = parentDevice.ParentId
+		pc.PinParentID = parentDevice.ParentID
 		switch deviceIndex {
 		case eecDpllIndex:
 			enable = control.EecEnabled
@@ -251,7 +252,7 @@ func SetPinControlData(pin dpll.PinInfo, control PinParentControl) *dpll.PinPare
 			enable = control.PpsEnabled
 		}
 
-		if parentDevice.Direction == dpll.DPLL_PIN_DIRECTION_INPUT {
+		if parentDevice.Direction == dpll.PinDirectionInput {
 			pc.Prio = func(enabled bool) *uint32 {
 				var p uint32
 				if enabled {
@@ -265,9 +266,9 @@ func SetPinControlData(pin dpll.PinInfo, control PinParentControl) *dpll.PinPare
 			pc.State = func(enabled bool) *uint32 {
 				var s uint32
 				if enabled {
-					s = dpll.DPLL_PIN_STATE_CONNECTED
+					s = dpll.PinStateConnected
 				} else {
-					s = dpll.DPLL_PIN_STATE_DISCONNECTED
+					s = dpll.PinStateDisconnected
 				}
 				return &s
 			}(enable)
@@ -466,17 +467,17 @@ func BatchPinSet(commands *[]dpll.PinParentDeviceCtl) error {
 		if err != nil {
 			return err
 		}
-		err = conn.SendCommand(dpll.DPLL_CMD_PIN_SET, b)
+		err = conn.SendCommand(dpll.DpllCmdPinSet, b)
 		if err != nil {
 			glog.Error("failed to send pin command: ", err)
 			return err
 		}
-		info, err := conn.DoPinGet(dpll.DoPinGetRequest{Id: command.Id})
+		info, err := conn.DoPinGet(dpll.DoPinGetRequest{ID: command.ID})
 		if err != nil {
 			glog.Error("failed to get pin: ", err)
 			return err
 		}
-		reply, err := dpll.GetPinInfoHR(info)
+		reply, err := dpll.GetPinInfoHR(info, time.Now())
 		if err != nil {
 			glog.Error("failed to convert pin reply to human readable: ", err)
 			return err
