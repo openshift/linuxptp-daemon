@@ -115,7 +115,7 @@ var testCases = []TestCase{
 	{
 		log:                         "phc2sys[1823126.732]: [ptp4l.0.config] CLOCK_REALTIME phc offset       -10 s2 freq   +8956 delay    508",
 		MessageTag:                  "[ptp4l.0.config]",
-		Name:                        "phc2sys",
+		Name:                        "phc2sys_basic_negative_offset_locked",
 		from:                        "phc",
 		process:                     "phc2sys",
 		iface:                       "CLOCK_REALTIME",
@@ -132,7 +132,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ts2phc[1896327.319]: [ts2phc.0.config] ens2f0 master offset         -1 s2 freq      -2",
 		MessageTag:                  "[ts2phc.0.config]",
-		Name:                        "ts2phc",
+		Name:                        "ts2phc_interface_negative_offset_locked",
 		from:                        "master",
 		process:                     "ts2phc",
 		iface:                       "ens2fx",
@@ -149,7 +149,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ts2phc[1896327.319]: [ts2phc.0.config] dev/ptp4  offset    -1 s2 freq      -2",
 		MessageTag:                  "[ts2phc.0.config]",
-		Name:                        "ts2phc",
+		Name:                        "ts2phc_phc_device_negative_offset_locked",
 		from:                        "master",
 		process:                     "ts2phc",
 		iface:                       "ens2fx",
@@ -174,7 +174,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ts2phc[1896327.319]: [ts2phc.0.config] ens2f0 master offset         3 s0 freq      4",
 		MessageTag:                  "[ts2phc.0.config]",
-		Name:                        "ts2phc",
+		Name:                        "ts2phc_positive_offset_freerun",
 		from:                        "master",
 		process:                     "ts2phc",
 		iface:                       "ens2fx",
@@ -191,7 +191,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ptp4l[8542280.698]: [ptp4l.0.config] port 1: UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
 		MessageTag:                  "[ptp4l.0.config]",
-		Name:                        "ptp4l",
+		Name:                        "ptp4l_uncalibrated_to_slave_transition",
 		from:                        "master",
 		process:                     "ptp4l",
 		iface:                       "ens3f2",
@@ -216,7 +216,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ptp4l[8537738.636]: [ptp4l.0.config] port 1: SLAVE to FAULTY on FAULT_DETECTED (FT_UNSPECIFIED)",
 		MessageTag:                  "[ptp4l.0.config]",
-		Name:                        "ptp4l",
+		Name:                        "ptp4l_slave_to_faulty_fault_detection",
 		from:                        "master",
 		process:                     "ptp4l",
 		iface:                       "ens3fx",
@@ -242,7 +242,7 @@ var testCases = []TestCase{
 	{
 		log:                         "phc2sys[1823127.832]: [ptp4l.1.config] CLOCK_REALTIME phc offset       150 s0 freq   -12345 delay    1024",
 		MessageTag:                  "[ptp4l.1.config]",
-		Name:                        "phc2sys",
+		Name:                        "phc2sys_positive_offset_freerun",
 		from:                        "phc",
 		process:                     "phc2sys",
 		iface:                       "CLOCK_REALTIME",
@@ -259,7 +259,7 @@ var testCases = []TestCase{
 	{
 		log:                         "phc2sys[1823129.050]: [phc2sys.0.config] CLOCK_REALTIME phc offset       987 s2 freq   -54321 delay   2048",
 		MessageTag:                  "[phc2sys.0.config]",
-		Name:                        "phc2sys",
+		Name:                        "phc2sys_different_message_tag_locked",
 		from:                        "phc",
 		process:                     "phc2sys",
 		iface:                       "CLOCK_REALTIME",
@@ -276,7 +276,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ts2phc[1896329.521]: [ts2phc.2.config] ens10f0 master offset         -5 s2 freq      -3",
 		MessageTag:                  "[ts2phc.2.config]",
-		Name:                        "ts2phc",
+		Name:                        "ts2phc_small_negative_values_locked",
 		from:                        "master",
 		process:                     "ts2phc",
 		iface:                       "ens10fx",
@@ -294,7 +294,7 @@ var testCases = []TestCase{
 	{
 		log:                         "phc2sys[1823130.100]: [ptp4l.3.config] CLOCK_REALTIME phc offset         0 s1 freq       0 delay      0",
 		MessageTag:                  "[ptp4l.3.config]",
-		Name:                        "phc2sys",
+		Name:                        "phc2sys_perfect_sync_zeros_freerun",
 		from:                        "phc",
 		process:                     "phc2sys",
 		iface:                       "CLOCK_REALTIME",
@@ -311,7 +311,7 @@ var testCases = []TestCase{
 	{
 		log:                         "phc2sys[1823131.200]: [phc2sys.1.config] CLOCK_REALTIME phc offset   -999999 s0 freq +999999 delay  65535",
 		MessageTag:                  "[phc2sys.1.config]",
-		Name:                        "phc2sys",
+		Name:                        "phc2sys_extreme_boundary_values_freerun",
 		from:                        "phc",
 		process:                     "phc2sys",
 		iface:                       "CLOCK_REALTIME",
@@ -328,7 +328,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ts2phc[1896331.723]: [ts2phc.4.config] ens15f1 master offset     99999 s0 freq +500000",
 		MessageTag:                  "[ts2phc.4.config]",
-		Name:                        "ts2phc",
+		Name:                        "ts2phc_large_positive_offset_freerun",
 		from:                        "master",
 		process:                     "ts2phc",
 		iface:                       "ens15fx",
@@ -345,7 +345,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ts2phc[1896332.824]: [ts2phc.5.config] dev/ptp12 offset        777 s1 freq   -88888",
 		MessageTag:                  "[ts2phc.5.config]",
-		Name:                        "ts2phc",
+		Name:                        "ts2phc_phc_device_freerun",
 		from:                        "master",
 		process:                     "ts2phc",
 		iface:                       "ens20fx",
@@ -370,7 +370,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ptp4l[8542282.900]: [ptp4l.2.config] port 1: MASTER to PASSIVE on RS_PASSIVE",
 		MessageTag:                  "[ptp4l.2.config]",
-		Name:                        "ptp4l",
+		Name:                        "ptp4l_master_to_passive_transition",
 		from:                        "master",
 		process:                     "ptp4l",
 		iface:                       "ens25f0",
@@ -395,7 +395,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ptp4l[8542283.101]: [ptp4l.3.config] port 1: LISTENING to MASTER on RS_MASTER",
 		MessageTag:                  "[ptp4l.3.config]",
-		Name:                        "ptp4l",
+		Name:                        "ptp4l_listening_to_master_transition",
 		from:                        "master",
 		process:                     "ptp4l",
 		iface:                       "ens30f1",
@@ -420,7 +420,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ptp4l[8542284.202]: [ptp4l.4.config] port 1: INITIALIZING to LISTENING on INITIALIZE_COMPLETE",
 		MessageTag:                  "[ptp4l.4.config]",
-		Name:                        "ptp4l",
+		Name:                        "ptp4l_initializing_to_listening_transition",
 		from:                        "master",
 		process:                     "ptp4l",
 		iface:                       "ens35f0",
@@ -445,7 +445,7 @@ var testCases = []TestCase{
 	{
 		log:                         "phc2sys[1823132.300]: [ptp4l.5.config] CLOCK_REALTIME phc offset     -500000 s2 freq  -250000 delay    999",
 		MessageTag:                  "[ptp4l.5.config]",
-		Name:                        "phc2sys",
+		Name:                        "phc2sys_large_negative_values_locked",
 		from:                        "phc",
 		process:                     "phc2sys",
 		iface:                       "CLOCK_REALTIME",
@@ -462,7 +462,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ts2phc[1896333.925]: [ts2phc.6.config] ens40f0 master offset      1234 s2 freq    -5678",
 		MessageTag:                  "[ts2phc.6.config]",
-		Name:                        "ts2phc",
+		Name:                        "ts2phc_positive_values_locked",
 		from:                        "master",
 		process:                     "ts2phc",
 		iface:                       "ens40fx",
@@ -479,7 +479,7 @@ var testCases = []TestCase{
 	{
 		log:                         "phc2sys[1823133.400]: [phc2sys.2.config] CLOCK_REALTIME phc offset        42 s1 freq      +1 delay      1",
 		MessageTag:                  "[phc2sys.2.config]",
-		Name:                        "phc2sys",
+		Name:                        "phc2sys_small_positive_values_freerun",
 		from:                        "phc",
 		process:                     "phc2sys",
 		iface:                       "CLOCK_REALTIME",
@@ -496,7 +496,7 @@ var testCases = []TestCase{
 	{
 		log:                         "ts2phc[1896334.026]: [ts2phc.7.config] dev/ptp99 offset       -1 s2 freq      +1",
 		MessageTag:                  "[ts2phc.7.config]",
-		Name:                        "ts2phc",
+		Name:                        "ts2phc_minimal_values_phc_device_locked",
 		from:                        "master",
 		process:                     "ts2phc",
 		iface:                       "ens99fx",
@@ -536,41 +536,43 @@ func Test_ProcessPTPMetrics(t *testing.T) {
 		assert.Nil(t, leap.LeapMgr)
 	}()
 
-	assert := assert.New(t)
 	for _, tc := range testCases {
-		tc.node = MYNODE
-		tc.cleanupMetrics()
-		pm.SetTestData(tc.Name, tc.MessageTag, tc.Ifaces)
-		pm.RunProcessPTPMetrics(tc.log)
+		t.Run(tc.Name, func(t *testing.T) {
+			assert := assert.New(t)
+			tc.node = MYNODE
+			tc.cleanupMetrics()
+			pm.SetTestData(tc.process, tc.MessageTag, tc.Ifaces)
+			pm.RunProcessPTPMetrics(tc.log)
 
-		if tc.expectedOffset != SKIP {
-			ptpOffset := daemon.Offset.With(map[string]string{"from": tc.from, "process": tc.process, "node": tc.node, "iface": tc.iface})
-			assert.Equal(tc.expectedOffset, testutil.ToFloat64(ptpOffset), "Offset does not match\n%s", tc.String())
-		}
-		if tc.expectedMaxOffset != SKIP {
-			ptpMaxOffset := daemon.MaxOffset.With(map[string]string{"from": tc.from, "process": tc.process, "node": tc.node, "iface": tc.iface})
-			assert.Equal(tc.expectedMaxOffset, testutil.ToFloat64(ptpMaxOffset), "MaxOffset does not match\n%s", tc.String())
-		}
-		if tc.expectedFrequencyAdjustment != SKIP {
-			ptpFrequencyAdjustment := daemon.FrequencyAdjustment.With(map[string]string{"from": tc.from, "process": tc.process, "node": tc.node, "iface": tc.iface})
-			assert.Equal(tc.expectedFrequencyAdjustment, testutil.ToFloat64(ptpFrequencyAdjustment), "FrequencyAdjustment does not match\n%s", tc.String())
-		}
-		if tc.expectedDelay != SKIP {
-			ptpDelay := daemon.Delay.With(map[string]string{"from": tc.from, "process": tc.process, "node": tc.node, "iface": tc.iface})
-			assert.Equal(tc.expectedDelay, testutil.ToFloat64(ptpDelay), "Delay does not match\n%s", tc.String())
-		}
-		if tc.expectedClockState != SKIP {
-			clockState := daemon.ClockState.With(map[string]string{"process": tc.process, "node": tc.node, "iface": tc.iface})
-			assert.Equal(tc.expectedClockState, testutil.ToFloat64(clockState), "ClockState does not match\n%s", tc.String())
-		}
-		if tc.expectedClockClassMetrics != SKIP {
-			clockClassMetrics := daemon.ClockClassMetrics.With(map[string]string{"process": tc.process, "node": tc.node})
-			assert.Equal(tc.expectedClockClassMetrics, testutil.ToFloat64(clockClassMetrics), "ClockClassMetrics does not match\n%s", tc.String())
-		}
-		if tc.expectedInterfaceRole != SKIP {
-			role := daemon.InterfaceRole.With(map[string]string{"process": tc.process, "node": tc.node, "iface": tc.iface})
-			assert.Equal(tc.expectedInterfaceRole, testutil.ToFloat64(role), "InterfaceRole does not match\n%s", tc.String())
-		}
+			if tc.expectedOffset != SKIP {
+				ptpOffset := daemon.Offset.With(map[string]string{"from": tc.from, "process": tc.process, "node": tc.node, "iface": tc.iface})
+				assert.Equal(tc.expectedOffset, testutil.ToFloat64(ptpOffset), "Offset does not match\n%s", tc.String())
+			}
+			if tc.expectedMaxOffset != SKIP {
+				ptpMaxOffset := daemon.MaxOffset.With(map[string]string{"from": tc.from, "process": tc.process, "node": tc.node, "iface": tc.iface})
+				assert.Equal(tc.expectedMaxOffset, testutil.ToFloat64(ptpMaxOffset), "MaxOffset does not match\n%s", tc.String())
+			}
+			if tc.expectedFrequencyAdjustment != SKIP {
+				ptpFrequencyAdjustment := daemon.FrequencyAdjustment.With(map[string]string{"from": tc.from, "process": tc.process, "node": tc.node, "iface": tc.iface})
+				assert.Equal(tc.expectedFrequencyAdjustment, testutil.ToFloat64(ptpFrequencyAdjustment), "FrequencyAdjustment does not match\n%s", tc.String())
+			}
+			if tc.expectedDelay != SKIP {
+				ptpDelay := daemon.Delay.With(map[string]string{"from": tc.from, "process": tc.process, "node": tc.node, "iface": tc.iface})
+				assert.Equal(tc.expectedDelay, testutil.ToFloat64(ptpDelay), "Delay does not match\n%s", tc.String())
+			}
+			if tc.expectedClockState != SKIP {
+				clockState := daemon.ClockState.With(map[string]string{"process": tc.process, "node": tc.node, "iface": tc.iface})
+				assert.Equal(tc.expectedClockState, testutil.ToFloat64(clockState), "ClockState does not match\n%s", tc.String())
+			}
+			if tc.expectedClockClassMetrics != SKIP {
+				clockClassMetrics := daemon.ClockClassMetrics.With(map[string]string{"process": tc.process, "node": tc.node})
+				assert.Equal(tc.expectedClockClassMetrics, testutil.ToFloat64(clockClassMetrics), "ClockClassMetrics does not match\n%s", tc.String())
+			}
+			if tc.expectedInterfaceRole != SKIP {
+				role := daemon.InterfaceRole.With(map[string]string{"process": tc.process, "node": tc.node, "iface": tc.iface})
+				assert.Equal(tc.expectedInterfaceRole, testutil.ToFloat64(role), "InterfaceRole does not match\n%s", tc.String())
+			}
+		})
 	}
 }
 
