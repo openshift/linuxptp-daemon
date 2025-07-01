@@ -58,21 +58,6 @@ func TestPTP4LParser(t *testing.T) {
 				Source:     constants.Master,
 			},
 		},
-		// Current approch these lines are just skipped over
-		// {
-		// 	name:           "Invalid constants.ClockStateLockedog line",
-		// 	configName:     "ptp4l.0.config",
-		// 	logLine:        "invalid log line",
-		// 	expectedError:  true,
-		// 	expectedMetric: nil,
-		// },
-		// {
-		// 	name:           "Empty log line",
-		// 	configName:     "ptp4l.0.config",
-		// 	logLine:        "",
-		// 	expectedError:  true,
-		// 	expectedMetric: nil,
-		// },
 	}
 
 	for _, tt := range tests {
