@@ -12,14 +12,12 @@ func TestPhc2SysParser(t *testing.T) {
 	tests := []struct {
 		name           string
 		logLine        string
-		configName     string
 		expectedError  bool
 		expectedMetric *parser.Metrics
 	}{
 		{
-			name:       "Valid summary metrics for CLOCK_REALTIME",
-			configName: "ptp4l.0.config",
-			logLine:    "phc2sys[3560354.300]: [ptp4l.0.config] CLOCK_REALTIME rms 4 max 4 freq -76829 +/- 0 delay 1085 +/- 0",
+			name:    "Valid summary metrics for CLOCK_REALTIME",
+			logLine: "phc2sys[3560354.300]: [ptp4l.0.config] CLOCK_REALTIME rms 4 max 4 freq -76829 +/- 0 delay 1085 +/- 0",
 			expectedMetric: &parser.Metrics{
 				Iface:      "CLOCK_REALTIME",
 				Offset:     4,
@@ -32,15 +30,13 @@ func TestPhc2SysParser(t *testing.T) {
 		},
 		{
 			name:           "Valid summary metrics for interface but we ignore anything besides CLOCK_REALTIME",
-			configName:     "ptp4l.0.config",
 			logLine:        "phc2sys[5196755.139]: [ptp4l.0.config] ens5f0 rms 3152778 max 3152778 freq -6083928 +/- 0 delay 2791 +/- 0",
 			expectedMetric: nil,
 			expectedError:  false, // just skip over it
 		},
 		{
-			name:       "Valid regular metrics with phc offset",
-			configName: "ptp4l.0.config",
-			logLine:    "phc2sys[10522413.392]: [ptp4l.0.config:6] CLOCK_REALTIME phc offset 8 s2 freq -6990 delay 502",
+			name:    "Valid regular metrics with phc offset",
+			logLine: "phc2sys[10522413.392]: [ptp4l.0.config:6] CLOCK_REALTIME phc offset 8 s2 freq -6990 delay 502",
 			expectedMetric: &parser.Metrics{
 				Iface:      "CLOCK_REALTIME",
 				Offset:     8,
@@ -52,9 +48,8 @@ func TestPhc2SysParser(t *testing.T) {
 			},
 		},
 		{
-			name:       "Valid regular metrics with sys offset",
-			configName: "ptp4l.0.config",
-			logLine:    "phc2sys[10522413.392]: [ptp4l.0.config:6] CLOCK_REALTIME sys offset 8 s2 freq -6990 delay 502",
+			name:    "Valid regular metrics with sys offset",
+			logLine: "phc2sys[10522413.392]: [ptp4l.0.config:6] CLOCK_REALTIME sys offset 8 s2 freq -6990 delay 502",
 			expectedMetric: &parser.Metrics{
 				Iface:      "CLOCK_REALTIME",
 				Offset:     8,
@@ -63,6 +58,19 @@ func TestPhc2SysParser(t *testing.T) {
 				Delay:      502,
 				ClockState: constants.ClockStateLocked,
 				Source:     constants.Sys,
+			},
+		},
+		{
+			name:    "Valid regular metrics with negative phc offset",
+			logLine: "phc2sys[1823126.732]: [ptp4l.0.config] CLOCK_REALTIME phc offset       -10 s2 freq   +8956 delay    508",
+			expectedMetric: &parser.Metrics{
+				Iface:      "CLOCK_REALTIME",
+				Offset:     -10,
+				MaxOffset:  -10,
+				FreqAdj:    8956,
+				Delay:      508,
+				ClockState: constants.ClockStateLocked,
+				Source:     constants.Phc,
 			},
 		},
 	}

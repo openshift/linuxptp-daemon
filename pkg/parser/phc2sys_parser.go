@@ -16,9 +16,9 @@ var (
 		`^phc2sys\[(?P<timestamp>\d+\.?\d*)\]:` +
 			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
 			`\s+(?P<clock_name>CLOCK_REALTIME)` +
-			`\s+rms\s+(?P<offset>\d+)` +
+			`\s+rms\s+(?P<offset>-?\d+)` +
 			`\s+max\s+(?P<max>-?\d+)` +
-			`\s+freq\s+(?P<freq_adj>[-+]\d+)\s+(?:\+/-\s+\d+)` +
+			`\s+freq\s+(?P<freq_adj>[-+]?\d+)\s+(?:\+/-\s+\d+)` +
 			`\s*(?:delay\s+(?P<delay>\d+)\s+\+/-\s+\d+)?$`,
 	)
 	regularPhc2SysRegex = regexp.MustCompile(
@@ -26,10 +26,10 @@ var (
 			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
 			`\s+(?P<clock_name>CLOCK_REALTIME)` +
 			`\s+(?P<source>phc|sys)` +
-			`\s+offset\s+(?P<offset>\d+)` +
+			`\s+offset\s+(?P<offset>-?\d+)` +
 			`\s+(?P<servo_state>s\d)` +
-			`\s+freq\s+(?P<freq_adj>[-+]\d+)` +
-			`\s*(?:delay\s+(?P<delay>\d+))?$`,
+			`\s+freq\s+(?P<freq_adj>[-+]?\d+)` +
+			`\s*(?:delay\s+(?P<delay>[-+]?\d+))?$`,
 	)
 )
 
