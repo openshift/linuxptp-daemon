@@ -4,16 +4,15 @@ import "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 
 // PTPEvent represents an event extracted from a log line.
 type PTPEvent struct {
-	PortID int
-	Iface  string
-	Role   constants.PTPPortRole // e.g. SLAVE, MASTER, FAULTY
-	Raw    string
-	// original line
+	PortID     int
+	Iface      string
+	Role       constants.PTPPortRole // e.g. SLAVE, MASTER, FAULTY
+	ClockState constants.ClockState  // Clock class value for clock class change events
+	Raw        string                // original line
 }
 
 // Metrics represents the metrics extracted from a log line.
 type Metrics struct {
-	ConfigName string
 	From       string
 	Iface      string // Interface or CLOCK_REALTIME
 	Offset     float64

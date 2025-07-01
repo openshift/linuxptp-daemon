@@ -7,7 +7,7 @@ import (
 // MetricsExtractor is an interface for extracting metrics from log lines.
 type MetricsExtractor interface {
 	ProcessName() string
-	Extract(logLine string) (*Metrics, error)
+	Extract(logLine string) (*Metrics, *PTPEvent, error)
 }
 
 // Populatable ...
