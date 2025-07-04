@@ -113,13 +113,94 @@ func tryToLoadOldConfig(nodeProfilesJson []byte) ([]ptpv1.PtpProfile, bool) {
 	return []ptpv1.PtpProfile{*ptpConfig}, true
 }
 
+func (output *ptp4lConf) determineClockType() event.ClockType {
+	defaultIsMaster := false
+	defaultIsSlave := false
+
+	for _, section := range output.sections {
+		if section.sectionName == "[global]" {
+			if v1, ok := section.options["masterOnly"]; ok && v1 == "1" {
+				defaultIsMaster = true
+			} else if v1, ok := section.options["serverOnly"]; ok && v1 == "1" {
+				defaultIsMaster = true
+			}
+
+			if v1, ok := section.options["clientOnly"]; ok && v1 == "1" {
+				defaultIsSlave = true
+			} else if v1, ok := section.options["slaveOnly"]; ok && v1 == "1" {
+				defaultIsSlave = true
+			}
+		}
+	}
+
+	numberOfSlaveInterfaces := 0
+	numberOfMasterInterfaces := 0
+	numberOfUnknownInterfaces := 0
+	for _, section := range output.sections {
+		if section.sectionName == "[global]" || section.sectionName == "[nmea]" {
+			continue
+		}
+
+		if v1, ok := section.options["masterOnly"]; ok {
+			if v1 == "1" {
+				numberOfMasterInterfaces++
+			} else {
+				numberOfUnknownInterfaces++
+			}
+		} else if v1, ok := section.options["serverOnly"]; ok {
+			if v1 == "1" {
+				numberOfMasterInterfaces++
+			} else {
+				numberOfUnknownInterfaces++
+			}
+		} else {
+			if defaultIsMaster {
+				numberOfMasterInterfaces++
+			} else {
+				numberOfUnknownInterfaces++
+			}
+
+			if v1, ok := section.options["slaveOnly"]; ok {
+				if v1 == "1" {
+					numberOfSlaveInterfaces++
+				} else {
+					numberOfUnknownInterfaces++
+				}
+			} else if v1, ok := section.options["clientOnly"]; ok {
+				if v1 == "1" {
+					numberOfSlaveInterfaces++
+				} else {
+					numberOfUnknownInterfaces++
+				}
+			} else {
+				if defaultIsSlave {
+					numberOfSlaveInterfaces++
+				} else {
+					numberOfUnknownInterfaces++
+				}
+			}
+		}
+	}
+
+	// Determine clock type based on the number of master and slave interfaces
+	// TODO: Figure out what to do with unknown interfaces
+	if numberOfMasterInterfaces > 0 && numberOfSlaveInterfaces == 0 { // Only Masters
+		return event.GM
+	} else if numberOfMasterInterfaces > 0 && numberOfSlaveInterfaces > 0 { // Masters and slaves
+		return event.BC
+	} else if numberOfMasterInterfaces == 0 && numberOfSlaveInterfaces > 0 { // No masters and only Slaves
+		return event.OC
+	}
+	// Default to OC
+	return event.OC
+}
+
 // Takes as input a PtpProfile.Ptp4lConf and outputs as ptp4lConf struct
 func (output *ptp4lConf) populatePtp4lConf(config *string) error {
 	var currentSectionName string
 	var currentSection ptp4lConfSection
 	output.sections = make([]ptp4lConfSection, 0)
 	globalIsDefined := false
-	hasSlaveConfigDefined := false
 
 	if config != nil {
 		for _, line := range strings.Split(*config, "\n") {
@@ -144,13 +225,7 @@ func (output *ptp4lConf) populatePtp4lConf(config *string) error {
 			} else if currentSectionName != "" {
 				split := strings.IndexByte(line, ' ')
 				if split > 0 {
-					currentSection.options[line[:split]] = line[split:]
-					if (line[:split] == "masterOnly" && line[split:] == "0") ||
-						(line[:split] == "serverOnly" && line[split:] == "0") ||
-						(line[:split] == "slaveOnly" && line[split:] == "1") ||
-						(line[:split] == "clientOnly" && line[split:] == "1") {
-						hasSlaveConfigDefined = true
-					}
+					currentSection.options[line[:split]] = strings.TrimSpace(line[split:])
 				}
 			} else {
 				return errors.New("Config option not in section: " + line)
@@ -165,16 +240,7 @@ func (output *ptp4lConf) populatePtp4lConf(config *string) error {
 		output.sections = append(output.sections, ptp4lConfSection{options: map[string]string{}, sectionName: "[global]"})
 	}
 
-	if !hasSlaveConfigDefined {
-		// No Slave Interfaces defined
-		output.clock_type = event.GM
-	} else if len(output.sections) > 2 {
-		// Multiple interfaces with at least one slave Interface defined
-		output.clock_type = event.BC
-	} else {
-		// Single slave Interface defined
-		output.clock_type = event.OC
-	}
+	output.clock_type = output.determineClockType()
 	return nil
 }
 
