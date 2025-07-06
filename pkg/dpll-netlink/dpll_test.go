@@ -5,8 +5,15 @@ import (
 	"os"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestMain(m *testing.M) {
+	teardownTests := testhelpers.SetupTests()
+	defer teardownTests()
+	os.Exit(m.Run())
+}
 
 // test YNL encoding of the DPLL pin control API
 // This tests three basic API use cases:
@@ -17,7 +24,7 @@ func Test_EncodePinControl(t *testing.T) {
 	assert.New(t)
 	// test phase adjustment
 	pc := PinParentDeviceCtl{
-		Id: 88,
+		ID: 88,
 		PhaseAdjust: func() *int32 {
 			t := int32(math.MinInt32)
 			return &t
@@ -33,14 +40,14 @@ func Test_EncodePinControl(t *testing.T) {
 	pc.PhaseAdjust = nil
 	pc.PinParentCtl = []PinControl{
 		{
-			PinParentId: 8,
+			PinParentID: 8,
 			Prio: func() *uint32 {
 				t := uint32(math.MaxUint32)
 				return &t
 			}(),
 		},
 		{
-			PinParentId: 8,
+			PinParentID: 8,
 			Prio: func() *uint32 {
 				t := uint32(math.MaxUint8)
 				return &t
@@ -56,7 +63,7 @@ func Test_EncodePinControl(t *testing.T) {
 	// Test setting the connection state
 	pc.PinParentCtl = []PinControl{
 		{
-			PinParentId: 0,
+			PinParentID: 0,
 			Prio:        nil,
 			Direction: func() *uint32 {
 				t := uint32(2)
@@ -64,7 +71,7 @@ func Test_EncodePinControl(t *testing.T) {
 			}(),
 		},
 		{
-			PinParentId: 1,
+			PinParentID: 1,
 			Prio:        nil,
 			Direction: func() *uint32 {
 				t := uint32(1)

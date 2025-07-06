@@ -2,6 +2,7 @@ package features
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -50,4 +51,22 @@ func GetLinuxPTPPackageVersion() string {
 	version = strings.Trim(version, "'")
 	glog.Infof("linuxptp package version is: %s", version)
 	return version
+}
+
+// GetOCPVersion returns the OCP version or falls back to the latest
+func GetOCPVersion() string {
+	// Check for BUILD_VERSION
+	ocpVersion := os.Getenv("BUILD_VERSION")
+	if ocpVersion == "" {
+		// Fallback to RELEASE_VERSION
+		ocpVersion = os.Getenv("RELEASE_VERSION")
+		if ocpVersion == "" {
+			// Default to lastest
+			ocpVersion = LatestOCPInMatrix
+		}
+	}
+	// Clean up version which has format of vx.y.z -> x.y
+	ocpVersion, _ = strings.CutPrefix(ocpVersion, "v")
+	ocpVersion = strings.Join(strings.Split(ocpVersion, ".")[:2], ".")
+	return ocpVersion
 }
