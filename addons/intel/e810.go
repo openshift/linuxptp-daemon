@@ -245,15 +245,21 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			case "tbc-ho-exit":
 				_, err = clockChain.EnterNormalTBC()
 				if err != nil {
-					return fmt.Errorf("e810: failed to exit T-BC holdover")
+					return fmt.Errorf("e810: failed to enter T-BC normal mode")
 				}
-				glog.Info("e810: exit T-BC holdover")
+				glog.Info("e810: enter T-BC normal mode")
 			case "tbc-ho-entry":
 				_, err = clockChain.EnterHoldoverTBC()
 				if err != nil {
 					return fmt.Errorf("e810: failed to enter T-BC holdover")
 				}
 				glog.Info("e810: enter T-BC holdover")
+			case "reset-to-default":
+				_, err = clockChain.InitPinsTGM()
+				if err != nil {
+					return fmt.Errorf("e810: failed to reset pins to default")
+				}
+				glog.Info("e810: reset pins to default")
 			default:
 				glog.Infof("AfterRunPTPCommandE810 doing nothing for command: %s", command)
 			}
