@@ -1,0 +1,167 @@
+package daemon
+
+import (
+	"strings"
+	"time"
+
+	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
+)
+
+func convertParserRoleToMetricsRole(role parserconstants.PTPPortRole) ptpPortRole {
+	switch role {
+	case parserconstants.PortRoleSlave:
+		return SLAVE
+	case parserconstants.PortRoleMaster:
+		return MASTER
+	case parserconstants.PortRolePassive:
+		return PASSIVE
+	case parserconstants.PortRoleFaulty:
+		return FAULTY
+	case parserconstants.PortRoleListening:
+		return LISTENING
+	default:
+		return UNKNOWN
+	}
+}
+
+func convertParserClockStateEventPTPState(clockState parserconstants.ClockState) event.PTPState {
+	switch clockState {
+	case parserconstants.ClockStateFreeRun:
+		return event.PTP_FREERUN
+	case parserconstants.ClockStateLocked:
+		return event.PTP_LOCKED
+	case parserconstants.ClockStateHoldover:
+		return event.PTP_HOLDOVER
+	}
+	return event.PTP_NOTSET
+}
+
+func getParser(processName string) parser.MetricsExtractor {
+	switch processName {
+	case ptp4lProcessName:
+		return parser.NewPTP4LExtractor()
+	case phc2sysProcessName:
+		return parser.NewPhc2SysExtractor()
+	case ts2phcProcessName:
+		return parser.NewTS2PHCExtractor()
+	default:
+		glog.Errorf("No parser available for process: %s", processName)
+		return nil
+	}
+}
+
+// processWithParser uses the new parser-based approach for processes with parsers
+func processWithParser(process *ptpProcess, output string) {
+	// Extract metrics and events using the parser
+	metrics, ptpEvent, err := process.logParser.Extract(output)
+	if err != nil {
+		glog.Errorf("Failed to extract metrics from %s output: %v", process.name, err)
+		return
+	}
+
+	process.hasCollectedMetrics = true
+
+	// Process metrics if available
+	if metrics != nil {
+		processParsedMetrics(process, metrics)
+	}
+
+	// Process PTP events if available
+	if ptpEvent != nil {
+		processParsedEvent(process, ptpEvent)
+	}
+}
+
+func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
+	// Convert interface from possible clock id
+	iface := process.ifaces.GetPhcID2IFace(ptpMetrics.Iface)
+	if iface != clockRealTime {
+		iface = utils.GetAlias(iface)
+	}
+
+	// Update PTP metrics using the parsed data
+	updatePTPMetrics(ptpMetrics.Source, process.name, iface, ptpMetrics.Offset, ptpMetrics.MaxOffset, ptpMetrics.FreqAdj, ptpMetrics.Delay)
+
+	// Update clock state metrics if available
+	if ptpMetrics.ClockState != "" {
+		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState))
+	}
+
+	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
+	if configName != "" {
+		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
+	}
+
+	// Handle master offset source tracking
+	if ptpMetrics.Source == "master" && configName != "" {
+		masterOffsetSource.set(configName, process.name)
+	}
+
+	switch process.name {
+	case ptp4lProcessName:
+		if ptpMetrics.Iface != "" && configName != "" {
+			masterOffsetIface.set(configName, ptpMetrics.Iface)
+		}
+	case ts2phcProcessName:
+		// Send event for ts2phc
+		select {
+		case process.eventCh <- event.EventChannel{
+			ProcessName: event.TS2PHC,
+			State:       convertParserClockStateEventPTPState(ptpMetrics.ClockState),
+			CfgName:     configName,
+			IFace:       iface,
+			Values: map[event.ValueType]interface{}{
+				event.OFFSET:      int64(ptpMetrics.Offset),
+				event.NMEA_STATUS: int64(1),
+			},
+			ClockType:  process.clockType,
+			Time:       time.Now().UnixMilli(),
+			WriteToLog: true,
+			Reset:      false,
+		}:
+		default:
+		}
+	}
+}
+
+// processParsedEvent handles PTP events extracted by the parser
+func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
+	if process.name != ptp4lProcessName {
+		return
+	}
+
+	// Update interface role metrics
+	if ptpEvent.PortID > 0 && len(process.ifaces) >= ptpEvent.PortID-1 {
+		configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
+		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
+
+		interfaceName := process.ifaces[ptpEvent.PortID-1].Name
+		UpdateInterfaceRoleMetrics(process.name, interfaceName, convertParserRoleToMetricsRole(ptpEvent.Role))
+
+		if configName == "" {
+			return
+		}
+
+		// Handle role-specific logic
+		switch ptpEvent.Role {
+		case parserconstants.PortRoleSlave:
+			masterOffsetIface.set(configName, interfaceName)
+			slaveIface.set(configName, interfaceName)
+		case parserconstants.PortRoleFaulty:
+			isFaulty := slaveIface.isFaulty(configName, interfaceName)
+			sourceIsPtp4l := masterOffsetSource.get(configName) == ptp4lProcessName
+			if isFaulty && sourceIsPtp4l {
+				// Set fault metrics and clear slave & master offset interfaces
+				updatePTPMetrics(master, process.name, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
+				updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
+				updateClockStateMetrics(process.name, masterOffsetIface.get(configName).alias, FREERUN)
+				masterOffsetIface.set(configName, "")
+				slaveIface.set(configName, "")
+			}
+		}
+	}
+}

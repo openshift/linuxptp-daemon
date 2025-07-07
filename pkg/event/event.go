@@ -730,8 +730,6 @@ connect:
 					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), utils.GetAlias(event.IFace))
 					//  update all metric that was sent to events
 					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
-
-					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
 					if gmState.gmIFace != GM_INTERFACE_UNKNOWN { // race condition ;
 						e.UpdateClockStateMetrics(gmState.state, string(GM), utils.GetAlias(gmState.gmIFace))
 					}

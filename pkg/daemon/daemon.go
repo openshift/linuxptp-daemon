@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
@@ -131,6 +132,7 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 	p.process[0].name = name
 	p.process[0].messageTag = msgTag
 	p.process[0].ifaces = ifaces
+	p.process[0].logParser = getParser(name)
 }
 
 // RunProcessPTPMetrics is used by unit tests
@@ -186,6 +188,7 @@ type ptpProcess struct {
 	c                   *net.Conn
 	hasCollectedMetrics bool
 	trIfaceName         string // Time receiver interface name for T-BC clock monitoring
+	logParser           parser.MetricsExtractor
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -665,6 +668,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			ptpClockThreshold: getPTPThreshold(nodeProfile),
 			haProfile:         haProfile,
 			syncERelations:    relations,
+			logParser:         getParser(pProcess),
 		}
 
 		if pProcess == ptp4lProcessName {
@@ -1033,7 +1037,9 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 // for ts2phc along with processing metrics need to identify event
 func (p *ptpProcess) processPTPMetrics(output string) {
 	state := event.PTP_FREERUN
-	if p.name == syncEProcessName {
+	if p.logParser != nil {
+		processWithParser(p, output)
+	} else if p.name == syncEProcessName {
 		configName := strings.Replace(strings.Replace(p.messageTag, "]", "", 1), "[", "", 1)
 		if configName == "" {
 			return
