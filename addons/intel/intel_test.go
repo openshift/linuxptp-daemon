@@ -69,11 +69,11 @@ func Test_ProcessProfilesTbcTtsc(t *testing.T) {
 		// Test holdover entry
 		commands, err := clockChain.EnterHoldoverTBC()
 		assert.NoError(t, err)
-		assert.Equal(t, 3, len(*commands))
+		assert.Equal(t, 2, len(*commands))
 		// Test holdover exit
 		commands, err = clockChain.EnterNormalTBC()
 		assert.NoError(t, err)
-		assert.Equal(t, 3, len(*commands))
+		assert.Equal(t, 2, len(*commands))
 		// Test error cases
 		unitTest = false
 		err = writeSysFs("/sys/0/dummy", "dummy")

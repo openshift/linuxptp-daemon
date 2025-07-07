@@ -1,10 +1,12 @@
-name: tbc
+name: 01-tbc-tr
 ptpSettings:
   unitTest: /tmp/test
   clockId[ens4f0]: 5799633565432596414
   clockId[ens5f0]: 5799633565433967128
   clockId[ens8f0]: 5799633565432596448
-phc2sysOpts: -a -r -n 24 -N 8 -R 16 -u 0
+  inSyncConditionThreshold: 10
+  inSyncConditionTimes: 2
+phc2sysOpts: -r -n 24 -N 8 -u 0 -s ens4f0
 plugins:
   e810:
     enableDefaultConfig: false
@@ -12,6 +14,7 @@ plugins:
     - id: ens4f0
       part: E810-XXVDA4T
       gnssInput: false
+      upstreamPort: ens4f0
       phaseOutputConnectors:
       - SMA1
       - SMA2
@@ -49,16 +52,6 @@ plugins:
       MaxInSpecOffset: 1500
 ptp4lConf: |
   [ens4f0]
-  masterOnly 1
-  [ens4f1]
-  masterOnly 1
-  [ens5f0]
-  masterOnly 1
-  [ens5f1]
-  masterOnly 1
-  [ens8f0]
-  masterOnly 1
-  [ens8f1]
   masterOnly 1
   [global]
   #
@@ -140,7 +133,7 @@ ptp4lConf: |
   #
   # Default interface options
   #
-  clock_type BC
+  clock_type OC
   network_transport L2
   delay_mechanism E2E
   time_stamping hardware
@@ -180,4 +173,4 @@ ts2phcConf: |
   ts2phc.extts_polarity rising
   ts2phc.extts_correction 0
   ts2phc.master 0
-ts2phcOpts: '-s generic -a --ts2phc.external_pps 1'
+ts2phcOpts: '-s generic -a --ts2phc.rh_external_pps 1'

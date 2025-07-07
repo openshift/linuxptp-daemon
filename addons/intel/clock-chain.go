@@ -358,13 +358,6 @@ func (c *ClockChain) EnterHoldoverTBC() (*[]dpll.PinParentDeviceCtl, error) {
 				PpsEnabled: true,
 			},
 		},
-		{
-			Label: sdp21,
-			ParentControl: PinParentControl{
-				EecEnabled: true,
-				PpsEnabled: true,
-			},
-		},
 	})
 	if err != nil {
 		return nil, err
@@ -382,13 +375,6 @@ func (c *ClockChain) EnterNormalTBC() (*[]dpll.PinParentDeviceCtl, error) {
 			ParentControl: PinParentControl{
 				EecEnabled: false,
 				PpsEnabled: true,
-			},
-		},
-		{
-			Label: sdp21,
-			ParentControl: PinParentControl{
-				EecEnabled: false,
-				PpsEnabled: false,
 			},
 		},
 		{

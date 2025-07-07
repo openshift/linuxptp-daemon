@@ -1,10 +1,11 @@
 package event
 
 import (
-	"github.com/golang/glog"
-	"github.com/prometheus/client_golang/prometheus"
 	"strconv"
 	"strings"
+
+	"github.com/golang/glog"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type DDetails []*DataDetails
@@ -38,6 +39,7 @@ type DataDetails struct {
 	logData      string
 	signalSource EventSource // GNSS PPS
 	sourceLost   bool
+	Offset       int64
 }
 
 // UpdateState .. update process state
@@ -85,6 +87,11 @@ func (d *Data) AddEvent(event EventChannel) {
 				dd.ClockType = event.ClockType
 				dd.time = event.Time
 				dd.logData = event.GetLogData()
+				off, fnd := event.Values[OFFSET]
+				if fnd {
+					dd.Offset = off.(int64)
+				}
+
 			} else {
 				glog.Infof("discarding stale event for process %s, last event @ %d, current event @ %d", event.ProcessName, dd.time, event.Time)
 			}
@@ -100,6 +107,12 @@ func (d *Data) AddEvent(event EventChannel) {
 		logData:    event.GetLogData(),
 		State:      event.State,
 		sourceLost: event.SourceLost,
+	}
+	// ptp4l signalSource, as GNSS signal source, can be a Leading source
+	leading, found := event.Values[LeadingSource]
+	if found && leading.(bool) {
+		glog.Info(details.IFace, " is set as the leading source ")
+		details.signalSource = PTP4l
 	}
 	d.logData = details.logData
 	d.Details = append(d.Details, details)
