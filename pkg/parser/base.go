@@ -2,6 +2,7 @@ package parser
 
 import (
 	"regexp"
+	"strings"
 )
 
 // MetricsExtractor is an interface for extracting metrics from log lines.
@@ -37,6 +38,7 @@ func (b *BaseMetricsExtractor[P]) ProcessName() string {
 // Extract extracts metrics from a log line.
 // It determines the type of log line and calls the appropriate extraction function.
 func (b *BaseMetricsExtractor[P]) Extract(logLine string) (*Metrics, *PTPEvent, error) {
+	logLine = strings.TrimSpace(logLine)
 	if logLine == "" {
 		return nil, nil, nil
 	}
