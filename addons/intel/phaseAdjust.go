@@ -101,6 +101,7 @@ func sendDelayCompensation(comp *[]delayCompensation, DpllPins []*dpll.PinInfo) 
 	if err != nil {
 		return fmt.Errorf("failed to dial DPLL: %v", err)
 	}
+	//nolint:errcheck
 	defer conn.Close()
 
 	for _, pin := range DpllPins {
@@ -116,7 +117,6 @@ func sendDelayCompensation(comp *[]delayCompensation, DpllPins []*dpll.PinInfo) 
 						pin.BoardLabel, desiredClockId, err)
 				}
 				glog.Infof("set phaseAdjust of pin %s at clock ID %x to %d ps", pin.BoardLabel, pin.ClockID, dc.DelayPs)
-			} else {
 			}
 		}
 	}
@@ -218,7 +218,7 @@ func parseVpdBlock(block []byte) *map[string]string {
 // matching to the correct internal delay profile
 // Currently the fingerprint is extracted from the "Vendor Information V1"
 // in the hardware Vital Product Data (VPD). With more cards with different
-// delay profiles are avaliable, this function might need to change depending on
+// delay profiles are available, this function might need to change depending on
 // how manufacturers expose data relevant for delay profiles in the VPD file
 func GetHardwareFingerprint(device string) string {
 	b, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/device/vpd", device))

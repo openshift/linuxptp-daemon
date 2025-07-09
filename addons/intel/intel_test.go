@@ -64,7 +64,7 @@ func Test_ProcessProfilesTbcTtsc(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, ClockTypeTBC, clockChain.Type, "identified a wrong clock type")
 		assert.Equal(t, "5799633565432596414", clockChain.LeadingNIC.DpllClockId, "identified a wrong clock ID ")
-		assert.Equal(t, 5, len(clockChain.LeadingNIC.Pins), "wrong number of internal pins")
+		assert.Equal(t, 9, len(clockChain.LeadingNIC.Pins), "wrong number of configurable pins")
 		assert.Equal(t, "ens4f1", clockChain.LeadingNIC.UpstreamPort, "wrong upstream port")
 		// Test holdover entry
 		commands, err := clockChain.EnterHoldoverTBC()
@@ -84,8 +84,8 @@ func Test_ProcessProfilesTbcTtsc(t *testing.T) {
 			{
 				Label: "1",
 				ParentControl: PinParentControl{
-					EecEnabled: false,
-					PpsEnabled: false,
+					EecPriority: PriorityDisabled,
+					PpsPriority: PriorityDisabled,
 				},
 			}})
 		assert.Error(t, err, "1 pin not found in the leading card")

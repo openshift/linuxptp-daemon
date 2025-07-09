@@ -116,6 +116,7 @@ func (e *EventHandler) updateBCState(event EventChannel) clockSyncState {
 		if e.inSyncCondition(cfgName) && !e.isSourceLostBC(cfgName) {
 			e.clkSyncState[cfgName].state = PTP_LOCKED
 			glog.Info("BC FSM: FREERUN to LOCKED")
+			e.LeadingClockData.lastInSpec = true
 			updateDownstreamData = true
 		}
 	case PTP_LOCKED:
