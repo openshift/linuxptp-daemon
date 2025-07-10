@@ -229,12 +229,12 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 				for _, ublxOpt := range append(e810Opts.UblxCmds, getDefaultUblxCmds()...) {
 					ublxArgs := ublxOpt.Args
 					glog.Infof("Running /usr/bin/ubxtool with args %s", strings.Join(ublxArgs, ", "))
-					stdout, err = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput()
+					stdout, _ = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput()
 					//stdout, err = exec.Command("/usr/local/bin/ubxtool", "-p", "STATUS").CombinedOutput()
 					if data != nil && ublxOpt.ReportOutput {
 						_data := *data
 						glog.Infof("Saving status to hwconfig: %s", string(stdout))
-						var pluginData *E810PluginData = _data.(*E810PluginData)
+						var pluginData = _data.(*E810PluginData)
 						_pluginData := *pluginData
 						statusString := fmt.Sprintf("ublx data: %s", string(stdout))
 						*_pluginData.hwplugins = append(*_pluginData.hwplugins, statusString)
@@ -245,15 +245,21 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			case "tbc-ho-exit":
 				_, err = clockChain.EnterNormalTBC()
 				if err != nil {
-					return fmt.Errorf("e810: failed to exit T-BC holdover")
+					return fmt.Errorf("e810: failed to enter T-BC normal mode")
 				}
-				glog.Info("e810: exit T-BC holdover")
+				glog.Info("e810: enter T-BC normal mode")
 			case "tbc-ho-entry":
 				_, err = clockChain.EnterHoldoverTBC()
 				if err != nil {
 					return fmt.Errorf("e810: failed to enter T-BC holdover")
 				}
 				glog.Info("e810: enter T-BC holdover")
+			case "reset-to-default":
+				_, err = clockChain.SetPinDefaults()
+				if err != nil {
+					return fmt.Errorf("e810: failed to reset pins to default")
+				}
+				glog.Info("e810: reset pins to default")
 			default:
 				glog.Infof("AfterRunPTPCommandE810 doing nothing for command: %s", command)
 			}
@@ -268,7 +274,7 @@ func PopulateHwConfigE810(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error 
 	//*hwconfigs = append(*hwconfigs, hwConfig)
 	if data != nil {
 		_data := *data
-		var pluginData *E810PluginData = _data.(*E810PluginData)
+		var pluginData = _data.(*E810PluginData)
 		_pluginData := *pluginData
 		if _pluginData.hwplugins != nil {
 			for _, _hwconfig := range *_pluginData.hwplugins {

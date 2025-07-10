@@ -17,7 +17,8 @@ const (
 	DefaultUpdateInterval  = 30
 	DefaultProfilePath     = "/etc/linuxptp"
 	DefaultLeapConfigPath  = "/etc/leap"
-	DefaultPmcPollInterval = 60
+	DefaultPmcPollInterval = 30
+	DefaultConfigPath      = "/var/run"
 )
 
 type IFaces []Iface
@@ -28,10 +29,10 @@ type Iface struct {
 	PhcId    string
 }
 
-// GetGMInterface ... get grandmaster interface
-func (i *IFaces) GetGMInterface() Iface {
+// GetLeadingInterface ... get leading clock interface
+func (i *IFaces) GetLeadingInterface() Iface {
 	for _, iface := range *i {
-		if iface.Source == event.GNSS {
+		if iface.Source == event.GNSS || iface.Source == event.PTP4l {
 			return iface
 		}
 	}

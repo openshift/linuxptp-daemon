@@ -21,7 +21,7 @@ func getSemver(versionStr string) (*semver.Version, error) {
 	// in the "pre-release identifier"
 	// So we replace the "_" with a dot to make it a valid semver string
 	v, err := semver.NewVersion(
-		strings.Replace(versionStr, "_", ".", 1),
+		strings.ReplaceAll(versionStr, "_", "."),
 	)
 	return v, err
 }

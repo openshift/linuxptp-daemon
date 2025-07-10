@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -23,6 +24,17 @@ const (
 	GPSD_PROCESSNAME     = "gpsd"
 	GNSSMONITOR_INTERVAL = 1 * time.Second
 )
+
+type filteringStderrWriter struct{}
+
+func (w *filteringStderrWriter) Write(p []byte) (n int, err error) {
+	if bytes.Contains(p, []byte("Inappropriate ioctl for device")) {
+		// Suppress this error
+		return len(p), nil
+	}
+	// Write all other output to the real stderr (container logs)
+	return os.Stderr.Write(p)
+}
 
 type GPSD struct {
 	name                 string
@@ -176,7 +188,7 @@ func (g *GPSD) CmdRun(stdoutToSocket bool) {
 		g.ProcessStatus(nil, PtpProcessUp)
 		glog.Infof("Starting %s...", g.Name())
 		glog.Infof("%s cmd: %+v", g.Name(), g.cmd)
-		g.cmd.Stderr = os.Stderr
+		g.cmd.Stderr = &filteringStderrWriter{}
 		var err error
 		// Don't restart after termination
 		if !g.Stopped() {

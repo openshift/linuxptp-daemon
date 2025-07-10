@@ -25,7 +25,7 @@ var (
 			`\s*(?P<interface>\w+)?` +
 			`\s+rms\s+(?P<offset>-?\d+)` +
 			`\s+max\s+(?P<max>-?\d+)` +
-			`\s+freq\s+(?P<freq_adj>[-+]\d+)\s+\+/-\s+\d+` +
+			`\s+freq\s+(?P<freq_adj>[-+]?\d+)\s+\+/-\s+\d+` +
 			`\s*(?:delay\s+(?P<delay>\d+)\s+\+/-\s+\d+)?` +
 			`$`,
 	)
@@ -36,7 +36,7 @@ var (
 			`\s*(?P<interface>\w+)?` +
 			`\s+offset\s+(?P<offset>-?\d+)` +
 			`\s+(?P<servo_state>s\d)` +
-			`\s+freq\s+(?P<freq_adj>[-+]\d+)` +
+			`\s+freq\s+(?P<freq_adj>[-+]?\d+)` +
 			`\s*(?:path\s+delay\s+(?P<delay>\d+))?` +
 			`$`,
 	)
