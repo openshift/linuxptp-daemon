@@ -212,7 +212,7 @@ func RunPMCExpGetExternalGMPropertiesNP(configFileName string) (egp protocol.Ext
 		}
 	}()
 
-	for range numRetry {
+	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
 			result, matches, err1 := e.Expect(externalGMPropertiesNPRegExp, cmdTimeout)
 			if err1 != nil {
@@ -223,8 +223,8 @@ func RunPMCExpGetExternalGMPropertiesNP(configFileName string) (egp protocol.Ext
 				return egp, err1
 			}
 			glog.Infof("pmc result: %s", result)
-			for i, m := range matches[1:] {
-				egp.Update(egp.Keys()[i], m)
+			for j, m := range matches[1:] {
+				egp.Update(egp.Keys()[j], m)
 			}
 			break
 		}
@@ -294,7 +294,7 @@ func RunPMCExpGetTimePropertiesDS(configFileName string) (tp protocol.TimeProper
 		}
 	}()
 
-	for range numRetry {
+	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
 			_, matches, err1 := e.Expect(timePropertiesDSRegExp, cmdTimeout)
 			if err1 != nil {
@@ -304,8 +304,8 @@ func RunPMCExpGetTimePropertiesDS(configFileName string) (tp protocol.TimeProper
 				glog.Errorf("pmc result match error %v", err1)
 				return tp, err1
 			}
-			for i, m := range matches[1:] {
-				tp.Update(tp.Keys()[i], m)
+			for j, m := range matches[1:] {
+				tp.Update(tp.Keys()[j], m)
 			}
 			glog.Infof("pmc result: %++v", tp)
 			break
@@ -338,7 +338,7 @@ func RunPMCExpGetCurrentDS(configFileName string) (cds protocol.CurrentDS, err e
 		}
 	}()
 
-	for range numRetry {
+	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
 			_, matches, err1 := e.Expect(currentDSRegExp, cmdTimeout)
 			if err1 != nil {
@@ -348,8 +348,8 @@ func RunPMCExpGetCurrentDS(configFileName string) (cds protocol.CurrentDS, err e
 				glog.Errorf("pmc result match error %v", err1)
 				return cds, err1
 			}
-			for i, m := range matches[1:] {
-				cds.Update(cds.Keys()[i], m)
+			for j, m := range matches[1:] {
+				cds.Update(cds.Keys()[j], m)
 			}
 			glog.Infof("pmc result: %++v", cds)
 			break

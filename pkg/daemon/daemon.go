@@ -1640,7 +1640,9 @@ func (p *ptpProcess) sendPtp4lEvent() {
 	clockID, err := p.getPTPClockID()
 	if err != nil {
 		glog.Error(err)
+		clockID = "" // Set to empty string if error occurs
 	}
+	_ = clockID // Ensure linter sees the variable as used
 	select {
 	case p.eventCh <- event.EventChannel{
 		ProcessName: event.PTP4l,
