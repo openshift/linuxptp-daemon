@@ -12,13 +12,17 @@ import (
 )
 
 var (
+
+	// ptp4l[4268779.809]: [ptp4l.3.config] port 3: UNCALIBRATED to MASTER on RS_MASTER
+	// ptp4l[4268779.809]: [ptp4l.4.config] port 4: FAULT_DETECTED
+	// ptp4l[412707.219]: [ptp4l.0.config:5] port 11 (ens8f2): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES
 	ptp4lEventRegex = regexp.MustCompile(
 		`^ptp4l\[(?P<timestamp>\d+\.?\d*)\]:` +
 			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
-			`\s+port\s+(?P<port>\d+):` +
+			`\s+port\s+(?P<port_id>\d+)(?:\s+\((?P<port_name>[\d\w]+)\))?:` +
 			`\s+(?P<event>.+)`,
 	)
-	// ptp4l rms regex
+	// ptp4l[74737.942]: [ptp4l.0.config] rms 53 max 74 freq -16642 +/- 40 delay 1089 +/- 20
 	summaryPTP4LRegex = regexp.MustCompile(
 		`^ptp4l\[(?P<timestamp>\d+\.?\d*)\]:` +
 			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
@@ -29,7 +33,7 @@ var (
 			`\s*(?:delay\s+(?P<delay>\d+)\s+\+/-\s+\d+)?` +
 			`$`,
 	)
-	// ptp4l master offset regex
+	// ptp4l[365195.391]: [ptp4l.0.config] master offset -1 s2 freq -3972 path delay 89
 	regularPTP4LRegex = regexp.MustCompile(
 		`^ptp4l\[(?P<timestamp>\d+\.?\d*)\]:` +
 			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
@@ -58,8 +62,9 @@ type ptp4lParsed struct {
 	ServoState string
 
 	// Event Fields
-	PortID *int
-	Event  string
+	PortID   *int
+	PortName string
+	Event    string
 }
 
 // Populate ...
@@ -120,12 +125,14 @@ func (p *ptp4lParsed) Populate(line string, matched, feilds []string) error {
 			p.Delay = &delay
 		case "servo_state":
 			p.ServoState = matched[i]
-		case "port":
-			port, err := strconv.Atoi(matched[i])
+		case "port_id":
+			portID, err := strconv.Atoi(matched[i])
 			if err != nil {
 				return err
 			}
-			p.PortID = &port
+			p.PortID = &portID
+		case "port_name":
+			p.PortName = matched[i]
 		case "event":
 			p.Event = matched[i]
 		}
@@ -174,6 +181,7 @@ func extractEventPTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
 		portID = 0
 	}
 
+	// TODO: Pass port name up if provided
 	return &PTPEvent{
 		PortID: portID,
 		Role:   role,
