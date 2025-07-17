@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
@@ -168,7 +170,7 @@ func extractTS2PHCnmeaStatus(parsed *ts2phcParsed) (*Metrics, error) {
 	var statusMetrics []StatusMetric
 	if parsed.Status != nil {
 		statusMetrics = append(statusMetrics, StatusMetric{
-			Subtype: "nmea_status",
+			Subtype: string(event.NMEA_STATUS),
 			Status:  *parsed.Status,
 		})
 	}
