@@ -18,16 +18,16 @@ type PtpInterface struct {
 }
 
 type masterOffsetInterface struct { // by slave iface with masked index
-	sync.RWMutex
+	mu    sync.RWMutex
 	iface map[string]PtpInterface
 }
 type slaveInterface struct { // current slave iface name
-	sync.RWMutex
+	mu   sync.RWMutex
 	name map[string]string
 }
 
 type masterOffsetSourceProcess struct { // current slave iface name
-	sync.RWMutex
+	mu   sync.RWMutex
 	name map[string]string
 }
 
@@ -62,8 +62,8 @@ func (s *SharedState) DeleteMasterOffsetIface(configName string) {
 	if s.masterOffsetIface == nil {
 		return // avoid panic
 	}
-	s.masterOffsetIface.Lock()
-	defer s.masterOffsetIface.Unlock()
+	s.masterOffsetIface.mu.Lock()
+	defer s.masterOffsetIface.mu.Unlock()
 	delete(s.masterOffsetIface.iface, configName)
 }
 
@@ -74,8 +74,8 @@ func (s *SharedState) GetSlaveIface(configName string) string {
 	if s.slaveIface == nil {
 		return " " // avoid panic
 	}
-	s.slaveIface.RLock()
-	defer s.slaveIface.RUnlock()
+	s.slaveIface.mu.RLock()
+	defer s.slaveIface.mu.RUnlock()
 	return s.slaveIface.name[configName]
 }
 
@@ -84,8 +84,8 @@ func (s *SharedState) DeleteSlaveIface(configName string) {
 	if s.slaveIface == nil {
 		return // avoid panic
 	}
-	s.slaveIface.Lock()
-	defer s.slaveIface.Unlock()
+	s.slaveIface.mu.Lock()
+	defer s.slaveIface.mu.Unlock()
 	delete(s.slaveIface.name, configName)
 }
 
@@ -98,8 +98,8 @@ func (s *SharedState) GetMasterInterface(configName string) PtpInterface {
 			Alias: "",
 		} // avoid panic
 	}
-	s.masterOffsetIface.RLock()
-	defer s.masterOffsetIface.RUnlock()
+	s.masterOffsetIface.mu.RLock()
+	defer s.masterOffsetIface.mu.RUnlock()
 	if mIface, found := s.masterOffsetIface.iface[configName]; found {
 		return mIface
 	}
@@ -115,8 +115,8 @@ func (s *SharedState) GetMasterInterfaceByAlias(configName string, alias string)
 	if s.masterOffsetIface == nil {
 		return PtpInterface{}, fmt.Errorf("master interface is nil")
 	}
-	s.masterOffsetIface.RLock()
-	defer s.masterOffsetIface.RUnlock()
+	s.masterOffsetIface.mu.RLock()
+	defer s.masterOffsetIface.mu.RUnlock()
 	if mIface, found := s.masterOffsetIface.iface[configName]; found {
 		if mIface.Alias == alias {
 			return mIface, nil
@@ -137,8 +137,8 @@ func (s *SharedState) GetAliasByName(configName string, name string) (PtpInterfa
 	if s.masterOffsetIface == nil {
 		return PtpInterface{}, fmt.Errorf("master interface is nil")
 	}
-	s.masterOffsetIface.RLock()
-	defer s.masterOffsetIface.RUnlock()
+	s.masterOffsetIface.mu.RLock()
+	defer s.masterOffsetIface.mu.RUnlock()
 	if mIface, found := s.masterOffsetIface.iface[configName]; found {
 		if mIface.Name == name {
 			return mIface, nil
@@ -156,8 +156,8 @@ func (s *SharedState) SetMasterOffsetIface(configName string, value string) erro
 	if s.masterOffsetIface == nil {
 		return fmt.Errorf("master interface is nil")
 	}
-	s.masterOffsetIface.Lock()
-	defer s.masterOffsetIface.Unlock()
+	s.masterOffsetIface.mu.Lock()
+	defer s.masterOffsetIface.mu.Unlock()
 	s.masterOffsetIface.iface[configName] = PtpInterface{
 		Name:  value,
 		Alias: utils.GetAlias(value),
@@ -174,8 +174,8 @@ func (s *SharedState) SetSlaveIface(configName string, value string) error {
 	if s.slaveIface == nil {
 		return fmt.Errorf("slave interface is nil")
 	}
-	s.slaveIface.Lock()
-	defer s.slaveIface.Unlock()
+	s.slaveIface.mu.Lock()
+	defer s.slaveIface.mu.Unlock()
 	s.slaveIface.name[configName] = value
 	return nil
 }
@@ -186,8 +186,8 @@ func (s *SharedState) IsFaultySlaveIface(configName string, iface string) bool {
 	if s.slaveIface == nil {
 		return false
 	}
-	s.slaveIface.RLock()
-	defer s.slaveIface.RUnlock()
+	s.slaveIface.mu.RLock()
+	defer s.slaveIface.mu.RUnlock()
 
 	if si, found := s.slaveIface.name[configName]; found {
 		return si == iface
@@ -201,8 +201,8 @@ func (s *SharedState) GetMasterOffsetSource(configName string) string {
 	if s.masterOffsetIface == nil {
 		return "uninitialized" // avoid panic
 	}
-	s.masterOffsetSource.RLock()
-	defer s.masterOffsetSource.RUnlock()
+	s.masterOffsetSource.mu.RLock()
+	defer s.masterOffsetSource.mu.RUnlock()
 	if source, found := s.masterOffsetSource.name[configName]; found {
 		return source
 	}
@@ -218,8 +218,8 @@ func (s *SharedState) SetMasterOffsetSource(configName string, value string) err
 	if s.masterOffsetIface == nil {
 		return fmt.Errorf("master interface is nil")
 	}
-	s.masterOffsetSource.Lock()
-	defer s.masterOffsetSource.Unlock()
+	s.masterOffsetSource.mu.Lock()
+	defer s.masterOffsetSource.mu.Unlock()
 	s.masterOffsetSource.name[configName] = value
 	return nil
 }

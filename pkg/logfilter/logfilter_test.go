@@ -173,7 +173,8 @@ func TestDaemon_LogFilterEnhanced(t *testing.T) {
 		for _, line := range tc.logs {
 			logfilter.FilterOutput(logFilters, line)
 		}
-		actualOutput := strings.SplitN(logFilters[0].FlushOutput(), ":", 2)[1]
+		actualOutputList := strings.SplitN(logFilters[0].FlushOutput(), ":", 2)
+		actualOutput := actualOutputList[len(actualOutputList)-1]
 
 		assert.Equal(t, tc.expectedOutput, actualOutput, fmt.Sprintf("Rendered output doesn't match expected: %s", tc.testName))
 	}

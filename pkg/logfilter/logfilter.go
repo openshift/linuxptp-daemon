@@ -2,6 +2,7 @@ package logfilter
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -14,9 +15,10 @@ import (
 )
 
 const (
-	defaultEnhancedFilterTime = "30s"
-	ptp4lProcessName          = "ptp4l"
-	phc2sysProcessName        = "phc2sys"
+	defaultEnhancedFilterTime   = "30s"
+	defaultOffsetFlushThreshold = "0"
+	ptp4lProcessName            = "ptp4l"
+	phc2sysProcessName          = "phc2sys"
 )
 
 // LogFilter represents a specific filter that can be used to control logging
@@ -31,9 +33,10 @@ type LogFilter struct {
 	offsets                 []float64
 	summaryText             string
 	summaryFields           []string
+	enhancedThreshold       int64
 }
 
-func logFilterFromRegex(regex string, reducers []string, batchLengthStr string, summaryText string, summaryFields []string) *LogFilter {
+func logFilterFromRegex(regex string, reducers []string, batchLengthStr string, summaryText string, summaryFields []string, thresholdStr string) *LogFilter {
 	var filter LogFilter
 	logFilterRegex, logFilterRegexErr := regexp.Compile(regex)
 	if logFilterRegexErr != nil {
@@ -57,6 +60,15 @@ func logFilterFromRegex(regex string, reducers []string, batchLengthStr string, 
 	filter.expiryTime = time.Now().Add(filter.batchLength)
 	filter.summaryText = summaryText
 	filter.summaryFields = summaryFields
+
+	// Parse threshold
+	threshold, err := strconv.ParseInt(thresholdStr, 10, 64)
+	if err != nil {
+		glog.Infof("Failed parsing threshold %s: %v. Defaulting to 0.", thresholdStr, err)
+	} else {
+		filter.enhancedThreshold = threshold
+	}
+
 	for _, reducer := range reducers {
 		reducerRegex, reducerRegexErr := regexp.Compile(reducer)
 		if reducerRegexErr != nil {
@@ -72,7 +84,7 @@ func reprLogFilter(filter *LogFilter) string {
 	return filter.logFilterRegexStr
 }
 
-func getLogFiltersEnhanced(processName string, messageTag string, batchLength string) []*LogFilter {
+func getLogFiltersEnhanced(processName string, messageTag string, batchLength string, threshold string) []*LogFilter {
 	var logFilters []*LogFilter
 	offsetString := ""
 	if processName == ptp4lProcessName {
@@ -86,7 +98,7 @@ func getLogFiltersEnhanced(processName string, messageTag string, batchLength st
 		offsetReducers := []string{offsetString + " *[0-9-]* ", "[-]*[0-9]+"}
 		offsetOutputs := []string{"time", "cnt", "min", "max", "avg", "SD"}
 		offsetFormatter := processName + "[%0.3f]: " + messageTag + " " + offsetString + " summary: cnt=%d, min=%d, max=%d, avg=%0.2f, SD=%0.2f"
-		offsetFilter := logFilterFromRegex(offsetRegex, offsetReducers, batchLength, offsetFormatter, offsetOutputs)
+		offsetFilter := logFilterFromRegex(offsetRegex, offsetReducers, batchLength, offsetFormatter, offsetOutputs, threshold)
 		logFilters = append(logFilters, offsetFilter)
 	}
 
@@ -99,13 +111,27 @@ func GetLogFilters(processName string, messageTag string, ptpSettings map[string
 	messageTag = strings.ReplaceAll(messageTag, "{level}", "6")
 
 	if filter, ok := ptpSettings["stdoutFilter"]; ok {
-		logFilters = append(logFilters, logFilterFromRegex(filter, nil, "", "", nil)) // Filter anything with specified filter
+		logFilters = append(logFilters, logFilterFromRegex(filter, nil, "", "", nil, defaultOffsetFlushThreshold)) // Filter anything with specified filter
 	}
 	if logReduce, ok := ptpSettings["logReduce"]; ok {
-		if strings.ToLower(logReduce) == "true" || strings.ToLower(logReduce) == "basic" {
-			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, "", "", nil)) // Just filter anything with master offset
-		} else if strings.ToLower(logReduce) == "enhanced" {
-			logFilters = getLogFiltersEnhanced(processName, messageTag, defaultEnhancedFilterTime)
+		logReduceSettings := strings.Fields(logReduce)
+		logReduceMode := "false"
+		logReduceTime := defaultEnhancedFilterTime
+		logReduceThreshold := defaultOffsetFlushThreshold
+		if len(logReduceSettings) >= 1 {
+			logReduceMode = logReduceSettings[0]
+		}
+		if len(logReduceSettings) >= 2 {
+			logReduceTime = logReduceSettings[1]
+		}
+		if len(logReduceSettings) >= 3 {
+			logReduceThreshold = logReduceSettings[2]
+		}
+
+		if logReduceMode == "true" || logReduceMode == "basic" {
+			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, "", "", nil, defaultOffsetFlushThreshold)) // Just filter anything with master offset
+		} else if logReduceMode == "enhanced" {
+			logFilters = getLogFiltersEnhanced(processName, messageTag, logReduceTime, logReduceThreshold)
 		}
 	}
 
@@ -188,9 +214,14 @@ func FilterOutput(logFilters []*LogFilter, output string) string {
 					continue
 				}
 			}
-			if filter.summaryText == "" {
+			if filter.enhancedThreshold > 0 && int64(math.Abs(filteredVal)) > filter.enhancedThreshold {
+				if len(filter.offsets) > 0 {
+					return filter.FlushOutput() + "\n" + output
+				}
+				return output
+			} else if filter.summaryText == "" {
 				skipOutput = true
-			} else if len(filter.offsets) > 0 && time.Now().After(filter.expiryTime) {
+			} else if time.Now().After(filter.expiryTime) {
 				filter.offsets = append(filter.offsets, filteredVal)
 				ret = filter.FlushOutput()
 			} else {
