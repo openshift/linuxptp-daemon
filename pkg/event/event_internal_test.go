@@ -44,7 +44,7 @@ func TestConvergeConfig(t *testing.T) {
 		mockData := &MockData{
 			Data: map[string][]*Data{
 				"config1": {
-					{ProcessName: DPLL, Details: DDetails{{IFace: "eth1"}}},
+					{ProcessName: DPLL, Details: DDetails{{IFace: "ens4f1"}}},
 				},
 			},
 		}
@@ -54,7 +54,7 @@ func TestConvergeConfig(t *testing.T) {
 			},
 			Event: EventChannel{
 				ProcessName: PTP4lProcessName,
-				IFace:       "eth0",
+				IFace:       "ens5f0",
 			},
 		}
 
