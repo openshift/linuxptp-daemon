@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
@@ -92,7 +93,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 			leadingIFace:  leadingInterface,
 		}
 	}
-	// glog.Infof("cfgName %s syncSourceLost %t, leadingIface %s e.clkSyncState %++v", cfgName, syncSrcLost, leadingInterface, e.clkSyncState)
+
 	e.clkSyncState[cfgName].sourceLost = false
 	e.clkSyncState[cfgName].leadingIFace = leadingInterface
 	if data, ok := e.data[cfgName]; ok {
@@ -227,10 +228,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 
 	if updateDownstreamData {
 		if gSycState.state == PTP_LOCKED {
-			if e.LeadingClockData.upstreamParentDataSet != nil && e.LeadingClockData.upstreamTimeProperties != nil {
-				go e.downstreamAnnounceIWF(e.LeadingClockData.upstreamCurrentDSStepsRemoved,
-					*e.LeadingClockData.upstreamParentDataSet, *e.LeadingClockData.upstreamTimeProperties, cfgName, c)
-			}
+			go e.downstreamAnnounceIWF(cfgName, c)
 		} else {
 			go e.announceLocalData(cfgName, c)
 		}
@@ -319,30 +317,40 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 
 	default:
 	}
-	// pmcCmd := fmt.Sprintf("pmc -u -b 0 -f /var/run/%s", cfgName)
-
 	go pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs)
 }
 
-func (e *EventHandler) downstreamAnnounceIWF(stepsRemoved uint16, pds protocol.ParentDataSet, tp protocol.TimePropertiesDS, cfgName string, c net.Conn) {
-	gs := protocol.GrandmasterSettings{
-		ClockQuality: fbprotocol.ClockQuality{
-			ClockClass:              fbprotocol.ClockClass(pds.GrandmasterClockClass),
-			ClockAccuracy:           fbprotocol.ClockAccuracy(pds.GrandmasterClockAccuracy),
-			OffsetScaledLogVariance: pds.ObservedParentOffsetScaledLogVariance,
-		},
-		TimePropertiesDS: tp,
-	}
-	es := protocol.ExternalGrandmasterProperties{
-		GrandmasterIdentity: pds.GrandmasterIdentity,
-		// stepsRemoved at this point is already incremented, representing the current clock position
-		StepsRemoved: stepsRemoved,
-	}
-	e.announceClockClass(int(gs.ClockQuality.ClockClass), cfgName, c)
-	if err := pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, es); err != nil {
+// this function runs in a goroutine
+func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
+	ptpCfgName := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
+	glog.Infof("downstreamAnnounceIWF: %s", ptpCfgName)
+	results, err := pmc.RunPMCExpGetMultiple(ptpCfgName)
+	if err != nil {
 		glog.Error(err)
 	}
-	if err := pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs); err != nil {
+	e.LeadingClockData.upstreamTimeProperties = &results.TimePropertiesDS
+	e.LeadingClockData.upstreamParentDataSet = &results.ParentDataSet
+	e.LeadingClockData.upstreamCurrentDSStepsRemoved = results.CurrentDS.StepsRemoved
+
+	gs := protocol.GrandmasterSettings{
+		ClockQuality: fbprotocol.ClockQuality{
+			ClockClass:              fbprotocol.ClockClass(results.ParentDataSet.GrandmasterClockClass),
+			ClockAccuracy:           fbprotocol.ClockAccuracy(results.ParentDataSet.GrandmasterClockAccuracy),
+			OffsetScaledLogVariance: results.ParentDataSet.ObservedParentOffsetScaledLogVariance,
+		},
+		TimePropertiesDS: results.TimePropertiesDS,
+	}
+	es := protocol.ExternalGrandmasterProperties{
+		GrandmasterIdentity: results.ParentDataSet.GrandmasterIdentity,
+		// stepsRemoved at this point is already incremented, representing the current clock position
+		StepsRemoved: results.CurrentDS.StepsRemoved,
+	}
+	glog.Infof("%++v", es)
+	e.announceClockClass(int(gs.ClockQuality.ClockClass), cfgName, c)
+	if err = pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, es); err != nil {
+		glog.Error(err)
+	}
+	if err = pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs); err != nil {
 		glog.Error(err)
 	}
 	glog.Infof("%++v", es)
@@ -495,22 +503,9 @@ func (e *EventHandler) convergeConfig(event EventChannel) EventChannel {
 func (e *EventHandler) updateLeadingClockData(event EventChannel) {
 	switch event.ProcessName {
 	case PTP4lProcessName:
-		glog.Infof("%++v", event)
-		tp, found := event.Values[TimePropertiesDataSet].(*protocol.TimePropertiesDS)
-		if found && tp != nil {
-			e.LeadingClockData.upstreamTimeProperties = tp
-		}
 		cpc, found := event.Values[ControlledPortsConfig].(string)
 		if found {
 			e.LeadingClockData.controlledPortsConfig = cpc
-		}
-		pds, found := event.Values[ParentDataSet].(*protocol.ParentDataSet)
-		if found && pds != nil {
-			e.LeadingClockData.upstreamParentDataSet = pds
-		}
-		cds, found := event.Values[CurrentDataSet].(*protocol.CurrentDS)
-		if found && cds != nil {
-			e.LeadingClockData.upstreamCurrentDSStepsRemoved = cds.StepsRemoved
 		}
 		id, found := event.Values[ClockIDKey].(string)
 		if found {

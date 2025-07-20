@@ -4,7 +4,6 @@ package event
 import (
 	"testing"
 
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -89,32 +88,23 @@ func TestUpdateLeadingClockData_PTP4lProcessName(t *testing.T) {
 	event := EventChannel{
 		ProcessName: PTP4lProcessName,
 		Values: map[ValueType]interface{}{
-			TimePropertiesDataSet: &protocol.TimePropertiesDS{},
 			ControlledPortsConfig: "config",
-			ParentDataSet:         &protocol.ParentDataSet{},
-			CurrentDataSet:        &protocol.CurrentDS{StepsRemoved: 10},
+			ClockIDKey:            "clockID",
 		},
 	}
 
 	expectedLeadingClockData := LeadingClockParams{
-		upstreamTimeProperties:        event.Values[TimePropertiesDataSet].(*protocol.TimePropertiesDS),
-		controlledPortsConfig:         "config",
-		upstreamParentDataSet:         event.Values[ParentDataSet].(*protocol.ParentDataSet),
-		upstreamCurrentDSStepsRemoved: 10,
+		controlledPortsConfig: "config",
+		clockID:               "clockID",
 	}
 
 	e := EventHandler{
-		LeadingClockData: &LeadingClockParams{
-			upstreamTimeProperties: &protocol.TimePropertiesDS{},
-			upstreamParentDataSet:  &protocol.ParentDataSet{},
-		},
+		LeadingClockData: &LeadingClockParams{},
 	}
 	e.updateLeadingClockData(event)
 
-	assert.Equal(t, expectedLeadingClockData.upstreamParentDataSet, e.LeadingClockData.upstreamParentDataSet)
-	assert.Equal(t, expectedLeadingClockData.upstreamTimeProperties, e.LeadingClockData.upstreamTimeProperties)
 	assert.Equal(t, expectedLeadingClockData.controlledPortsConfig, e.LeadingClockData.controlledPortsConfig)
-	assert.Equal(t, expectedLeadingClockData.upstreamCurrentDSStepsRemoved, e.LeadingClockData.upstreamCurrentDSStepsRemoved)
+	assert.Equal(t, expectedLeadingClockData.clockID, e.LeadingClockData.clockID)
 }
 
 func TestUpdateLeadingClockData_DPLL(t *testing.T) {

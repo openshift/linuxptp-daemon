@@ -148,10 +148,7 @@ func btoi(b bool) uint8 {
 }
 
 func stob(s string) bool {
-	if s == "1" {
-		return true
-	}
-	return false
+	return s == "1"
 }
 
 func stou8(s string) uint8 {
@@ -212,7 +209,7 @@ func stou32h(s string) uint32 {
 // ValueRegEx provides the regex method for the ParentDS values matching
 func (p *ParentDataSet) ValueRegEx() map[string]string {
 	return map[string]string{
-		"parentPortIdentity":                    `(\d*\.\d*\.\d*\-\d*)`,
+		"parentPortIdentity":                    `(.*)`,
 		"parentStats":                           `(\d+)`,
 		"observedParentOffsetScaledLogVariance": `(0x[\da-f]+)`,
 		"observedParentClockPhaseChangeRate":    `(0x[\da-f]+)`,
@@ -221,7 +218,7 @@ func (p *ParentDataSet) ValueRegEx() map[string]string {
 		"gm.ClockAccuracy":                      `(0x[\da-f]+)`,
 		"gm.OffsetScaledLogVariance":            `(0x[\da-f]+)`,
 		"grandmasterPriority2":                  `(\d+)`,
-		"grandmasterIdentity":                   `(\d*\.\d*\.\d*)`,
+		"grandmasterIdentity":                   `(.*)`,
 	}
 }
 
@@ -236,9 +233,18 @@ func (p *ParentDataSet) RegEx() string {
 
 // Keys provides the keys method for the ParentDS values
 func (p *ParentDataSet) Keys() []string {
-	return []string{"parentPortIdentity", "parentStats", "observedParentOffsetScaledLogVariance",
-		"observedParentClockPhaseChangeRate", "grandmasterPriority1", "gm.ClockClass", "gm.ClockAccuracy",
-		"gm.OffsetScaledLogVariance", "grandmasterPriority2", "grandmasterIdentity"}
+	return []string{
+		"parentPortIdentity",
+		"parentStats",
+		"observedParentOffsetScaledLogVariance",
+		"observedParentClockPhaseChangeRate",
+		"grandmasterPriority1",
+		"gm.ClockClass",
+		"gm.ClockAccuracy",
+		"gm.OffsetScaledLogVariance",
+		"grandmasterPriority2",
+		"grandmasterIdentity",
+	}
 }
 
 // Update provides the Update method for the ParentDS values
