@@ -1219,9 +1219,9 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 	ptpState = state
 	ptpOffsetInt64 := int64(ptpOffset)
 	// if state is HOLDOVER do not update the state
-	if state != event.PTP_HOLDOVER && state != event.PTP_FREERUN && ptpOffsetInt64 <= p.ptpClockThreshold.MaxOffsetThreshold &&
-		ptpOffsetInt64 >= p.ptpClockThreshold.MinOffsetThreshold {
-		ptpState = event.PTP_LOCKED
+	// transition to FREERUN if offset is outside configured thresholds
+	if shouldFreeRun(state, ptpOffset, p.ptpClockThreshold) {
+		ptpState = event.PTP_FREERUN
 	}
 
 	if source == ts2phcProcessName { // for ts2phc send it to event to create metrics and events
