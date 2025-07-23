@@ -1,6 +1,8 @@
 package pmc
 
 import (
+	"fmt"
+	"os/exec"
 	"regexp"
 	"strings"
 	"syscall"
@@ -356,4 +358,131 @@ func RunPMCExpGetCurrentDS(configFileName string) (cds protocol.CurrentDS, err e
 		}
 	}
 	return
+}
+
+// RunPMCGetParentDS runs PMC in non-interactive mode to get PARENT_DATA_SET
+// This function does not use the expect package and handles regex parsing separately
+func RunPMCGetParentDS(configFileName string) (p protocol.ParentDataSet, err error) {
+	cmdStr := cmdGetParentDataSet
+	pmcCmd := pmcCmdConstPart + configFileName
+	glog.Infof("%s \"%s\"", pmcCmd, cmdStr)
+
+	// Run PMC command in non-interactive mode
+	cmd := exec.Command("pmc", "-u", "-b", "0", "-f", "/var/run/"+configFileName, cmdStr)
+
+	output, cmdErr := cmd.CombinedOutput()
+	if cmdErr != nil {
+		glog.Errorf("pmc command execution error: %v", cmdErr)
+		return p, cmdErr
+	}
+
+	// Convert output to string and apply regex parsing
+	result := string(output)
+	glog.Infof("pmc result: %s", result)
+
+	// Apply regex parsing separately
+	matches := parentDataSetRegExp.FindStringSubmatch(result)
+	if len(matches) < 2 {
+		glog.Errorf("pmc result regex match failed, no matches found")
+		return p, fmt.Errorf("failed to parse PMC output")
+	}
+
+	// Parse the matched groups (skip first match which is the full string)
+	for j, m := range matches[1:] {
+		if j < len(p.Keys()) {
+			p.Update(p.Keys()[j], m)
+		}
+	}
+
+	return p, nil
+}
+
+// MultipleResults holds the results from multiple PMC commands
+type MultipleResults struct {
+	ParentDataSet    protocol.ParentDataSet
+	TimePropertiesDS protocol.TimePropertiesDS
+	CurrentDS        protocol.CurrentDS
+}
+
+// RunPMCExpGetMultiple runs PMC in interactive mode and sends three commands sequentially:
+// GET PARENT_DATA_SET, GET TIME_PROPERTIES_DATA_SET, and GET CURRENT_DATA_SET
+// This is more efficient than spawning separate PMC processes for each command
+func RunPMCExpGetMultiple(configFileName string) (results MultipleResults, err error) {
+	pmcCmd := pmcCmdConstPart + configFileName
+	glog.Infof("%s - running multiple commands", pmcCmd)
+
+	e, r, err := expect.Spawn(pmcCmd, -1)
+	if err != nil {
+		return results, err
+	}
+	defer func() {
+		e.SendSignal(syscall.SIGTERM)
+		for timeout := time.After(sigTimeout); ; {
+			select {
+			case <-r:
+				e.Close()
+				return
+			case <-timeout:
+				e.Send("\x03")
+				e.Close()
+				return
+			}
+		}
+	}()
+
+	// Command 1: GET PARENT_DATA_SET
+	glog.Infof("Sending command: %s", cmdGetParentDataSet)
+	if err = e.Send(cmdGetParentDataSet + "\n"); err != nil {
+		return results, fmt.Errorf("failed to send PARENT_DATA_SET command: %v", err)
+	}
+
+	result, matches, err1 := e.Expect(parentDataSetRegExp, cmdTimeout)
+	if err1 != nil {
+		glog.Errorf("PARENT_DATA_SET result match error: %v", err1)
+		return results, fmt.Errorf("failed to parse PARENT_DATA_SET output: %v", err1)
+	}
+	glog.Infof("PARENT_DATA_SET result: %s", result)
+	for i, m := range matches[1:] {
+		if i < len(results.ParentDataSet.Keys()) {
+			results.ParentDataSet.Update(results.ParentDataSet.Keys()[i], m)
+		}
+	}
+
+	// Command 2: GET TIME_PROPERTIES_DATA_SET
+	glog.Infof("Sending command: %s", cmdGetTimePropertiesDS)
+	if err = e.Send(cmdGetTimePropertiesDS + "\n"); err != nil {
+		return results, fmt.Errorf("failed to send TIME_PROPERTIES_DATA_SET command: %v", err)
+	}
+
+	result, matches, err1 = e.Expect(timePropertiesDSRegExp, cmdTimeout)
+	if err1 != nil {
+		glog.Errorf("TIME_PROPERTIES_DATA_SET result match error: %v", err1)
+		return results, fmt.Errorf("failed to parse TIME_PROPERTIES_DATA_SET output: %v", err1)
+	}
+	glog.Infof("TIME_PROPERTIES_DATA_SET result: %s", result)
+	for i, m := range matches[1:] {
+		if i < len(results.TimePropertiesDS.Keys()) {
+			results.TimePropertiesDS.Update(results.TimePropertiesDS.Keys()[i], m)
+		}
+	}
+
+	// Command 3: GET CURRENT_DATA_SET
+	glog.Infof("Sending command: %s", cmdGetCurrentDS)
+	if err = e.Send(cmdGetCurrentDS + "\n"); err != nil {
+		return results, fmt.Errorf("failed to send CURRENT_DATA_SET command: %v", err)
+	}
+
+	result, matches, err1 = e.Expect(currentDSRegExp, cmdTimeout)
+	if err1 != nil {
+		glog.Errorf("CURRENT_DATA_SET result match error: %v", err1)
+		return results, fmt.Errorf("failed to parse CURRENT_DATA_SET output: %v", err1)
+	}
+	glog.Infof("CURRENT_DATA_SET result: %s", result)
+	for i, m := range matches[1:] {
+		if i < len(results.CurrentDS.Keys()) {
+			results.CurrentDS.Update(results.CurrentDS.Keys()[i], m)
+		}
+	}
+
+	return results, nil
 }

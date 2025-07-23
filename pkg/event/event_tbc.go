@@ -3,10 +3,14 @@ package event
 import (
 	"fmt"
 	"math"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
+	"github.com/prometheus/client_golang/prometheus"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
@@ -37,6 +41,8 @@ const (
 	MaxInSpecOffset ValueType = "max-in-spec"
 	// FaultyPhaseOffset is a value assigned to the phase offset when free-running
 	FaultyPhaseOffset int64 = 99999999999
+	// StaleEventAfter is the number of seconds after which an event is considered stale
+	StaleEventAfter int64 = 2
 )
 
 // LeadingClockParams ... leading clock parameters includes state
@@ -61,7 +67,7 @@ type LeadingClockParams struct {
 	clockID                       string
 }
 
-func (e *EventHandler) updateBCState(event EventChannel) clockSyncState {
+func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncState {
 	cfgName := event.CfgName
 	dpllState := PTP_NOTSET
 	ts2phcState := PTP_FREERUN
@@ -69,8 +75,8 @@ func (e *EventHandler) updateBCState(event EventChannel) clockSyncState {
 	// For External GM data announces in the locked state, update whenever any of the
 	// information elements change
 	updateDownstreamData := false
+	leadingTS2phcActive := false
 
-	syncSrcLost := e.isSourceLost(cfgName)
 	leadingInterface := e.getLeadingInterfaceBC()
 	if leadingInterface == LEADING_INTERFACE_UNKNOWN {
 		glog.Infof("Leading interface is not yet identified, clock state reporting delayed.")
@@ -83,12 +89,12 @@ func (e *EventHandler) updateBCState(event EventChannel) clockSyncState {
 			state:         PTP_FREERUN,
 			clockClass:    protocol.ClockClassUninitialized,
 			clockAccuracy: fbprotocol.ClockAccuracyUnknown,
-			sourceLost:    syncSrcLost,
+			sourceLost:    false,
 			leadingIFace:  leadingInterface,
 		}
 	}
-	// glog.Infof("cfgName %s syncSourceLost %t, leadingIface %s e.clkSyncState %++v", cfgName, syncSrcLost, leadingInterface, e.clkSyncState)
-	e.clkSyncState[cfgName].sourceLost = syncSrcLost
+
+	e.clkSyncState[cfgName].sourceLost = false
 	e.clkSyncState[cfgName].leadingIFace = leadingInterface
 	if data, ok := e.data[cfgName]; ok {
 		for _, d := range data {
@@ -96,8 +102,30 @@ func (e *EventHandler) updateBCState(event EventChannel) clockSyncState {
 			case DPLL:
 				dpllState = d.State
 			case TS2PHCProcessName:
+				if event.IFace == leadingInterface {
+					leadingTS2phcActive = true
+				}
 				ts2phcState = d.State
 			case PTP4lProcessName:
+
+				if leadingTS2phcActive && event.IFace == leadingInterface {
+					// In T-BC configuration, leading card PHC is either updated by ts2phc, or by ptp4l
+					// During holdover, when ts2phc is active, ptp4l is not updating the PHC
+					// During the normal operation, ptp4l is updating the PHC, and ts2phc events stop
+					// However, the data with the processName "ts2phc" is still present in the data map
+					// If taken into account, it will contribute an outdated information into the decision making
+					// The construct below detects the transition from ts2phc to ptp4l and invalidates the ts2phc data
+					for _, tsphcData := range data {
+						if tsphcData.ProcessName == TS2PHCProcessName {
+							for _, tsphcDetail := range tsphcData.Details {
+								if tsphcDetail.time < time.Now().Unix()-StaleEventAfter {
+									tsphcDetail.Offset = 0
+									leadingTS2phcActive = false
+								}
+							}
+						}
+					}
+				}
 			}
 		}
 	} else {
@@ -107,13 +135,15 @@ func (e *EventHandler) updateBCState(event EventChannel) clockSyncState {
 		e.clkSyncState[cfgName].clockAccuracy = fbprotocol.ClockAccuracyUnknown
 		e.clkSyncState[cfgName].lastLoggedTime = time.Now().Unix()
 		e.clkSyncState[cfgName].leadingIFace = leadingInterface
-		e.clkSyncState[cfgName].clkLog = fmt.Sprintf("T-BC[%d]:[%s] %s T-BC-STATUS %s\n", e.clkSyncState[cfgName].lastLoggedTime, cfgName, leadingInterface, e.clkSyncState[cfgName].state)
+		e.clkSyncState[cfgName].clkLog = fmt.Sprintf("T-BC[%d]:[%s] %s offset %d T-BC-STATUS %s\n",
+			e.clkSyncState[cfgName].lastLoggedTime, cfgName, leadingInterface, e.clkSyncState[cfgName].clockOffset,
+			e.clkSyncState[cfgName].state)
 		return *e.clkSyncState[cfgName]
 	}
 	glog.Info("current BC state: ", e.clkSyncState[cfgName].state)
 	switch e.clkSyncState[cfgName].state {
 	case PTP_NOTSET, PTP_FREERUN:
-		if e.inSyncCondition(cfgName) && !e.isSourceLostBC(cfgName) {
+		if !e.isSourceLostBC(cfgName) && e.inSyncCondition(cfgName) {
 			e.clkSyncState[cfgName].state = PTP_LOCKED
 			glog.Info("BC FSM: FREERUN to LOCKED")
 			e.LeadingClockData.lastInSpec = true
@@ -198,12 +228,9 @@ func (e *EventHandler) updateBCState(event EventChannel) clockSyncState {
 
 	if updateDownstreamData {
 		if gSycState.state == PTP_LOCKED {
-			if e.LeadingClockData.upstreamParentDataSet != nil && e.LeadingClockData.upstreamTimeProperties != nil {
-				go e.downstreamAnnounceIWF(e.LeadingClockData.upstreamCurrentDSStepsRemoved,
-					*e.LeadingClockData.upstreamParentDataSet, *e.LeadingClockData.upstreamTimeProperties, cfgName)
-			}
+			go e.downstreamAnnounceIWF(cfgName, c)
 		} else {
-			go e.announceLocalData(cfgName)
+			go e.announceLocalData(cfgName, c)
 		}
 	}
 	// this will reduce log noise and prints 1 per sec
@@ -220,20 +247,36 @@ func (e *EventHandler) updateBCState(event EventChannel) clockSyncState {
 	return rclockSyncState
 }
 
+func (e *EventHandler) announceClockClass(clockClass int, cfgName string, c net.Conn) {
+	message := fmt.Sprintf("ptp4l[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", time.Now().Unix(),
+		cfgName, clockClass)
+	if e.stdoutToSocket {
+		if c != nil {
+			_, err := c.Write([]byte(message))
+			if err != nil {
+				glog.Errorf("failed to write class change event %s", err.Error())
+			}
+		} else {
+			glog.Errorf("failed to write class change event, connection is nil")
+		}
+	} else {
+		e.clockClassMetric.With(prometheus.Labels{
+			"process": PTP4lProcessName, "node": e.nodeName}).Set(float64(clockClass))
+	}
+	glog.Infof("%s", message)
+}
+
 // Implements Rec. ITU-T G.8275 (2024) Amd. 1 (08/2024)
 // Table VIII.3 − T-BC-/ T-BC-P/ T-BC-A Announce message contents
 // for free-run (acquiring), holdover within / out of the specification
-func (e *EventHandler) announceLocalData(cfgName string) {
-	glog.Info("in announceLocalData")
-
+func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 	egp := protocol.ExternalGrandmasterProperties{
 		GrandmasterIdentity: e.LeadingClockData.clockID,
 		StepsRemoved:        0,
 	}
 	glog.Infof("EGP %++v", egp)
 	go pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, egp)
-	fmt.Printf("ptp4l[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", time.Now().Unix(), cfgName, e.clkSyncState[cfgName].clockClass)
-
+	e.announceClockClass(int(e.clkSyncState[cfgName].clockClass), cfgName, c)
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
 			ClockClass:              e.clkSyncState[cfgName].clockClass,
@@ -274,30 +317,40 @@ func (e *EventHandler) announceLocalData(cfgName string) {
 
 	default:
 	}
-	// pmcCmd := fmt.Sprintf("pmc -u -b 0 -f /var/run/%s", cfgName)
-
 	go pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs)
 }
 
-func (e *EventHandler) downstreamAnnounceIWF(stepsRemoved uint16, pds protocol.ParentDataSet, tp protocol.TimePropertiesDS, cfgName string) {
-	gs := protocol.GrandmasterSettings{
-		ClockQuality: fbprotocol.ClockQuality{
-			ClockClass:              fbprotocol.ClockClass(pds.GrandmasterClockClass),
-			ClockAccuracy:           fbprotocol.ClockAccuracy(pds.GrandmasterClockAccuracy),
-			OffsetScaledLogVariance: pds.ObservedParentOffsetScaledLogVariance,
-		},
-		TimePropertiesDS: tp,
-	}
-	es := protocol.ExternalGrandmasterProperties{
-		GrandmasterIdentity: pds.GrandmasterIdentity,
-		// stepsRemoved at this point is already incremented, representing the current clock position
-		StepsRemoved: stepsRemoved,
-	}
-	fmt.Printf("ptp4l[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", time.Now().Unix(), cfgName, gs.ClockQuality.ClockClass)
-	if err := pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, es); err != nil {
+// this function runs in a goroutine
+func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
+	ptpCfgName := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
+	glog.Infof("downstreamAnnounceIWF: %s", ptpCfgName)
+	results, err := pmc.RunPMCExpGetMultiple(ptpCfgName)
+	if err != nil {
 		glog.Error(err)
 	}
-	if err := pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs); err != nil {
+	e.LeadingClockData.upstreamTimeProperties = &results.TimePropertiesDS
+	e.LeadingClockData.upstreamParentDataSet = &results.ParentDataSet
+	e.LeadingClockData.upstreamCurrentDSStepsRemoved = results.CurrentDS.StepsRemoved
+
+	gs := protocol.GrandmasterSettings{
+		ClockQuality: fbprotocol.ClockQuality{
+			ClockClass:              fbprotocol.ClockClass(results.ParentDataSet.GrandmasterClockClass),
+			ClockAccuracy:           fbprotocol.ClockAccuracy(results.ParentDataSet.GrandmasterClockAccuracy),
+			OffsetScaledLogVariance: results.ParentDataSet.ObservedParentOffsetScaledLogVariance,
+		},
+		TimePropertiesDS: results.TimePropertiesDS,
+	}
+	es := protocol.ExternalGrandmasterProperties{
+		GrandmasterIdentity: results.ParentDataSet.GrandmasterIdentity,
+		// stepsRemoved at this point is already incremented, representing the current clock position
+		StepsRemoved: results.CurrentDS.StepsRemoved,
+	}
+	glog.Infof("%++v", es)
+	e.announceClockClass(int(gs.ClockQuality.ClockClass), cfgName, c)
+	if err = pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, es); err != nil {
+		glog.Error(err)
+	}
+	if err = pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs); err != nil {
 		glog.Error(err)
 	}
 	glog.Infof("%++v", es)
@@ -361,16 +414,16 @@ func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 	worstOffset := FaultyPhaseOffset
 	if data, ok := e.data[cfgName]; ok {
 		for _, d := range data {
-			if d.ProcessName == DPLL {
-				for _, dd := range d.Details {
-					if math.Abs(float64(dd.Offset)) > math.Abs(float64(worstOffset)) || worstOffset == FaultyPhaseOffset {
-						worstOffset = dd.Offset
-					}
+			for _, dd := range d.Details {
+				if worstOffset == FaultyPhaseOffset {
+					worstOffset = dd.Offset
+				} else if !(dd.time < time.Now().Unix()-StaleEventAfter) && math.Abs(float64(dd.Offset)) > math.Abs(float64(worstOffset)) {
+					worstOffset = dd.Offset
 				}
 			}
 		}
 	}
-	glog.Info("Largest DPLL offset ", worstOffset)
+	glog.Info("Largest offset ", worstOffset)
 	return worstOffset
 }
 
@@ -434,7 +487,7 @@ func (e *EventHandler) convergeConfig(event EventChannel) EventChannel {
 					continue
 				}
 				for _, dp := range item.Details {
-					if dp.IFace == iface {
+					if utils.GetAlias(dp.IFace) == utils.GetAlias(iface) {
 						// We want to process ptp4l having a separate config with ts2phc and dpll events having ts2phc config
 						// so in the rare occurrence of ptp4l state change we modify the event.CfgName
 						event.CfgName = cfg
@@ -450,22 +503,9 @@ func (e *EventHandler) convergeConfig(event EventChannel) EventChannel {
 func (e *EventHandler) updateLeadingClockData(event EventChannel) {
 	switch event.ProcessName {
 	case PTP4lProcessName:
-		glog.Infof("%++v", event)
-		tp, found := event.Values[TimePropertiesDataSet].(*protocol.TimePropertiesDS)
-		if found && tp != nil {
-			e.LeadingClockData.upstreamTimeProperties = tp
-		}
 		cpc, found := event.Values[ControlledPortsConfig].(string)
 		if found {
 			e.LeadingClockData.controlledPortsConfig = cpc
-		}
-		pds, found := event.Values[ParentDataSet].(*protocol.ParentDataSet)
-		if found && pds != nil {
-			e.LeadingClockData.upstreamParentDataSet = pds
-		}
-		cds, found := event.Values[CurrentDataSet].(*protocol.CurrentDS)
-		if found && cds != nil {
-			e.LeadingClockData.upstreamCurrentDSStepsRemoved = cds.StepsRemoved
 		}
 		id, found := event.Values[ClockIDKey].(string)
 		if found {

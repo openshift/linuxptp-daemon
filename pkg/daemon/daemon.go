@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
@@ -171,42 +170,34 @@ type tBCProcessAttributes struct {
 	controlledPortsConfigFile string
 	// Time receiver interface name for T-BC clock monitoring
 	trIfaceName string
-	// Used: GrandmasterClockClass, GrandmasterIdentity, GrandmasterClockAccuracy, ObservedParentOffsetScaledLogVariance
-	// Sent to event package for T-BC state tracking
-	ParentDataSet *protocol.ParentDataSet
-	// Used: CurrentUtcOffsetValid, Leap59, Leap61, PtpTimescale, TimeTraceable, FrequencyTraceable, CurrentUtcOffset
-	// Sent to event package for T-BC synchronization info
-	TimePropertiesDataSet *protocol.TimePropertiesDS
-	// Used: StepsRemoved
-	// Sent to event package for T-BC clock state reporting
-	CurrentDS *protocol.CurrentDS
 }
 
 type ptpProcess struct {
-	name                 string
-	ifaces               config.IFaces
-	processSocketPath    string
-	processConfigPath    string
-	configName           string
-	messageTag           string
-	eventCh              chan event.EventChannel
-	exitCh               chan bool
-	execMutex            sync.Mutex
-	stopped              bool
-	logFilters           []*logfilter.LogFilter // List of filters to apply to logs
-	cmd                  *exec.Cmd
-	depProcess           []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
-	nodeProfile          ptpv1.PtpProfile
-	logParser            parser.MetricsExtractor
-	pmcCheck             bool
-	lastTransitionResult event.PTPState
-	clockType            event.ClockType
-	ptpClockThreshold    *ptpv1.PtpClockThreshold
-	haProfile            map[string][]string // stores list of interface name for each profile
-	syncERelations       *synce.Relations
-	c                    *net.Conn
-	hasCollectedMetrics  bool
-	tBCAttributes        tBCProcessAttributes
+	name                  string
+	ifaces                config.IFaces
+	processSocketPath     string
+	processConfigPath     string
+	configName            string
+	messageTag            string
+	eventCh               chan event.EventChannel
+	exitCh                chan bool
+	execMutex             sync.Mutex
+	stopped               bool
+	logFilters            []*logfilter.LogFilter // List of filters to apply to logs
+	cmd                   *exec.Cmd
+	depProcess            []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
+	nodeProfile           ptpv1.PtpProfile
+	logParser             parser.MetricsExtractor
+	pmcCheck              bool
+	lastTransitionResult  event.PTPState
+	clockType             event.ClockType
+	ptpClockThreshold     *ptpv1.PtpClockThreshold
+	haProfile             map[string][]string // stores list of interface name for each profile
+	syncERelations        *synce.Relations
+	c                     *net.Conn
+	hasCollectedMetrics   bool
+	tBCAttributes         tBCProcessAttributes
+	GrandmasterClockClass uint8
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -847,7 +838,10 @@ func (dn *Daemon) GetPhaseOffsetPinFilter(nodeProfile *ptpv1.PtpProfile) map[str
 func (dn *Daemon) HandlePmcTicker() {
 	for _, p := range dn.processManager.process {
 		if p.name == ptp4lProcessName {
-			p.pmcCheck = true
+			// T-BC has different requirements for PMC polling. Handled in the T-BC event handler.
+			if p.nodeProfile.PtpSettings["clockType"] != TBC {
+				p.pmcCheck = true
+			}
 		}
 	}
 }
@@ -890,39 +884,28 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 }
 
 func (p *ptpProcess) updateClockClass(c *net.Conn) {
+	if p.nodeProfile.PtpSettings["clockType"] == TBC {
+		return
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			glog.Errorf("updateClockClass Recovered in f %#v", r)
 		}
 	}()
-	trIfacePresent := false
-	profileClockType, pctFound := p.nodeProfile.PtpSettings["clockType"]
-	if !pctFound {
-		profileClockType = string(event.ClockUnset)
-	}
-	if profileClockType == TBC {
-		for _, iface := range p.ifaces {
-			if iface.Name == p.tBCAttributes.trIfaceName {
-				trIfacePresent = true
-				break
-			}
-		}
-	}
+
 	if r, e := pmc.RunPMCExpGetParentDS(p.configName); e == nil {
 		glog.Infof("%++v", r)
-		if p.tBCAttributes.ParentDataSet == nil {
-			p.tBCAttributes.ParentDataSet = &protocol.ParentDataSet{}
-		}
-		if r.GrandmasterClockClass != p.tBCAttributes.ParentDataSet.GrandmasterClockClass {
-			glog.Infof("clock change event identified: %d -> %d", p.tBCAttributes.ParentDataSet.GrandmasterClockClass, r.GrandmasterClockClass)
-			p.tBCAttributes.ParentDataSet = &r
+
+		if r.GrandmasterClockClass != p.GrandmasterClockClass {
+			glog.Infof("clock change event identified: %d -> %d", p.GrandmasterClockClass, r.GrandmasterClockClass)
+			p.GrandmasterClockClass = r.GrandmasterClockClass
 		}
 		//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
 		// change to pint every minute or when the clock class changes
 		if c == nil {
-			UpdateClockClassMetrics(float64(p.tBCAttributes.ParentDataSet.GrandmasterClockClass)) // no socket then update metrics
+			UpdateClockClassMetrics(float64(p.GrandmasterClockClass)) // no socket then update metrics
 		} else {
-			clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, p.tBCAttributes.ParentDataSet.GrandmasterClockClass)
+			clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, p.GrandmasterClockClass)
 			_, err := (*c).Write([]byte(clockClassOut))
 			if err != nil {
 				glog.Errorf("failed to write class change event %s", err.Error())
@@ -931,38 +914,6 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 	} else {
 		glog.Errorf("error parsing PMC util for clock class change event %s", e.Error())
 	}
-
-	// Only for T-BC
-	if trIfacePresent {
-		err := p.getTimePropertiesDS()
-		if err != nil {
-			glog.Errorf("failed to get time properties DataSet %s", err.Error())
-		}
-		err = p.getCurrentDS()
-		if err != nil {
-			glog.Errorf("failed to get Current DataSet %s", err.Error())
-		}
-		p.sendPtp4lEvent()
-		return
-	}
-}
-
-func (p *ptpProcess) getTimePropertiesDS() error {
-	tp, err := pmc.RunPMCExpGetTimePropertiesDS(p.configName)
-	if err != nil {
-		return err
-	}
-	p.tBCAttributes.TimePropertiesDataSet = &tp
-	return nil
-}
-
-func (p *ptpProcess) getCurrentDS() error {
-	cds, err := pmc.RunPMCExpGetCurrentDS(p.configName)
-	if err != nil {
-		return err
-	}
-	p.tBCAttributes.CurrentDS = &cds
-	return nil
 }
 
 func (p *ptpProcess) tBCTransitionCheck(output string, pm *PluginManager) {
@@ -1656,9 +1607,6 @@ func (p *ptpProcess) sendPtp4lEvent() {
 		OutOfSpec:   false,
 		Values: map[event.ValueType]any{
 			event.ControlledPortsConfig: p.tBCAttributes.controlledPortsConfigFile,
-			event.ParentDataSet:         p.tBCAttributes.ParentDataSet,
-			event.TimePropertiesDataSet: p.tBCAttributes.TimePropertiesDataSet,
-			event.CurrentDataSet:        p.tBCAttributes.CurrentDS,
 			event.ClockIDKey:            clockID,
 		},
 	}:
