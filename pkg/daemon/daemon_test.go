@@ -418,6 +418,31 @@ var testCases = []TestCase{
 		},
 	},
 	{
+		log:                         "ptp4l[412707.219]: [ptp4l.0.config:5] port 1 (ens8f2): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+		MessageTag:                  "[ptp4l.0.config:5]",
+		Name:                        "ptp4l_listening_to_master_transition_with_port_name",
+		from:                        "master",
+		process:                     "ptp4l",
+		iface:                       "ens8f2",
+		expectedOffset:              SKIP,
+		expectedMaxOffset:           SKIP,
+		expectedFrequencyAdjustment: SKIP,
+		expectedDelay:               SKIP,
+		expectedClockState:          SKIP,
+		expectedNmeaStatus:          SKIP,
+		expectedPpsStatus:           SKIP,
+		expectedClockClassMetrics:   SKIP,
+		expectedInterfaceRole:       2, // MASTER = 2
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens8f2",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-25",
+			},
+		},
+	},
+	{
 		log:                         "ptp4l[8542284.202]: [ptp4l.4.config] port 1: INITIALIZING to LISTENING on INITIALIZE_COMPLETE",
 		MessageTag:                  "[ptp4l.4.config]",
 		Name:                        "ptp4l_initializing_to_listening_transition",
