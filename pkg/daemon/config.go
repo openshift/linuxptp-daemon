@@ -200,7 +200,7 @@ func (conf *Ptp4lConf) PopulatePtp4lConf(config *string) error {
 					ifaceCount++
 				}
 				conf.setPtp4lConfOption(currentSectionName, "", "", false)
-			} else if currentSectionName != "" {
+			} else {
 				split := strings.IndexByte(line, ' ')
 				if split > 0 {
 					key := line[:split]
@@ -213,8 +213,6 @@ func (conf *Ptp4lConf) PopulatePtp4lConf(config *string) error {
 						hasSlaveConfigDefined = true
 					}
 				}
-			} else {
-				return errors.New("Config option not in section: " + line)
 			}
 		}
 	}
