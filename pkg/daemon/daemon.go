@@ -58,7 +58,24 @@ var (
 	clockIDRegEx          = regexp.MustCompile(`\/dev\/ptp\d+`)
 )
 
-// Per-process guard is sufficient because each process owns a unique config.
+var configPrefix = "/var/run"
+
+var ptpProcesses = []string{
+	ts2phcProcessName,  // there can be only one ts2phc process in the system
+	syncEProcessName,   // there can be only one synce Process per profile
+	ptp4lProcessName,   // there could be more than one ptp4l in the system
+	phc2sysProcessName, // there can be only one phc2sys process in the system
+	chronydProcessName, // there can be only one chronyd process in the system
+}
+
+var ptpTmpFiles = []string{
+	ts2phcProcessName,
+	syncEProcessName,
+	ptp4lProcessName,
+	phc2sysProcessName,
+	chronydProcessName,
+	pmcSocketName,
+}
 
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
@@ -513,6 +530,13 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configFile = fmt.Sprintf("synce4l.%d.config", runID)
 			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 			messageTag = fmt.Sprintf("[synce4l.%d.config]", runID)
+		case chronydProcessName:
+			configOpts = nodeProfile.ChronydOpts
+			configInput = nodeProfile.ChronydConf
+			socketPath = ""
+			configFile = fmt.Sprintf("chronyd.%d.config", runID)
+			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
+			messageTag = fmt.Sprintf("[chronyd.%d.config]", runID)
 		}
 
 		if configOpts == nil || *configOpts == "" {
@@ -536,7 +560,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			nodeProfile.Interface = &iface
 		}
 
-		output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		if pProcess != chronydProcessName {
+			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		}
 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
