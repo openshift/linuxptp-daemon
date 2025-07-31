@@ -66,6 +66,7 @@ var ptpProcesses = []string{
 	syncEProcessName,   // there can be only one synce Process per profile
 	ptp4lProcessName,   // there could be more than one ptp4l in the system
 	phc2sysProcessName, // there can be only one phc2sys process in the system
+	chronydProcessName, // there can be only one chronyd process in the system
 }
 
 var ptpTmpFiles = []string{
@@ -73,6 +74,7 @@ var ptpTmpFiles = []string{
 	syncEProcessName,
 	ptp4lProcessName,
 	phc2sysProcessName,
+	chronydProcessName,
 	pmcSocketName,
 }
 
@@ -594,6 +596,13 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configFile = fmt.Sprintf("synce4l.%d.config", runID)
 			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 			messageTag = fmt.Sprintf("[synce4l.%d.config]", runID)
+		case chronydProcessName:
+			configOpts = nodeProfile.ChronydOpts
+			configInput = nodeProfile.ChronydConf
+			socketPath = ""
+			configFile = fmt.Sprintf("chronyd.%d.config", runID)
+			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
+			messageTag = fmt.Sprintf("[chronyd.%d.config]", runID)
 		}
 
 		output := &Ptp4lConf{}
@@ -615,7 +624,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			nodeProfile.Interface = &iface
 		}
 
-		output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		if pProcess != chronydProcessName {
+			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		}
 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
