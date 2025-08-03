@@ -709,7 +709,7 @@ connect:
 				} else { // T-BC or T-TSC
 					event = e.convergeConfig(event)
 					dataDetails = e.addEvent(event)
-					clockState = e.updateBCState(event)
+					clockState = e.updateBCState(event, c)
 				}
 				logDataValues = dataDetails.logData
 				if event.WriteToLog && logDataValues != "" {

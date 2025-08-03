@@ -4,7 +4,10 @@ import (
 	"strings"
 	"time"
 
+	v1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
+
 	"github.com/golang/glog"
+
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
@@ -101,6 +104,14 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		masterOffsetSource.set(configName, process.name)
 	}
 
+	// if state is HOLDOVER do not update the state
+	state := convertParserClockStateEventPTPState(ptpMetrics.ClockState)
+
+	// transition to FREERUN if offset is outside configured thresholds
+	if shouldFreeRun(state, ptpMetrics.Offset, process.ptpClockThreshold) {
+		state = event.PTP_FREERUN
+	}
+
 	switch process.name {
 	case ptp4lProcessName:
 		if ptpMetrics.Iface != "" && configName != "" {
@@ -108,20 +119,24 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		}
 	case ts2phcProcessName:
 		// Send event for ts2phc
+		eventSource := process.ifaces.GetEventSource(process.ifaces.GetPhcID2IFace(ptpMetrics.Iface))
+		values := map[event.ValueType]interface{}{
+			event.OFFSET: int64(ptpMetrics.Offset),
+		}
+		if eventSource == event.GNSS {
+			values[event.NMEA_STATUS] = int64(1)
+		}
 		select {
 		case process.eventCh <- event.EventChannel{
 			ProcessName: event.TS2PHC,
-			State:       convertParserClockStateEventPTPState(ptpMetrics.ClockState),
+			State:       state,
 			CfgName:     configName,
 			IFace:       iface,
-			Values: map[event.ValueType]interface{}{
-				event.OFFSET:      int64(ptpMetrics.Offset),
-				event.NMEA_STATUS: int64(1),
-			},
-			ClockType:  process.clockType,
-			Time:       time.Now().UnixMilli(),
-			WriteToLog: true,
-			Reset:      false,
+			Values:      values,
+			ClockType:   process.clockType,
+			Time:        time.Now().UnixMilli(),
+			WriteToLog:  eventSource == event.GNSS,
+			Reset:       false,
 		}:
 		default:
 		}
@@ -164,4 +179,19 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 			}
 		}
 	}
+}
+
+// shouldFreeRun returns true if we’re not already in HOLDOVER or FREERUN
+// and the current offset breaches either threshold.
+func shouldFreeRun(
+	currentState event.PTPState,
+	rawOffset float64,
+	th *v1.PtpClockThreshold,
+) bool {
+	if currentState == event.PTP_HOLDOVER || currentState == event.PTP_FREERUN {
+		return false
+	}
+
+	ofs := int64(rawOffset)
+	return ofs >= th.MaxOffsetThreshold || ofs <= th.MinOffsetThreshold
 }

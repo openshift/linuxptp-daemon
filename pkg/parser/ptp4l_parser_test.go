@@ -105,6 +105,16 @@ func TestPTP4LEventParser(t *testing.T) {
 			},
 		},
 		{
+			name:       "Port state change with interface name",
+			configName: "ptp4l.0.config",
+			logLine:    "ptp4l[412707.219]: [ptp4l.0.config:5] port 11 (ens8f2): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+			expectedEvent: &parser.PTPEvent{
+				PortID: 11,
+				Role:   constants.PortRoleMaster,
+				Raw:    "ptp4l[412707.219]: [ptp4l.0.config:5] port 11 (ens8f2): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+			},
+		},
+		{
 			name:       "Port state change to PASSIVE",
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to PASSIVE on RS_PASSIVE",

@@ -151,6 +151,18 @@ func TestPTP4LParser(t *testing.T) {
 				Event:      "UNCALIBRATED to LISTENING on RS_LISTENING",
 			},
 		},
+		{
+			name:    "Port state change to MASTER with port name",
+			logLine: "ptp4l[412707.219]: [ptp4l.0.config:5] port 11 (ens8f2): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+			regex:   ptp4lEventRegex,
+			expectedResult: &ptp4lParsed{
+				Timestamp:  "412707.219",
+				ConfigName: "ptp4l.5.config",
+				PortID:     _ptr(11),
+				PortName:   "ens8f2",
+				Event:      "LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -174,6 +186,7 @@ func TestPTP4LParser(t *testing.T) {
 				assert.Equal(t, tt.expectedResult.Delay, res.Delay, "incorrect Delay")
 				assert.Equal(t, tt.expectedResult.ServoState, res.ServoState, "incorrect ServoState")
 				assert.Equal(t, tt.expectedResult.PortID, res.PortID, "incorrect PortID")
+				assert.Equal(t, tt.expectedResult.PortName, res.PortName, "incorrect PortName")
 				assert.Equal(t, tt.expectedResult.Event, res.Event, "incorrect Event")
 				assert.Equal(t, tt.logLine, res.Raw, "incorrect Raw")
 			}
