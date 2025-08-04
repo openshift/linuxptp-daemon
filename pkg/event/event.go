@@ -762,6 +762,7 @@ func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.Cloc
 			// update only when ClockClass is changed or clockAccuracy changes
 			if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 || g.TimePropertiesDS.TimeTraceable != true {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass6
+				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
 				g.TimePropertiesDS.TimeTraceable = true
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
 				// T-REC-G.8275.1-202211-I section 6.3.5
@@ -771,6 +772,7 @@ func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.Cloc
 		case protocol.ClockClassOutOfSpec: // GM out of holdover specification, traceable to Category 3
 			if g.ClockQuality.ClockClass != protocol.ClockClassOutOfSpec {
 				g.ClockQuality.ClockClass = protocol.ClockClassOutOfSpec
+				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 				g.TimePropertiesDS.TimeTraceable = false
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 				// T-REC-G.8275.1-202211-I section 6.3.5
@@ -780,6 +782,7 @@ func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.Cloc
 		case fbprotocol.ClockClass7: // T-GM in holdover, within holdover specification
 			if g.ClockQuality.ClockClass != fbprotocol.ClockClass7 {
 				g.ClockQuality.ClockClass = fbprotocol.ClockClass7
+				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
 				g.TimePropertiesDS.TimeTraceable = true
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 				// T-REC-G.8275.1-202211-I section 6.3.5
@@ -789,6 +792,7 @@ func (e *EventHandler) updateClockClass(cfgName string, clkClass fbprotocol.Cloc
 		case protocol.ClockClassFreerun: // T-GM or T-BC in free-run mode
 			if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
 				g.ClockQuality.ClockClass = protocol.ClockClassFreerun
+				g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 				g.TimePropertiesDS.TimeTraceable = false
 				g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 				// T-REC-G.8275.1-202211-I section 6.3.5
