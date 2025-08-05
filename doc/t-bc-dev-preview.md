@@ -70,7 +70,7 @@ spec:
           - SMA1
         - id: ens2f0
           part: E810-XXVDA4T
-          inputPhaseDelay:
+          inputConnector:
             connector: SMA1
             delayPs: 0
         pins:
@@ -256,7 +256,7 @@ The profile above is for a dual-NIC chain of clocks operating as a single bounda
           - SMA1
         - id: ens2f0
           part: E810-XXVDA4T
-          inputPhaseDelay:
+          inputConnector:
             connector: SMA1
             delayPs: 0
         pins:

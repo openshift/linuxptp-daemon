@@ -21,7 +21,7 @@ type ClockChain struct {
 }
 type CardInfo struct {
 	Name        string `json:"name"`
-	DpllClockId string `json:"dpllClockId"`
+	DpllClockID string `json:"dpllClockId"`
 	// upstreamPort specifies the slave port in the T-BC case. For example, if the "name"
 	// 	is ens4f0, the "upstreamPort" could be ens4f1, depending on ptp4l config
 	UpstreamPort string                  `json:"upstreamPort"`
@@ -90,12 +90,14 @@ func (ch *ClockChain) GetLiveDpllPinsInfo() error {
 
 func (ch *ClockChain) ResolveInterconnections(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*[]delayCompensation, error) {
 	compensations := []delayCompensation{}
-	for _, card := range e810Opts.InputDelays {
+	var clockID *string
+	for _, card := range e810Opts.PhaseInputs {
 		delays, err := InitInternalDelays(card.Part)
 		if err != nil {
 			return nil, err
 		}
 		if card.Input != nil {
+
 			externalDelay := card.Input.DelayPs
 			connector := card.Input.Connector
 			link := findInternalLink(delays.ExternalInputs, connector)
@@ -107,7 +109,7 @@ func (ch *ClockChain) ResolveInterconnections(e810Opts E810Opts, nodeProfile *pt
 
 			pinLabel = link.Pin
 			internalDelay = link.DelayPs
-			clockId, err := addClockId(card.Id, nodeProfile)
+			clockID, err = addClockID(card.ID, nodeProfile)
 			if err != nil {
 				return nil, err
 			}
@@ -115,27 +117,27 @@ func (ch *ClockChain) ResolveInterconnections(e810Opts E810Opts, nodeProfile *pt
 			compensations = append(compensations, delayCompensation{
 				DelayPs:   int32(externalDelay) + internalDelay,
 				pinLabel:  pinLabel,
-				iface:     card.Id,
+				iface:     card.ID,
 				direction: "input",
-				clockId:   *clockId,
+				clockID:   *clockID,
 			})
 		} else {
-			ch.LeadingNIC.Name = card.Id
+			ch.LeadingNIC.Name = card.ID
 			ch.LeadingNIC.UpstreamPort = card.UpstreamPort
-			clockId, err := addClockId(card.Id, nodeProfile)
+			clockID, err = addClockID(card.ID, nodeProfile)
 			if err != nil {
 				return nil, err
 			}
-			ch.LeadingNIC.DpllClockId = *clockId
+			ch.LeadingNIC.DpllClockID = *clockID
 			if card.GnssInput {
 				ch.Type = ClockTypeTGM
 				gnssLink := &delays.GnssInput
 				compensations = append(compensations, delayCompensation{
 					DelayPs:   gnssLink.DelayPs,
 					pinLabel:  gnssLink.Pin,
-					iface:     card.Id,
+					iface:     card.ID,
 					direction: "input",
-					clockId:   *clockId,
+					clockID:   *clockID,
 				})
 			} else {
 				// if no GNSS and no external, then ptp4l input
@@ -147,16 +149,16 @@ func (ch *ClockChain) ResolveInterconnections(e810Opts E810Opts, nodeProfile *pt
 			if link == nil {
 				return nil, fmt.Errorf("plugin E810 error: can't find connector %s in the card %s spec", outputConn, card.Part)
 			}
-			clockId, err := addClockId(card.Id, nodeProfile)
+			clockID, err = addClockID(card.ID, nodeProfile)
 			if err != nil {
 				return nil, err
 			}
 			compensations = append(compensations, delayCompensation{
 				DelayPs:   link.DelayPs,
 				pinLabel:  link.Pin,
-				iface:     card.Id,
+				iface:     card.ID,
 				direction: "output",
-				clockId:   *clockId,
+				clockID:   *clockID,
 			})
 		}
 	}
@@ -210,12 +212,12 @@ func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockCha
 }
 
 func (ch *ClockChain) GetLeadingCardSDP() error {
-	clockId, err := strconv.ParseUint(ch.LeadingNIC.DpllClockId, 10, 64)
+	clockID, err := strconv.ParseUint(ch.LeadingNIC.DpllClockID, 10, 64)
 	if err != nil {
 		return err
 	}
 	for _, pin := range ch.DpllPins {
-		if pin.ClockID == clockId && slices.Contains(configurablePins, pin.BoardLabel) {
+		if pin.ClockID == clockID && slices.Contains(configurablePins, pin.BoardLabel) {
 			ch.LeadingNIC.Pins[pin.BoardLabel] = *pin
 		}
 	}
