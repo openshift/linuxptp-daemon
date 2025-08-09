@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/debug"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
@@ -47,7 +48,8 @@ const (
 	EXT_QL                    ValueType = "ext_ql"
 	CLOCK_QUALITY             ValueType = "clock_quality"
 	NETWORK_OPTION            ValueType = "network_option"
-	EEC_STATE                           = "eec_state"
+	EEC_STATE                 ValueType = "eec_state"
+	PORT_ROLE                 ValueType = "role"
 )
 
 var valueTypeHelpTxt = map[ValueType]string{
@@ -70,6 +72,17 @@ type ClockClassRequest struct {
 	clockClass    fbprotocol.ClockClass
 	clockAccuracy fbprotocol.ClockAccuracy
 }
+
+type PtpPortRole int
+
+const (
+	PASSIVE PtpPortRole = iota
+	SLAVE
+	MASTER
+	FAULTY
+	UNKNOWN
+	LISTENING
+)
 
 var (
 	//  make sure only one clock class update is tried if it fails next  try will pass
@@ -178,6 +191,7 @@ type EventHandler struct {
 	frequencyTraceable bool // will be tru if synce is traceable
 	ReduceLog          bool // reduce logs for every announce
 	LeadingClockData   *LeadingClockParams
+	portRole           map[string]map[string]*parser.PTPEvent
 }
 
 // EventChannel .. event channel to subscriber to events
@@ -228,6 +242,7 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 			downstreamTimeProperties: &protocol.TimePropertiesDS{},
 			downstreamParentDataSet:  &protocol.ParentDataSet{},
 		},
+		portRole: map[string]map[string]*parser.PTPEvent{},
 	}
 	if clockClassMetric != nil {
 		clockClassMetric.With(prometheus.Labels{
@@ -1070,4 +1085,80 @@ func getMetricName(valueType ValueType) string {
 		return fmt.Sprintf("%s_%s", valueType, "ns")
 	}
 	return string(valueType)
+}
+
+// SetPortRole saves the port role change event
+func (e *EventHandler) SetPortRole(cfgName, portNane string, event *parser.PTPEvent) {
+	if e.portRole == nil {
+		e.portRole = make(map[string]map[string]*parser.PTPEvent)
+	}
+	if _, ok := e.portRole[cfgName]; !ok {
+		e.portRole[cfgName] = make(map[string]*parser.PTPEvent)
+	}
+	e.portRole[cfgName][portNane] = event
+}
+
+type MetricSnapshot struct {
+	ClockClass        map[string]fbprotocol.ClockClass `json:"clock_class"`
+	OverallClockClass fbprotocol.ClockClass            `json:"overall_clock_class"`
+	PortRoles         map[string]map[string]string     `json:"port_roles"`
+}
+
+func (e *EventHandler) GetMetricSnapshot() MetricSnapshot {
+	res := MetricSnapshot{
+		OverallClockClass: e.clockClass,
+		ClockClass:        make(map[string]fbprotocol.ClockClass),
+		PortRoles:         make(map[string]map[string]string),
+	}
+
+	for cfgName, syncState := range e.clkSyncState {
+		res.ClockClass[cfgName] = syncState.clockClass
+	}
+
+	for cfgName, portRole := range e.portRole {
+		for portName, role := range portRole {
+			if _, ok := res.PortRoles[cfgName]; !ok {
+				res.PortRoles[cfgName] = make(map[string]string)
+			}
+			res.PortRoles[cfgName][portName] = role.Role.String()
+		}
+	}
+
+	return res
+}
+
+// EmitClockSyncLogs emits the clock sync state logs
+func (e *EventHandler) EmitClockSyncLogs(c net.Conn) {
+	glog.Info("Re-emitting metrics logs for event-proxy as requested")
+
+	for _, syncState := range e.clkSyncState {
+		if syncState.clkLog != "" {
+			_, err := c.Write([]byte(syncState.clkLog))
+			glog.Info(syncState.clkLog)
+			if err != nil {
+				glog.Errorf("Write error sending syncState metric update: %s", err)
+			}
+		}
+	}
+}
+
+// EmitPortRoleLogs emits the port role logs
+func (e *EventHandler) EmitPortRoleLogs(c net.Conn) {
+	if c == nil {
+		glog.Error("Failed to emit port state logs connection provided is nil")
+		return
+	}
+	glog.Info("Re-emitting metrics logs for event-proxy as requested")
+	for _, ports := range e.portRole {
+		for _, portEvent := range ports {
+			if portEvent == nil {
+				continue
+			}
+			glog.Info("Conn ", c, "\nPort Event ", portEvent)
+			_, err := c.Write([]byte(portEvent.Raw))
+			if err != nil {
+				glog.Errorf("Write error sending port role: %s", err)
+			}
+		}
+	}
 }

@@ -14,20 +14,20 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
-func convertParserRoleToMetricsRole(role parserconstants.PTPPortRole) ptpPortRole {
+func convertParserRoleToMetricsRole(role parserconstants.PTPPortRole) event.PtpPortRole {
 	switch role {
 	case parserconstants.PortRoleSlave:
-		return SLAVE
+		return event.SLAVE
 	case parserconstants.PortRoleMaster:
-		return MASTER
+		return event.MASTER
 	case parserconstants.PortRolePassive:
-		return PASSIVE
+		return event.PASSIVE
 	case parserconstants.PortRoleFaulty:
-		return FAULTY
+		return event.FAULTY
 	case parserconstants.PortRoleListening:
-		return LISTENING
+		return event.LISTENING
 	default:
-		return UNKNOWN
+		return event.UNKNOWN
 	}
 }
 
@@ -155,7 +155,9 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
 
 		interfaceName := process.ifaces[ptpEvent.PortID-1].Name
-		UpdateInterfaceRoleMetrics(process.name, interfaceName, convertParserRoleToMetricsRole(ptpEvent.Role))
+		role := convertParserRoleToMetricsRole(ptpEvent.Role)
+		UpdateInterfaceRoleMetrics(process.name, interfaceName, role)
+		process.handler.SetPortRole(configName, interfaceName, ptpEvent)
 
 		if configName == "" {
 			return

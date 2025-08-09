@@ -80,6 +80,15 @@ var ptpTmpFiles = []string{
 	pmcSocketName,
 }
 
+func dialSocket() (net.Conn, error) {
+	c, err := net.Dial("unix", eventSocket)
+	if err != nil {
+		glog.Errorf("error trying to connect to event socket")
+		time.Sleep(connectionRetryInterval)
+	}
+	return c, err
+}
+
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
 // Processes in ProcessManager will be started
@@ -131,10 +140,13 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 		glog.Error("process is not initialized in SetTestData()")
 		return
 	}
+	eventChannel := make(chan event.EventChannel)
+	closeManager := make(chan bool)
 	p.process[0].name = name
 	p.process[0].messageTag = msgTag
 	p.process[0].ifaces = ifaces
 	p.process[0].logParser = getParser(name)
+	p.process[0].handler = event.Init("test", false, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics)
 }
 
 // RunProcessPTPMetrics is used by unit tests
@@ -164,6 +176,40 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 	}
 	p.process[0].syncERelations = config
 
+}
+
+// EmitProcessStatusLogs ...
+func (p *ProcessManager) EmitProcessStatusLogs() {
+	for _, proc := range p.process {
+		status := PtpProcessUp
+		if proc.Stopped() {
+			status = PtpProcessDown
+		}
+		if proc.c == nil {
+			for {
+				var err error
+				proc.c, err = dialSocket()
+				if err == nil {
+					break
+				}
+			}
+		}
+		logProcessStatus(proc.name, proc.configName, status, proc.c)
+	}
+}
+
+// EmitClockClassLogs ...
+func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
+	for _, proc := range p.process {
+		if proc.name != ptp4lProcessName {
+			// If set then use current else get value
+			if proc.GrandmasterClockClass == 0 {
+				proc.updateClockClass(c)
+			} else {
+				proc.emitClockClassLogs(c)
+			}
+		}
+	}
 }
 
 type tBCProcessAttributes struct {
@@ -198,6 +244,7 @@ type ptpProcess struct {
 	hasCollectedMetrics   bool
 	tBCAttributes         tBCProcessAttributes
 	GrandmasterClockClass uint8
+	handler               *event.EventHandler
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -686,6 +733,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			logParser:            getParser(pProcess),
 			tBCAttributes:        tBCProcessAttributes{controlledPortsConfigFile: controlledConfigFile},
 			lastTransitionResult: event.PTP_NOTSET,
+			handler:              dn.processManager.ptpEventHandler,
 		}
 
 		if pProcess == ptp4lProcessName {
@@ -871,13 +919,21 @@ func processStatus(c net.Conn, processName, messageTag string, status int64) {
 		cfgName = strings.Split(cfgName, MessageTagSuffixSeperator)[0]
 	}
 	// ptp4l[5196819.100]: [ptp4l.0.config] PTP_PROCESS_STOPPED:0/1
-	deadProcessMsg := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d\n", processName, time.Now().Unix(), cfgName, status)
-	glog.Infof("%s\n", deadProcessMsg)
+
 	if c == nil {
 		UpdateProcessStatusMetrics(processName, cfgName, status)
 		return
 	}
-	_, err := c.Write([]byte(deadProcessMsg))
+	logProcessStatus(processName, cfgName, status, c)
+}
+
+func logProcessStatus(processName string, cfgName string, status int64, c net.Conn) {
+	if c == nil {
+		return
+	}
+	message := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d", processName, time.Now().Unix(), cfgName, status)
+	glog.Info(message)
+	_, err := c.Write([]byte(message + "\n"))
 	if err != nil {
 		glog.Errorf("Write error sending ptp4l/phc2sys process healths status%s:", err)
 	}
@@ -905,14 +961,18 @@ func (p *ptpProcess) updateClockClass(c net.Conn) {
 		if c == nil {
 			UpdateClockClassMetrics(float64(p.GrandmasterClockClass)) // no socket then update metrics
 		} else {
-			clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, p.GrandmasterClockClass)
-			_, err := c.Write([]byte(clockClassOut))
-			if err != nil {
-				glog.Errorf("failed to write class change event %s", err.Error())
-			}
+			p.emitClockClassLogs(c)
 		}
 	} else {
 		glog.Errorf("error parsing PMC util for clock class change event %s", e.Error())
+	}
+}
+
+func (p *ptpProcess) emitClockClassLogs(c net.Conn) {
+	clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, p.GrandmasterClockClass)
+	_, err := c.Write([]byte(clockClassOut))
+	if err != nil {
+		glog.Errorf("failed to write class change event %s", err.Error())
 	}
 }
 
@@ -993,10 +1053,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 				case <-p.exitCh:
 					done <- struct{}{}
 				default:
-					p.c, err = net.Dial("unix", eventSocket)
+					p.c, err = dialSocket()
 					if err != nil {
-						glog.Errorf("error trying to connect to event socket")
-						time.Sleep(connectionRetryInterval)
 						goto connect
 					}
 				}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
@@ -57,17 +58,6 @@ const (
 const (
 	PtpProcessDown int64 = 0
 	PtpProcessUp   int64 = 1
-)
-
-type ptpPortRole int
-
-const (
-	PASSIVE ptpPortRole = iota
-	SLAVE
-	MASTER
-	FAULTY
-	UNKNOWN
-	LISTENING
 )
 
 type masterOffsetInterface struct { // by slave iface with masked index
@@ -299,10 +289,10 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 		if portId, role := extractPTP4lEventState(output); portId > 0 {
 			if len(ifaces) >= portId-1 {
 				UpdateInterfaceRoleMetrics(processName, ifaces[portId-1].Name, role)
-				if role == SLAVE {
+				if role == event.SLAVE {
 					masterOffsetIface.set(configName, ifaces[portId-1].Name)
 					slaveIface.set(configName, ifaces[portId-1].Name)
-				} else if role == FAULTY {
+				} else if role == event.FAULTY {
 					if slaveIface.isFaulty(configName, ifaces[portId-1].Name) &&
 						masterOffsetSource.get(configName) == ptp4lProcessName {
 						updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
@@ -522,7 +512,7 @@ func updateClockStateMetrics(process, iface string, state string) {
 	}
 }
 
-func UpdateInterfaceRoleMetrics(process string, iface string, role ptpPortRole) {
+func UpdateInterfaceRoleMetrics(process string, iface string, role event.PtpPortRole) {
 	InterfaceRole.With(prometheus.Labels{
 		"process": process, "node": NodeName, "iface": iface}).Set(float64(role))
 }
@@ -629,7 +619,7 @@ func deleteProcessStatusMetrics(config, process string) {
 		"process": process, "node": NodeName, "config": config})
 
 }
-func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
+func extractPTP4lEventState(output string) (portId int, role event.PtpPortRole) {
 	replacer := strings.NewReplacer("[", " ", "]", " ", ":", " ")
 	output = replacer.Replace(output)
 
@@ -650,7 +640,7 @@ func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 	}
 
 	portIndex := fields[1]
-	role = UNKNOWN
+	role = event.UNKNOWN
 
 	var e error
 	portId, e = strconv.Atoi(portIndex)
@@ -661,17 +651,17 @@ func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 	}
 
 	if strings.Contains(output, "UNCALIBRATED to SLAVE") {
-		role = SLAVE
+		role = event.SLAVE
 	} else if strings.Contains(output, "UNCALIBRATED to PASSIVE") || strings.Contains(output, "MASTER to PASSIVE") ||
 		strings.Contains(output, "SLAVE to PASSIVE") {
-		role = PASSIVE
+		role = event.PASSIVE
 	} else if strings.Contains(output, "UNCALIBRATED to MASTER") || strings.Contains(output, "LISTENING to MASTER") {
-		role = MASTER
+		role = event.MASTER
 	} else if strings.Contains(output, "FAULT_DETECTED") || strings.Contains(output, "SYNCHRONIZATION_FAULT") {
-		role = FAULTY
+		role = event.FAULTY
 	} else if strings.Contains(output, "UNCALIBRATED to LISTENING") || strings.Contains(output, "SLAVE to LISTENING") ||
 		strings.Contains(output, "INITIALIZING to LISTENING") {
-		role = LISTENING
+		role = event.LISTENING
 	} else {
 		portId = 0
 	}
