@@ -23,7 +23,7 @@ type E810Opts struct {
 	DevicePins          map[string]map[string]string `json:"pins"`
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
-	InputDelays         []InputPhaseDelays           `json:"interconnections"`
+	PhaseInputs         []PhaseInputs                `json:"interconnections"`
 }
 
 type E810UblxCmds struct {
@@ -145,7 +145,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			for device, pins := range e810Opts.DevicePins {
 				dpllClockIdStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				if !unitTest {
-					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getClockIdE810(device), 10)
+					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getClockIDE810(device), 10)
 					for pin, value := range pins {
 						deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
 						phcs, err := os.ReadDir(deviceDir)
@@ -184,11 +184,11 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					break
 				}
 				for pinProperty, value := range properties {
-					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getClockIdE810(iface), 10), pinProperty}, ".")
+					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getClockIDE810(iface), 10), pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
 				}
 			}
-			if e810Opts.InputDelays != nil {
+			if e810Opts.PhaseInputs != nil {
 				if unitTest {
 					// Mock clock chain DPLL pins in unit test
 					clockChain.DpllPins = DpllPins
@@ -305,7 +305,7 @@ func E810(name string) (*plugin.Plugin, *interface{}) {
 	return &_plugin, &iface
 }
 
-func getClockIdE810(device string) uint64 {
+func getClockIDE810(device string) uint64 {
 	const (
 		PCI_EXT_CAP_ID_DSN       = 3
 		PCI_CFG_SPACE_SIZE       = 256

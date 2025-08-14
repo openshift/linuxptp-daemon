@@ -52,6 +52,14 @@ func Test_ProcessProfileTGMNew(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// Test that the profile with no phase inputs is processed correctly
+func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
+	unitTest = true
+	profile, err := loadProfile("./testdata/profile-tbc-no-input-delays.yaml")
+	assert.NoError(t, err)
+	err = OnPTPConfigChangeE810(nil, profile)
+	assert.NoError(t, err)
+}
 func Test_ProcessProfilesTbcTtsc(t *testing.T) {
 	unitTest = true
 	for _, config := range []string{"./testdata/profile-tbc.yaml", "./testdata/profile-t-tsc.yaml"} {
@@ -63,7 +71,7 @@ func Test_ProcessProfilesTbcTtsc(t *testing.T) {
 		err = OnPTPConfigChangeE810(nil, profile)
 		assert.NoError(t, err)
 		assert.Equal(t, ClockTypeTBC, clockChain.Type, "identified a wrong clock type")
-		assert.Equal(t, "5799633565432596414", clockChain.LeadingNIC.DpllClockId, "identified a wrong clock ID ")
+		assert.Equal(t, "5799633565432596414", clockChain.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
 		assert.Equal(t, 9, len(clockChain.LeadingNIC.Pins), "wrong number of configurable pins")
 		assert.Equal(t, "ens4f1", clockChain.LeadingNIC.UpstreamPort, "wrong upstream port")
 		// Test holdover entry

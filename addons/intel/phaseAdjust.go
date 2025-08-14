@@ -13,28 +13,32 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-type InputDelay struct {
+// InputConnector is a connector on the input side of the card
+type InputConnector struct {
 	Connector string `json:"connector"`
-	DelayPs   int    `json:"delayPs"`
+	DelayPs   int    `json:"delayPs,omitempty"`
 	// DelayVariationPs int    `json:"delayVariationPs"`
 }
 
-type InputPhaseDelays struct {
-	Id                    string      `json:"id"`
-	Part                  string      `json:"Part"`
-	Input                 *InputDelay `json:"inputPhaseDelay"`
-	GnssInput             bool        `json:"gnssInput"`
-	PhaseOutputConnectors []string    `json:"phaseOutputConnectors"`
-	UpstreamPort          string      `json:"upstreamPort"`
+// PhaseInputs is a list of phase inputs for a card
+type PhaseInputs struct {
+	ID                    string          `json:"id"`
+	Part                  string          `json:"Part"`
+	Input                 *InputConnector `json:"inputConnector"`
+	GnssInput             bool            `json:"gnssInput"`
+	PhaseOutputConnectors []string        `json:"phaseOutputConnectors"`
+	UpstreamPort          string          `json:"upstreamPort"`
 }
 
+// InternalLink is a link between pin and connector
 type InternalLink struct {
 	Connector string `yaml:"connector"`
 	Pin       string `yaml:"pin"`
-	DelayPs   int32  `yaml:"delayPs"`
+	DelayPs   int32  `yaml:"delayPs,omitempty"`
 	// DelayVariationPs uint32 `yaml:"delayVariationPs"`
 }
 
+// InternalDelays is a list of internal delays for a card
 type InternalDelays struct {
 	PartType        string         `yaml:"partType"`
 	ExternalInputs  []InternalLink `yaml:"externalInputs"`
@@ -47,7 +51,7 @@ type delayCompensation struct {
 	pinLabel  string
 	iface     string
 	direction string
-	clockId   string
+	clockID   string
 }
 
 var hardware = map[string]string{
@@ -106,15 +110,16 @@ func sendDelayCompensation(comp *[]delayCompensation, DpllPins []*dpll.PinInfo) 
 
 	for _, pin := range DpllPins {
 		for _, dc := range *comp {
-			desiredClockId, err := strconv.ParseUint(dc.clockId, 10, 64)
+			var desiredClockID uint64
+			desiredClockID, err = strconv.ParseUint(dc.clockID, 10, 64)
 			if err != nil {
-				return fmt.Errorf("failed to parse clock id %s: %v", dc.clockId, err)
+				return fmt.Errorf("failed to parse clock id %s: %v", dc.clockID, err)
 			}
-			if desiredClockId == pin.ClockID && strings.EqualFold(pin.BoardLabel, dc.pinLabel) {
+			if desiredClockID == pin.ClockID && strings.EqualFold(pin.BoardLabel, dc.pinLabel) {
 				err = conn.PinPhaseAdjust(dpll.PinPhaseAdjustRequest{ID: pin.ID, PhaseAdjust: dc.DelayPs})
 				if err != nil {
 					return fmt.Errorf("failed to send phase adjustment to %s clock id %d: %v",
-						pin.BoardLabel, desiredClockId, err)
+						pin.BoardLabel, desiredClockID, err)
 				}
 				glog.Infof("set phaseAdjust of pin %s at clock ID %x to %d ps", pin.BoardLabel, pin.ClockID, dc.DelayPs)
 			}
@@ -123,13 +128,13 @@ func sendDelayCompensation(comp *[]delayCompensation, DpllPins []*dpll.PinInfo) 
 	return nil
 }
 
-func addClockId(iface string, nodeProfile *ptpv1.PtpProfile) (*string, error) {
+func addClockID(iface string, nodeProfile *ptpv1.PtpProfile) (*string, error) {
 	dpllClockIdStr := fmt.Sprintf("%s[%s]", "clockId", iface)
-	clockId, found := (*nodeProfile).PtpSettings[dpllClockIdStr]
+	clockID, found := (*nodeProfile).PtpSettings[dpllClockIdStr]
 	if !found {
 		return nil, fmt.Errorf("plugin E810 error: can't find clock ID for interface %s - are all pins configured?", iface)
 	}
-	return &clockId, nil
+	return &clockID, nil
 }
 
 func findInternalLink(links []InternalLink, connector string) *InternalLink {

@@ -20,12 +20,12 @@ plugins:
       - SMA2
     - id: ens5f0
       part: E810-XXVDA4T
-      inputPhaseDelay:
+      inputConnector:
         connector: SMA1
         delayPs: 920
     - id: ens8f0
       part: E810-XXVDA4T
-      inputPhaseDelay:
+      inputConnector:
         connector: SMA1
         delayPs: 920
       phaseOutputConnectors:
