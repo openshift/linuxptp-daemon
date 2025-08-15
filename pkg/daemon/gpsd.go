@@ -57,7 +57,7 @@ type GPSD struct {
 	subscriber           *GPSDSubscriber
 	monitorCtx           context.Context
 	monitorCancel        context.CancelFunc
-	c                    *net.Conn
+	c                    net.Conn
 }
 
 // GPSDSubscriber ... event subscriber
@@ -162,7 +162,8 @@ func (g *GPSD) CmdInit() {
 	g.cmdLine = fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -G -N %s", g.Name(), g.SerialPort())
 }
 
-func (g *GPSD) ProcessStatus(c *net.Conn, status int64) {
+// ProcessStatus ...
+func (g *GPSD) ProcessStatus(c net.Conn, status int64) {
 	if c != nil {
 		g.c = c
 	}

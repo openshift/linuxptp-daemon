@@ -194,7 +194,7 @@ type ptpProcess struct {
 	ptpClockThreshold     *ptpv1.PtpClockThreshold
 	haProfile             map[string][]string // stores list of interface name for each profile
 	syncERelations        *synce.Relations
-	c                     *net.Conn
+	c                     net.Conn
 	hasCollectedMetrics   bool
 	tBCAttributes         tBCProcessAttributes
 	GrandmasterClockClass uint8
@@ -865,7 +865,7 @@ func addScheduling(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
 	return cmdLine
 }
 
-func processStatus(c *net.Conn, processName, messageTag string, status int64) {
+func processStatus(c net.Conn, processName, messageTag string, status int64) {
 	cfgName := strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
 	if cfgName != "" {
 		cfgName = strings.Split(cfgName, MessageTagSuffixSeperator)[0]
@@ -877,13 +877,13 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 		UpdateProcessStatusMetrics(processName, cfgName, status)
 		return
 	}
-	_, err := (*c).Write([]byte(deadProcessMsg))
+	_, err := c.Write([]byte(deadProcessMsg))
 	if err != nil {
 		glog.Errorf("Write error sending ptp4l/phc2sys process healths status%s:", err)
 	}
 }
 
-func (p *ptpProcess) updateClockClass(c *net.Conn) {
+func (p *ptpProcess) updateClockClass(c net.Conn) {
 	if p.nodeProfile.PtpSettings["clockType"] == TBC || p.nodeProfile.PtpSettings["controllingProfile"] != "" {
 		return
 	}
@@ -906,7 +906,7 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 			UpdateClockClassMetrics(float64(p.GrandmasterClockClass)) // no socket then update metrics
 		} else {
 			clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, p.GrandmasterClockClass)
-			_, err := (*c).Write([]byte(clockClassOut))
+			_, err := c.Write([]byte(clockClassOut))
 			if err != nil {
 				glog.Errorf("failed to write class change event %s", err.Error())
 			}
@@ -938,7 +938,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
 	defer func() {
 		if stdoutToSocket && p.c != nil {
-			if err := (*p.c).Close(); err != nil {
+			if err := p.c.Close(); err != nil {
 				glog.Errorf("closing connection returned error %s", err)
 			}
 		}
@@ -993,8 +993,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 				case <-p.exitCh:
 					done <- struct{}{}
 				default:
-					c, err := net.Dial("unix", eventSocket)
-					p.c = &c
+					p.c, err = net.Dial("unix", eventSocket)
 					if err != nil {
 						glog.Errorf("error trying to connect to event socket")
 						time.Sleep(connectionRetryInterval)
@@ -1029,7 +1028,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
 						p.announceHAFailOver(p.c, output) // do not use go routine since order of execution is important here
 					}
-					_, err2 := (*p.c).Write([]byte(removeMessageSuffix(output)))
+					_, err2 := p.c.Write([]byte(removeMessageSuffix(output)))
 					if err2 != nil {
 						glog.Errorf("Write %s error %s:", output, err2)
 						goto connect
@@ -1071,7 +1070,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 			p.cmd = newCmd
 		}
 		if stdoutToSocket && p.c != nil {
-			if err2 := (*p.c).Close(); err2 != nil {
+			if err2 := p.c.Close(); err2 != nil {
 				glog.Errorf("closing connection returned error %s", err2)
 			}
 		}
@@ -1251,7 +1250,7 @@ func listHaProfiles(nodeProfile *ptpv1.PtpProfile) (haProfiles []string) {
 	return
 }
 
-func (p *ptpProcess) announceHAFailOver(c *net.Conn, output string) {
+func (p *ptpProcess) announceHAFailOver(c net.Conn, output string) {
 	defer func() {
 		if r := recover(); r != nil {
 			glog.Errorf("Recovered in f %#v", r)
@@ -1304,7 +1303,7 @@ func (p *ptpProcess) announceHAFailOver(c *net.Conn, output string) {
 		UpdatePTPHAMetrics(currentProfile, inActiveProfiles, activeState)
 	} else {
 		for _, logProfile := range logString {
-			_, err := (*c).Write([]byte(logProfile))
+			_, err := c.Write([]byte(logProfile))
 			if err != nil {
 				glog.Errorf("failed to write class change event %s", err.Error())
 			}

@@ -602,7 +602,7 @@ connect:
 	}
 
 	if redialClockClass {
-		go func(eConn *net.Conn) {
+		go func() {
 			defer func() {
 				if err := recover(); err != nil {
 					glog.Errorf("restored from clock class update: %s", err)
@@ -633,7 +633,7 @@ connect:
 					}
 				}
 			}
-		}(&c)
+		}()
 		redialClockClass = false
 	}
 	// call all monitoring candidates; verify every 5 secs for any new

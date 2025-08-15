@@ -36,7 +36,7 @@ type gpspipe struct {
 	exitCh     chan struct{}
 	stopped    bool
 	messageTag string
-	c          *net.Conn
+	c          net.Conn
 }
 
 // Name ... Process name
@@ -135,7 +135,7 @@ func (gp *gpspipe) CmdInit() {
 	gp.cmdLine = fmt.Sprintf("/usr/local/bin/gpspipe -v -R -l -o %s", gp.SerialPort())
 }
 
-func (gp *gpspipe) ProcessStatus(c *net.Conn, status int64) {
+func (gp *gpspipe) ProcessStatus(c net.Conn, status int64) {
 	if c != nil {
 		gp.c = c
 	}
