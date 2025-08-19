@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,7 +9,6 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	utilwait "k8s.io/apimachinery/pkg/util/wait"
 )
@@ -83,46 +81,12 @@ type metricHandler struct {
 	tracker *ReadyTracker
 }
 
-type ProcessStateSnapshot struct {
-	ProcessName string `json:"process_name"`
-	IsUp        bool   `json:"is_up"`
-	ConfigName  string `json:"config_name"`
-}
-
-type Snapshot struct {
-	Timestamp int64
-	Processes []ProcessStateSnapshot `json:"processes"`
-	Metrics   event.MetricSnapshot   `json:"metrics"`
-}
-
 func (h metricHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	if isReady, _ := h.tracker.Ready(); !isReady {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	processManager := h.tracker.processManager
-	eventHandler := h.tracker.processManager.ptpEventHandler
-
-	snapshot := Snapshot{
-		Timestamp: time.Now().Unix(), // TODO: Track last time values changed
-		Metrics:   eventHandler.GetMetricSnapshot(),
-		Processes: make([]ProcessStateSnapshot, 0),
-	}
-	for _, p := range processManager.process {
-		snapshot.Processes = append(snapshot.Processes, ProcessStateSnapshot{
-			ProcessName: p.name,
-			IsUp:        !p.Stopped(),
-			ConfigName:  p.configName,
-		})
-	}
-
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, "failed to marshal snapshot")
-	}
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, string(data))
 
 	go func() {
 		var socketConnection net.Conn
@@ -151,7 +115,7 @@ func StartReadyServer(bindAddress string, tracker *ReadyTracker, serveInitMetric
 	mux := http.NewServeMux()
 	mux.Handle("/ready", readyHandler{tracker: tracker})
 	if serveInitMetrics {
-		mux.Handle("/inital-metrics", metricHandler{tracker: tracker})
+		mux.Handle("/emit-logs", metricHandler{tracker: tracker})
 	}
 	go utilwait.Until(func() {
 		err := http.ListenAndServe(bindAddress, mux)

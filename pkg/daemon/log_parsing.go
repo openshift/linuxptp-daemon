@@ -14,20 +14,20 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
-func convertParserRoleToMetricsRole(role parserconstants.PTPPortRole) event.PtpPortRole {
+func convertParserRoleToMetricsRole(role parserconstants.PTPPortRole) ptpPortRole {
 	switch role {
 	case parserconstants.PortRoleSlave:
-		return event.SLAVE
+		return SLAVE
 	case parserconstants.PortRoleMaster:
-		return event.MASTER
+		return MASTER
 	case parserconstants.PortRolePassive:
-		return event.PASSIVE
+		return PASSIVE
 	case parserconstants.PortRoleFaulty:
-		return event.FAULTY
+		return FAULTY
 	case parserconstants.PortRoleListening:
-		return event.LISTENING
+		return LISTENING
 	default:
-		return event.UNKNOWN
+		return UNKNOWN
 	}
 }
 

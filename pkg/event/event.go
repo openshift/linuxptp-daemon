@@ -48,8 +48,7 @@ const (
 	EXT_QL                    ValueType = "ext_ql"
 	CLOCK_QUALITY             ValueType = "clock_quality"
 	NETWORK_OPTION            ValueType = "network_option"
-	EEC_STATE                 ValueType = "eec_state"
-	PORT_ROLE                 ValueType = "role"
+	EEC_STATE                           = "eec_state"
 )
 
 var valueTypeHelpTxt = map[ValueType]string{
@@ -72,17 +71,6 @@ type ClockClassRequest struct {
 	clockClass    fbprotocol.ClockClass
 	clockAccuracy fbprotocol.ClockAccuracy
 }
-
-type PtpPortRole int
-
-const (
-	PASSIVE PtpPortRole = iota
-	SLAVE
-	MASTER
-	FAULTY
-	UNKNOWN
-	LISTENING
-)
 
 var (
 	//  make sure only one clock class update is tried if it fails next  try will pass
@@ -1096,35 +1084,6 @@ func (e *EventHandler) SetPortRole(cfgName, portNane string, event *parser.PTPEv
 		e.portRole[cfgName] = make(map[string]*parser.PTPEvent)
 	}
 	e.portRole[cfgName][portNane] = event
-}
-
-type MetricSnapshot struct {
-	ClockClass        map[string]fbprotocol.ClockClass `json:"clock_class"`
-	OverallClockClass fbprotocol.ClockClass            `json:"overall_clock_class"`
-	PortRoles         map[string]map[string]string     `json:"port_roles"`
-}
-
-func (e *EventHandler) GetMetricSnapshot() MetricSnapshot {
-	res := MetricSnapshot{
-		OverallClockClass: e.clockClass,
-		ClockClass:        make(map[string]fbprotocol.ClockClass),
-		PortRoles:         make(map[string]map[string]string),
-	}
-
-	for cfgName, syncState := range e.clkSyncState {
-		res.ClockClass[cfgName] = syncState.clockClass
-	}
-
-	for cfgName, portRole := range e.portRole {
-		for portName, role := range portRole {
-			if _, ok := res.PortRoles[cfgName]; !ok {
-				res.PortRoles[cfgName] = make(map[string]string)
-			}
-			res.PortRoles[cfgName][portName] = role.Role.String()
-		}
-	}
-
-	return res
 }
 
 // EmitClockSyncLogs emits the clock sync state logs
