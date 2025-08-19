@@ -1396,6 +1396,9 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 			updateClockStateMetrics(p.name, iface, FREERUN)
 		case event.PTP_HOLDOVER:
 			updateClockStateMetrics(p.name, iface, HOLDOVER)
+			if p.clockType != TGM { // TGM announce clock class via events
+				go p.updateClockClass(p.c)
+			}
 		}
 	}
 }
