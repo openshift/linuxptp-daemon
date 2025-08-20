@@ -176,8 +176,8 @@ func extractEventPTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
 	}
 	portID := *parsed.PortID
 
-	role, err := determineRole(parsed.Event)
-	if err != nil {
+	role := determineRole(parsed.Event)
+	if role == constants.PortRoleUnknown {
 		portID = 0
 	}
 
@@ -186,7 +186,7 @@ func extractEventPTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
 		PortID: portID,
 		Role:   role,
 		Raw:    parsed.Raw,
-	}, err
+	}, nil
 }
 
 func extractSummaryPTP4l(parsed *ptp4lParsed) (*Metrics, error) {
@@ -255,19 +255,19 @@ func extractRegularPTP4l(parsed *ptp4lParsed) (*Metrics, error) {
 	}, nil
 }
 
-func determineRole(event string) (constants.PTPPortRole, error) {
+func determineRole(event string) constants.PTPPortRole {
 	switch {
 	case strings.Contains(event, "UNCALIBRATED to SLAVE"):
-		return constants.PortRoleSlave, nil
+		return constants.PortRoleSlave
 	case strings.Contains(event, "UNCALIBRATED to PASSIVE"), strings.Contains(event, "MASTER to PASSIVE"), strings.Contains(event, "SLAVE to PASSIVE"):
-		return constants.PortRolePassive, nil
+		return constants.PortRolePassive
 	case strings.Contains(event, "UNCALIBRATED to MASTER"), strings.Contains(event, "LISTENING to MASTER"):
-		return constants.PortRoleMaster, nil
+		return constants.PortRoleMaster
 	case strings.Contains(event, "FAULT_DETECTED"), strings.Contains(event, "SYNCHRONIZATION_FAULT"):
-		return constants.PortRoleFaulty, nil
+		return constants.PortRoleFaulty
 	case strings.Contains(event, "UNCALIBRATED to LISTENING"), strings.Contains(event, "SLAVE to LISTENING"), strings.Contains(event, "INITIALIZING to LISTENING"):
-		return constants.PortRoleListening, nil
+		return constants.PortRoleListening
 	default:
-		return constants.PortRoleUnknown, fmt.Errorf("unrecognized role in event: %s", event)
+		return constants.PortRoleUnknown
 	}
 }

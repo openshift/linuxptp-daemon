@@ -155,10 +155,14 @@ func TestPTP4LEventParser(t *testing.T) {
 			},
 		},
 		{
-			name:          "Invalid port state change",
-			configName:    "ptp4l.0.config",
-			logLine:       "ptp4l[4268779.809]: [ptp4l.0.config] port 1: INVALID_STATE",
-			expectedError: true,
+			name:       "Invalid port state change",
+			configName: "ptp4l.0.config",
+			logLine:    "ptp4l[4268779.809]: [ptp4l.0.config] port 1: INVALID_STATE",
+			expectedEvent: &parser.PTPEvent{
+				PortID: 0,
+				Role:   constants.PortRoleUnknown,
+				Raw:    "ptp4l[4268779.809]: [ptp4l.0.config] port 1: INVALID_STATE",
+			},
 		},
 	}
 
