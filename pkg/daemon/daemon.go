@@ -28,6 +28,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
@@ -249,6 +250,8 @@ type ptpProcess struct {
 	tBCAttributes         tBCProcessAttributes
 	GrandmasterClockClass uint8
 	handler               *event.EventHandler
+	dn                    *Daemon
+	cmdSetEnabledMutex    sync.Mutex
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -256,6 +259,14 @@ func (p *ptpProcess) Stopped() bool {
 	me := p.stopped
 	p.execMutex.Unlock()
 	return me
+}
+
+func (p *ptpProcess) getAndSetStopped(val bool) bool {
+	p.execMutex.Lock()
+	ret := p.stopped
+	p.stopped = val
+	p.execMutex.Unlock()
+	return ret
 }
 
 func (p *ptpProcess) setStopped(val bool) {
@@ -309,7 +320,7 @@ type Daemon struct {
 	pmcPollInterval int
 
 	// Allow vendors to include plugins
-	pluginManager PluginManager
+	pluginManager plugin.PluginManager
 }
 
 // New LinuxPTP is called by daemon to generate new linuxptp instance
@@ -751,7 +762,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configName:           configFile,
 			messageTag:           messageTag,
 			exitCh:               make(chan bool),
-			stopped:              false,
+			stopped:              true,
 			logFilters:           logfilter.GetLogFilters(pProcess, messageTag, (*nodeProfile).PtpSettings),
 			cmd:                  cmd,
 			depProcess:           []process{},
@@ -764,6 +775,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			tBCAttributes:        tBCProcessAttributes{controlledPortsConfigFile: controlledConfigFile},
 			lastTransitionResult: event.PTP_NOTSET,
 			handler:              dn.processManager.ptpEventHandler,
+			dn:                   dn,
 		}
 
 		if pProcess == ptp4lProcessName {
@@ -890,6 +902,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		printNodeProfile(nodeProfile)
 		dn.processManager.process = append(dn.processManager.process, &dprocess)
+		dn.pluginManager.RegisterEnableCallback(dprocess.name, dprocess.cmdSetEnabled)
 
 	}
 	return nil
@@ -1010,7 +1023,7 @@ func (p *ptpProcess) emitClockClassLogs(c net.Conn) {
 	}
 }
 
-func (p *ptpProcess) tBCTransitionCheck(output string, pm *PluginManager) {
+func (p *ptpProcess) tBCTransitionCheck(output string, pm *plugin.PluginManager) {
 	if strings.Contains(output, p.tBCAttributes.trIfaceName) {
 		if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
 			glog.Info("T-BC MOVE TO NORMAL")
@@ -1028,8 +1041,15 @@ func (p *ptpProcess) tBCTransitionCheck(output string, pm *PluginManager) {
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
-func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
-	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
+func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
+	cmd := p.cmd
+	stopped := p.getAndSetStopped(false)
+	if !stopped {
+		glog.Infof("%s is already running", p.name)
+		return
+	}
+
+	doneCh := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
 	defer func() {
 		if stdoutToSocket && p.c != nil {
 			if err := p.c.Close(); err != nil {
@@ -1045,16 +1065,16 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 	}
 	for {
 		glog.Infof("Starting %s...", p.name)
-		glog.Infof("%s cmd: %+v", p.name, p.cmd)
+		glog.Infof("%s cmd: %+v", p.name, cmd)
 
-		cmdReader, err := p.cmd.StdoutPipe()
+		cmdReader, err := cmd.StdoutPipe()
 		if err != nil {
 			glog.Errorf("CmdRun() error creating StdoutPipe for %s: %v", p.name, err)
 			break
 		}
 
 		// don't discard process stderr output
-		p.cmd.Stderr = p.cmd.Stdout
+		cmd.Stderr = cmd.Stdout
 
 		if !stdoutToSocket {
 			scanner := bufio.NewScanner(cmdReader)
@@ -1062,6 +1082,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
+					output = pm.ProcessLog(p.name, output)
 					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
@@ -1075,14 +1096,14 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 						p.announceHAFailOver(nil, output) // do not use go routine since order of execution is important here
 					}
 				}
-				done <- struct{}{}
+				doneCh <- struct{}{}
 			}()
 		} else {
 			go func() {
 			connect:
 				select {
 				case <-p.exitCh:
-					done <- struct{}{}
+					doneCh <- struct{}{}
 				default:
 					p.c, err = dialSocket()
 					if err != nil {
@@ -1138,27 +1159,32 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 						goto connect
 					}
 				}
-				done <- struct{}{}
+				doneCh <- struct{}{}
 			}()
 		}
 		// Don't restart after termination
 		if !p.Stopped() {
-			err = p.cmd.Start() // this is asynchronous call,
+			glog.Infof("starting %s...", p.name)
+			p.cmd = cmd
+			err = cmd.Start() // this is asynchronous call,
 			if err != nil {
 				glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
 			}
+
+			<-doneCh // goroutine is done
+			err = cmd.Wait()
+
+			glog.Infof("done waiting for %s...", p.name)
+			if err != nil {
+				glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
+			}
+			if stdoutToSocket && p.c != nil {
+				processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
+			} else {
+				processStatus(nil, p.name, p.messageTag, PtpProcessDown)
+			}
+			p.updateGMStatusOnProcessDown(p.name)
 		}
-		<-done // goroutine is done
-		err = p.cmd.Wait()
-		if err != nil {
-			glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
-		}
-		if stdoutToSocket && p.c != nil {
-			processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
-		} else {
-			processStatus(nil, p.name, p.messageTag, PtpProcessDown)
-		}
-		p.updateGMStatusOnProcessDown(p.name)
 
 		if profileClockType == TBC && p.name == ptp4lProcessName {
 			pm.AfterRunPTPCommand(&p.nodeProfile, "reset-to-default")
@@ -1170,8 +1196,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 			break
 		} else {
 			glog.Infof("Recreating %s...", p.name)
-			newCmd := exec.Command(p.cmd.Args[0], p.cmd.Args[1:]...)
-			p.cmd = newCmd
+			newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
+			cmd = newCmd
 		}
 		if stdoutToSocket && p.c != nil {
 			if err2 := p.c.Close(); err2 != nil {
@@ -1234,31 +1260,58 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 // cmdStop stops ptpProcess launched by cmdRun
 func (p *ptpProcess) cmdStop() {
 	glog.Infof("stopping %s...", p.name)
-	if p.cmd == nil {
+	cmd := p.cmd
+	if cmd == nil {
+		glog.Infof("cmdStop is nil %s", p.name)
 		return
 	}
+	if p.Stopped() {
+		glog.Infof("%s is already stopped", p.name)
+		return
+	}
+	glog.Infof("%s setStopped true", p.name)
+
 	p.setStopped(true)
 	// reset runtime flags
 	p.ConsumePmcCheck()
 	p.clockClassRunning.Store(false)
-	if p.cmd.Process != nil {
-		glog.Infof("Sending TERM to (%s) PID: %d", p.name, p.cmd.Process.Pid)
-		err := p.cmd.Process.Signal(syscall.SIGTERM)
+	if cmd.Process != nil {
+		glog.Infof("Sending TERM to (%s) PID: %d", p.name, cmd.Process.Pid)
+		err := cmd.Process.Signal(syscall.SIGTERM)
 		if err != nil {
 			// If the process is already terminated, we will get an error here
-			glog.Errorf("failed to send SIGTERM to %s (%d): %v", p.name, p.cmd.Process.Pid, err)
+			glog.Errorf("failed to send SIGTERM to %s (%d): %v", p.name, cmd.Process.Pid, err)
 			return
 		}
-	}
-	glog.Infof("removing config path %s for %s ", p.processConfigPath, p.name)
-	if p.processConfigPath != "" {
-		err := os.Remove(p.processConfigPath)
-		if err != nil {
-			glog.Errorf("failed to remove ptp4l config path %s: %v", p.processConfigPath, err)
-		}
+	} else {
+		glog.Infof("not Sending TERM to (%s) which is nil", p.name)
 	}
 	<-p.exitCh
-	glog.Infof("Process %s (%d) terminated", p.name, p.cmd.Process.Pid)
+}
+
+func (p *ptpProcess) cmdSetEnabled(enabled bool) {
+	glog.Infof("cmdSetEnabled %s set to %t", p.name, enabled)
+	p.cmdSetEnabledMutex.Lock()
+	defer p.cmdSetEnabledMutex.Unlock()
+	switch p.name {
+	case "chronyd":
+		if enabled {
+			exec.Command("chronyc", "online").Output()
+		} else {
+			exec.Command("chronyc", "offline").Output()
+		}
+	case "phc2sys":
+		if enabled {
+			if p.Stopped() && p.cmd != nil {
+				cmd := p.cmd
+				newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
+				p.cmd = newCmd
+				go p.cmdRun(p.dn.stdoutToSocket, &(p.dn.pluginManager))
+			}
+		} else {
+			p.cmdStop()
+		}
+	}
 }
 
 func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
