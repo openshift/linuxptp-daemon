@@ -29,7 +29,7 @@ func netParseEthtoolTimeStampFeature(cmdOut *bytes.Buffer) bool {
 	var hardTxEnabled bool
 	var hardRawEnabled bool
 
-	glog.V(2).Infof("cmd output for %v", cmdOut)
+	// glog.V(2).Infof("cmd output for %v", cmdOut)
 	scanner := bufio.NewScanner(cmdOut)
 	for scanner.Scan() {
 		line := strings.TrimPrefix(scanner.Text(), "\t")
@@ -63,7 +63,7 @@ func DiscoverPTPDevices() ([]string, error) {
 	}
 
 	for _, dev := range net.NICs {
-		glog.Infof("grabbing NIC timestamp capability for %v", dev.Name)
+		// glog.Infof("grabbing NIC timestamp capability for %v", dev.Name)
 		cmd := exec.Command(ethtoolPath, "-T", dev.Name)
 		cmd.Stdout = &out
 		err := cmd.Run()
