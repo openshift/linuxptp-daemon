@@ -22,12 +22,12 @@ type InputConnector struct {
 
 // PhaseInputs is a list of phase inputs for a card
 type PhaseInputs struct {
-	ID                    string          `json:"id"`
-	Part                  string          `json:"Part"`
-	Input                 *InputConnector `json:"inputConnector"`
-	GnssInput             bool            `json:"gnssInput"`
-	PhaseOutputConnectors []string        `json:"phaseOutputConnectors"`
-	UpstreamPort          string          `json:"upstreamPort"`
+	ID                    string         `json:"id"`
+	Part                  string         `json:"Part"`
+	Input                 InputConnector `json:"inputConnector"`
+	GnssInput             bool           `json:"gnssInput"`
+	PhaseOutputConnectors []string       `json:"phaseOutputConnectors"`
+	UpstreamPort          string         `json:"upstreamPort"`
 }
 
 // InternalLink is a link between pin and connector
