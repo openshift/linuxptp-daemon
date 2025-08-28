@@ -336,7 +336,7 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
 		ClockQuality: fbprotocol.ClockQuality{
 			ClockClass:              fbprotocol.ClockClass(results.ParentDataSet.GrandmasterClockClass),
 			ClockAccuracy:           fbprotocol.ClockAccuracy(results.ParentDataSet.GrandmasterClockAccuracy),
-			OffsetScaledLogVariance: results.ParentDataSet.ObservedParentOffsetScaledLogVariance,
+			OffsetScaledLogVariance: results.ParentDataSet.GrandmasterOffsetScaledLogVariance,
 		},
 		TimePropertiesDS: results.TimePropertiesDS,
 	}
@@ -412,13 +412,20 @@ func (e *EventHandler) isSourceLostBC(cfgName string) bool {
 
 func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 	worstOffset := FaultyPhaseOffset
+	staleTime := (time.Now().Unix() - StaleEventAfter) * 1000
 	if data, ok := e.data[cfgName]; ok {
 		for _, d := range data {
 			for _, dd := range d.Details {
+				// Skip stale data for all offsets, including the first one
+				if dd.time < staleTime {
+					continue
+				}
 				if worstOffset == FaultyPhaseOffset {
 					worstOffset = dd.Offset
-				} else if !(dd.time < time.Now().Unix()-StaleEventAfter) && math.Abs(float64(dd.Offset)) > math.Abs(float64(worstOffset)) {
-					worstOffset = dd.Offset
+				} else {
+					if math.Abs(float64(dd.Offset)) > math.Abs(float64(worstOffset)) {
+						worstOffset = dd.Offset
+					}
 				}
 			}
 		}

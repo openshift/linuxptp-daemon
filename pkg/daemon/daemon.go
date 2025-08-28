@@ -884,7 +884,7 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 }
 
 func (p *ptpProcess) updateClockClass(c *net.Conn) {
-	if p.nodeProfile.PtpSettings["clockType"] == TBC {
+	if p.nodeProfile.PtpSettings["clockType"] == TBC || p.nodeProfile.PtpSettings["controllingProfile"] != "" {
 		return
 	}
 	defer func() {

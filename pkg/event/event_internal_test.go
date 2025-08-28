@@ -3,6 +3,7 @@ package event
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -263,67 +264,176 @@ func TestFreeRunCondition(t *testing.T) {
 	}
 }
 
-type testCase struct {
-	name     string
-	cfgName  string
-	data     map[string][]*Data
-	expected int64
-}
-
 func TestGetLargestOffset(t *testing.T) {
-	// Test cases
-	testCases := []testCase{
-		{
-			name:    "No DPLL data",
-			cfgName: "test",
-			data: map[string][]*Data{
-				"test": {
-					{ProcessName: "other"},
-					{ProcessName: "other2"},
-				},
-			},
-			expected: FaultyPhaseOffset,
-		},
-		{
-			name:    "DPLL data with no offset",
-			cfgName: "test",
-			data: map[string][]*Data{
-				"test": {
-					{ProcessName: DPLL},
-					{ProcessName: "other"},
-				},
-			},
-			expected: FaultyPhaseOffset,
-		},
-		{
-			name:    "DPLL data with positive offset",
-			cfgName: "test",
-			data: map[string][]*Data{"test": {{ProcessName: DPLL, Details: []*DataDetails{
-				{IFace: "IFace1", Offset: 15},
-				{IFace: "IFace2", Offset: 5},
-			}}}},
-			expected: 15,
-		},
-		{
-			name:    "DPLL data with positive offset",
-			cfgName: "test",
-			data: map[string][]*Data{
-				"test": {{ProcessName: DPLL, Details: []*DataDetails{
-					{IFace: "IFace1", Offset: -15},
-					{IFace: "IFace2", Offset: 5},
-				}},
-					{ProcessName: "other"},
-				}},
+	currentTime := time.Now().Unix()
+	staleTime := (currentTime - StaleEventAfter) * 1000
+	recentTime := currentTime * 1000
 
-			expected: -15,
+	tests := []struct {
+		name     string
+		cfgName  string
+		data     map[string][]*Data
+		expected int64
+	}{
+		{
+			name:     "No data for config",
+			cfgName:  "nonexistent",
+			data:     map[string][]*Data{},
+			expected: FaultyPhaseOffset,
+		},
+		{
+			name:    "No process data",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {},
+			},
+			expected: FaultyPhaseOffset,
+		},
+		{
+			name:    "No details in data",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{}},
+					{ProcessName: "other", Details: []*DataDetails{}},
+				},
+			},
+			expected: FaultyPhaseOffset,
+		},
+		{
+			name:    "Single offset value",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: 100, time: recentTime},
+					}},
+				},
+			},
+			expected: 100,
+		},
+		{
+			name:    "Multiple offsets - largest positive",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: 15, time: recentTime},
+						{IFace: "eth1", Offset: 5, time: recentTime},
+						{IFace: "eth2", Offset: 25, time: recentTime},
+					}},
+				},
+			},
+			expected: 25,
+		},
+		{
+			name:    "Multiple offsets - largest negative",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: -30, time: recentTime},
+						{IFace: "eth1", Offset: 5, time: recentTime},
+						{IFace: "eth2", Offset: -10, time: recentTime},
+					}},
+				},
+			},
+			expected: -30,
+		},
+		{
+			name:    "Mixed positive and negative - largest absolute value",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: 20, time: recentTime},
+						{IFace: "eth1", Offset: -25, time: recentTime},
+						{IFace: "eth2", Offset: 15, time: recentTime},
+					}},
+				},
+			},
+			expected: -25,
+		},
+		{
+			name:    "Stale data filtered out",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: 100, time: staleTime - 1000}, // stale
+						{IFace: "eth1", Offset: 20, time: recentTime},        // recent
+						{IFace: "eth2", Offset: 50, time: staleTime - 500},   // stale
+					}},
+				},
+			},
+			expected: 20,
+		},
+		{
+			name:    "All data stale - should return FaultyPhaseOffset",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: 15, time: staleTime - 1000}, // stale, ignored
+						{IFace: "eth1", Offset: 50, time: staleTime - 500},  // stale, ignored
+						{IFace: "eth2", Offset: 30, time: staleTime - 200},  // stale, ignored
+					}},
+				},
+			},
+			expected: FaultyPhaseOffset,
+		},
+		{
+			name:    "Multiple processes with different offsets",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: 20, time: recentTime},
+					}},
+					{ProcessName: "ptp4l", Details: []*DataDetails{
+						{IFace: "eth1", Offset: 35, time: recentTime},
+					}},
+					{ProcessName: "ts2phc", Details: []*DataDetails{
+						{IFace: "eth2", Offset: -40, time: recentTime},
+					}},
+				},
+			},
+			expected: -40,
+		},
+		{
+			name:    "Zero offset values",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: 0, time: recentTime},
+						{IFace: "eth1", Offset: 0, time: recentTime},
+					}},
+				},
+			},
+			expected: 0,
+		},
+		{
+			name:    "Mix of zero and non-zero offsets",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: 0, time: recentTime},
+						{IFace: "eth1", Offset: 10, time: recentTime},
+						{IFace: "eth2", Offset: 0, time: recentTime},
+					}},
+				},
+			},
+			expected: 10,
 		},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := EventHandler{data: tc.data}
-			result := e.getLargestOffset(tc.cfgName)
-			assert.Equal(t, tc.expected, result)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := EventHandler{data: tt.data}
+			result := e.getLargestOffset(tt.cfgName)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

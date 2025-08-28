@@ -1,6 +1,7 @@
 package intel
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -13,10 +14,33 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
+// FileSystemInterface defines the interface for filesystem operations to enable mocking
+type FileSystemInterface interface {
+	ReadDir(dirname string) ([]os.DirEntry, error)
+	WriteFile(filename string, data []byte, perm os.FileMode) error
+}
+
+// RealFileSystem implements FileSystemInterface using real OS operations
+type RealFileSystem struct{}
+
+// ReadDir reads the contents of the directory specified by dirname
+func (fs *RealFileSystem) ReadDir(dirname string) ([]os.DirEntry, error) {
+	return os.ReadDir(dirname)
+}
+
+// WriteFile writes the data to the file specified by filename
+func (fs *RealFileSystem) WriteFile(filename string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(filename, data, perm)
+}
+
+// Default filesystem implementation
+var filesystem FileSystemInterface = &RealFileSystem{}
+
 type ClockChainType int
 type ClockChain struct {
 	Type       ClockChainType  `json:"clockChainType"`
 	LeadingNIC CardInfo        `json:"leadingNIC"`
+	OtherNICs  []CardInfo      `json:"otherNICs,omitempty"`
 	DpllPins   []*dpll.PinInfo `json:"dpllPins"`
 }
 type CardInfo struct {
@@ -55,6 +79,8 @@ const (
 	eecDpllIndex   = 0
 	ppsDpllIndex   = 1
 	sdp22PpsEnable = "2 0 0 1 0"
+	sdp20PpsEnable = "1 0 0 1 0"
+	sma2           = "SMA2"
 )
 
 type PinParentControl struct {
@@ -70,7 +96,7 @@ type PinControl struct {
 
 var configurablePins = []string{sdp20, sdp21, sdp22, sdp23, gnss, sma1Input, sma2Input, c8270Rclka, c8270Rclkb}
 
-func (ch *ClockChain) GetLiveDpllPinsInfo() error {
+func (c *ClockChain) getLiveDpllPinsInfo() error {
 	if !unitTest {
 		conn, err := dpll.Dial(nil)
 		if err != nil {
@@ -78,17 +104,17 @@ func (ch *ClockChain) GetLiveDpllPinsInfo() error {
 		}
 		//nolint:errcheck
 		defer conn.Close()
-		ch.DpllPins, err = conn.DumpPinGet()
+		c.DpllPins, err = conn.DumpPinGet()
 		if err != nil {
 			return fmt.Errorf("failed to dump DPLL pins: %v", err)
 		}
 	} else {
-		ch.DpllPins = DpllPins
+		c.DpllPins = DpllPins
 	}
 	return nil
 }
 
-func (ch *ClockChain) ResolveInterconnections(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*[]delayCompensation, error) {
+func (c *ClockChain) resolveInterconnections(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*[]delayCompensation, error) {
 	compensations := []delayCompensation{}
 	var clockID *string
 	for _, card := range e810Opts.PhaseInputs {
@@ -96,8 +122,8 @@ func (ch *ClockChain) ResolveInterconnections(e810Opts E810Opts, nodeProfile *pt
 		if err != nil {
 			return nil, err
 		}
-		if card.Input != nil {
-
+		glog.Infof("card: %%v", card)
+		if !card.GnssInput && card.UpstreamPort == "" {
 			externalDelay := card.Input.DelayPs
 			connector := card.Input.Connector
 			link := findInternalLink(delays.ExternalInputs, connector)
@@ -121,16 +147,23 @@ func (ch *ClockChain) ResolveInterconnections(e810Opts E810Opts, nodeProfile *pt
 				direction: "input",
 				clockID:   *clockID,
 			})
+			// Track non-leading NICs
+			c.OtherNICs = append(c.OtherNICs, CardInfo{
+				Name:         card.ID,
+				DpllClockID:  *clockID,
+				UpstreamPort: card.UpstreamPort,
+				Pins:         make(map[string]dpll.PinInfo, 0),
+			})
 		} else {
-			ch.LeadingNIC.Name = card.ID
-			ch.LeadingNIC.UpstreamPort = card.UpstreamPort
+			c.LeadingNIC.Name = card.ID
+			c.LeadingNIC.UpstreamPort = card.UpstreamPort
 			clockID, err = addClockID(card.ID, nodeProfile)
 			if err != nil {
 				return nil, err
 			}
-			ch.LeadingNIC.DpllClockID = *clockID
+			c.LeadingNIC.DpllClockID = *clockID
 			if card.GnssInput {
-				ch.Type = ClockTypeTGM
+				c.Type = ClockTypeTGM
 				gnssLink := &delays.GnssInput
 				compensations = append(compensations, delayCompensation{
 					DelayPs:   gnssLink.DelayPs,
@@ -141,7 +174,7 @@ func (ch *ClockChain) ResolveInterconnections(e810Opts E810Opts, nodeProfile *pt
 				})
 			} else {
 				// if no GNSS and no external, then ptp4l input
-				ch.Type = ClockTypeTBC
+				c.Type = ClockTypeTBC
 			}
 		}
 		for _, outputConn := range card.PhaseOutputConnectors {
@@ -170,13 +203,15 @@ func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockCha
 		LeadingNIC: CardInfo{
 			Pins: make(map[string]dpll.PinInfo, 0),
 		},
+		OtherNICs: make([]CardInfo, 0),
 	}
 
-	err := chain.GetLiveDpllPinsInfo()
+	err := chain.getLiveDpllPinsInfo()
 	if err != nil {
 		return chain, err
 	}
-	comps, err := chain.ResolveInterconnections(e810Opts, nodeProfile)
+
+	comps, err := chain.resolveInterconnections(e810Opts, nodeProfile)
 	if err != nil {
 		glog.Errorf("fail to get delay compensations, %s", err)
 	}
@@ -186,11 +221,16 @@ func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockCha
 			glog.Errorf("fail to send delay compensations, %s", err)
 		}
 	}
-	err = chain.GetLeadingCardSDP()
+	err = chain.getLeadingCardSDP()
 	if err != nil {
 		return chain, err
 	}
-	glog.Info("about to set DPLL pin defaults")
+	// Populate pins for other NICs, if any
+	err = chain.getOtherCardsSDP()
+	if err != nil {
+		return chain, err
+	}
+	glog.Info("about to set DPLL pin priorities to defaults")
 	_, err = chain.SetPinDefaults()
 	if err != nil {
 		return chain, err
@@ -211,14 +251,36 @@ func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockCha
 	return chain, err
 }
 
-func (ch *ClockChain) GetLeadingCardSDP() error {
-	clockID, err := strconv.ParseUint(ch.LeadingNIC.DpllClockID, 10, 64)
+func (c *ClockChain) getLeadingCardSDP() error {
+	clockID, err := strconv.ParseUint(c.LeadingNIC.DpllClockID, 10, 64)
 	if err != nil {
 		return err
 	}
-	for _, pin := range ch.DpllPins {
+	for _, pin := range c.DpllPins {
 		if pin.ClockID == clockID && slices.Contains(configurablePins, pin.BoardLabel) {
-			ch.LeadingNIC.Pins[pin.BoardLabel] = *pin
+			c.LeadingNIC.Pins[pin.BoardLabel] = *pin
+		}
+	}
+	return nil
+}
+
+// getOtherCardsSDP populates configurable pins for all non-leading NICs
+func (c *ClockChain) getOtherCardsSDP() error {
+	if len(c.OtherNICs) == 0 {
+		return nil
+	}
+	for idx := range c.OtherNICs {
+		clockID, err := strconv.ParseUint(c.OtherNICs[idx].DpllClockID, 10, 64)
+		if err != nil {
+			return err
+		}
+		for _, pin := range c.DpllPins {
+			if pin.ClockID == clockID && slices.Contains(configurablePins, pin.BoardLabel) {
+				if c.OtherNICs[idx].Pins == nil {
+					c.OtherNICs[idx].Pins = make(map[string]dpll.PinInfo, 0)
+				}
+				c.OtherNICs[idx].Pins[pin.BoardLabel] = *pin
+			}
 		}
 	}
 	return nil
@@ -226,7 +288,7 @@ func (ch *ClockChain) GetLeadingCardSDP() error {
 
 func writeSysFs(path string, val string) error {
 	glog.Infof("writing " + val + " to " + path)
-	err := os.WriteFile(path, []byte(val), 0666)
+	err := filesystem.WriteFile(path, []byte(val), 0666)
 	if err != nil {
 		return fmt.Errorf("e810 failed to write " + val + " to " + path + ": " + err.Error())
 	}
@@ -238,11 +300,45 @@ func (c *ClockChain) SetPinsControl(pins []PinControl) (*[]dpll.PinParentDeviceC
 	for _, pinCtl := range pins {
 		dpllPin, found := c.LeadingNIC.Pins[pinCtl.Label]
 		if !found {
-			return nil, fmt.Errorf("%s pin not found in the leading card", pinCtl.Label)
+			glog.Errorf("%s pin not found in the card", pinCtl.Label)
+			continue
 		}
 		pinCommand := SetPinControlData(dpllPin, pinCtl.ParentControl)
 		pinCommands = append(pinCommands, *pinCommand)
 	}
+	return &pinCommands, nil
+}
+
+// SetPinsControlForAllNICs sets pins across all NICs (leading + other NICs)
+// This is used specifically for initialization functions like SetPinDefaults
+func (c *ClockChain) SetPinsControlForAllNICs(pins []PinControl) (*[]dpll.PinParentDeviceCtl, error) {
+	pinCommands := []dpll.PinParentDeviceCtl{}
+
+	for _, pinCtl := range pins {
+		// Search for the pin across all NICs
+		found := false
+
+		// Check leading NIC first
+		if pin, exists := c.LeadingNIC.Pins[pinCtl.Label]; exists {
+			pinCommand := SetPinControlData(pin, pinCtl.ParentControl)
+			pinCommands = append(pinCommands, *pinCommand)
+			found = true
+		}
+
+		// Check all other NICs
+		for _, nic := range c.OtherNICs {
+			if pin, exists := nic.Pins[pinCtl.Label]; exists {
+				pinCommand := SetPinControlData(pin, pinCtl.ParentControl)
+				pinCommands = append(pinCommands, *pinCommand)
+				found = true
+			}
+		}
+
+		if !found {
+			return nil, fmt.Errorf("%s pin not found in any NIC", pinCtl.Label)
+		}
+	}
+
 	return &pinCommands, nil
 }
 
@@ -276,25 +372,38 @@ func SetPinControlData(pin dpll.PinInfo, control PinParentControl) *dpll.PinPare
 }
 
 func (c *ClockChain) EnableE810Outputs() error {
+	// # echo 2 2 > /sys/class/net/$ETH/device/ptp/ptp*/pins/SMA2
 	// # echo 2 0 0 1 0 > /sys/class/net/$ETH/device/ptp/ptp*/period
 	var pinPath string
-	if unitTest {
-		glog.Info("skip pin config in unit test")
-		return nil
-	} else {
-		deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", c.LeadingNIC.Name)
-		phcs, err := os.ReadDir(deviceDir)
-		if err != nil {
-			return fmt.Errorf("e810 failed to read " + deviceDir + ": " + err.Error())
-		}
-		for _, phc := range phcs {
-			pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/period", c.LeadingNIC.Name, phc.Name())
-			err := writeSysFs(pinPath, sdp22PpsEnable)
-			if err != nil {
-				return fmt.Errorf("failed to write " + sdp22PpsEnable + " to " + pinPath + ": " + err.Error())
-			}
-		}
+
+	deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", c.LeadingNIC.Name)
+	phcs, err := filesystem.ReadDir(deviceDir)
+	if err != nil {
+		return fmt.Errorf("e810 failed to read " + deviceDir + ": " + err.Error())
 	}
+	if len(phcs) > 1 {
+		glog.Error("e810 cards should have one PHC per NIC, but %s has %d",
+			c.LeadingNIC.Name, len(phcs))
+	}
+	if len(phcs) == 0 {
+		e := fmt.Sprintf("e810 cards should have one PHC per NIC, but %s has 0",
+			c.LeadingNIC.Name)
+		glog.Error(e)
+		return errors.New(e)
+	}
+	// Enable SMA2 output as a workaround for https://issues.redhat.com/browse/RHEL-110297
+	smaPath := fmt.Sprintf("%s%s/pins/%s", deviceDir, phcs[0].Name(), sma2)
+	err = writeSysFs(smaPath, "2 2")
+	if err != nil {
+		glog.Errorf("failed to write 2 2 to %s: %v", smaPath, err)
+		return err
+	}
+	pinPath = fmt.Sprintf("%s%s/period", deviceDir, phcs[0].Name())
+	err = writeSysFs(pinPath, sdp22PpsEnable)
+	if err != nil {
+		glog.Errorf("failed to write " + sdp22PpsEnable + " to " + pinPath + ": " + err.Error())
+	}
+
 	return nil
 }
 
@@ -304,12 +413,25 @@ func (c *ClockChain) InitPinsTBC() (*[]dpll.PinParentDeviceCtl, error) {
 	// (To synchronize the DPLL1 to the E810 PHC synced by ptp4l):
 	err := c.EnableE810Outputs()
 	if err != nil {
-		return nil, err
+		glog.Error("failed to enable E810 outputs: ", err)
 	}
-	// Disable GNSS-1PPS, SDP20 and SDP21
-	commands, err := c.SetPinsControl([]PinControl{
+	// Disable GNSS-1PPS (all cards), SDP20 and SDP21
+	commandsGnss, err := c.SetPinsControlForAllNICs([]PinControl{
 		{
 			Label: gnss,
+			ParentControl: PinParentControl{
+				EecPriority: PriorityDisabled,
+				PpsPriority: PriorityDisabled,
+			},
+		},
+	})
+	if err != nil {
+		glog.Error("failed to disable GNSS: ", err)
+	}
+	commands, err := c.SetPinsControl([]PinControl{
+
+		{
+			Label: sdp22,
 			ParentControl: PinParentControl{
 				EecPriority: PriorityDisabled,
 				PpsPriority: PriorityDisabled,
@@ -329,10 +451,18 @@ func (c *ClockChain) InitPinsTBC() (*[]dpll.PinParentDeviceCtl, error) {
 				PpsOutputState: dpll.PinStateDisconnected,
 			},
 		},
+		{
+			Label: sdp23,
+			ParentControl: PinParentControl{
+				EecOutputState: dpll.PinStateDisconnected,
+				PpsOutputState: dpll.PinStateDisconnected,
+			},
+		},
 	})
 	if err != nil {
-		return nil, err
+		glog.Error("failed to set pins control: ", err)
 	}
+	*commands = append(*commands, *commandsGnss...)
 	return commands, BatchPinSet(commands)
 }
 
@@ -363,10 +493,10 @@ func (c *ClockChain) EnterHoldoverTBC() (*[]dpll.PinParentDeviceCtl, error) {
 }
 
 // EnterNormalTBC configures the leading card DPLL pins for regular T-BC operation
-func (ch *ClockChain) EnterNormalTBC() (*[]dpll.PinParentDeviceCtl, error) {
+func (c *ClockChain) EnterNormalTBC() (*[]dpll.PinParentDeviceCtl, error) {
 	// Disable DPLL Outputs to e810 (SDP23, SDP21)
 	// Enable DPLL inputs from e810 (SDP22)
-	commands, err := ch.SetPinsControl([]PinControl{
+	commands, err := c.SetPinsControl([]PinControl{
 		{
 			Label: sdp22,
 			ParentControl: PinParentControl{
@@ -389,7 +519,7 @@ func (ch *ClockChain) EnterNormalTBC() (*[]dpll.PinParentDeviceCtl, error) {
 }
 
 // SetPinDefaults initializes DPLL pins to default recommended values
-func (ch *ClockChain) SetPinDefaults() (*[]dpll.PinParentDeviceCtl, error) {
+func (c *ClockChain) SetPinDefaults() (*[]dpll.PinParentDeviceCtl, error) {
 	// DPLL Priority List:
 	//
 	//	Recommended | Pin Index | EEC-DPLL0                    | PPS-DPLL1
@@ -407,7 +537,7 @@ func (ch *ClockChain) SetPinDefaults() (*[]dpll.PinParentDeviceCtl, error) {
 	//	10          | --        | OCXO                         | OCXO
 
 	// Also, Enable DPLL Outputs to e810 (SDP21, SDP23)
-	commands, err := ch.SetPinsControl([]PinControl{
+	commands, err := c.SetPinsControlForAllNICs([]PinControl{
 		{
 			Label: gnss,
 			ParentControl: PinParentControl{
@@ -489,7 +619,7 @@ func BatchPinSet(commands *[]dpll.PinParentDeviceCtl) error {
 	//nolint:errcheck
 	defer conn.Close()
 	for _, command := range *commands {
-		glog.Infof("DPLL pin command %++v", command)
+		glog.Infof("DPLL pin command %#v", command)
 		b, err := dpll.EncodePinControl(command)
 		if err != nil {
 			return err
