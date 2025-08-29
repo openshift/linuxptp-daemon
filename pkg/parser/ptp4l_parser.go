@@ -176,17 +176,18 @@ func extractEventPTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
 	}
 	portID := *parsed.PortID
 
-	role, err := determineRole(parsed.Event)
-	if err != nil {
+	role, clockState := determineRole(parsed.Event)
+	if role == constants.PortRoleUnknown {
 		portID = 0
 	}
 
 	// TODO: Pass port name up if provided
 	return &PTPEvent{
-		PortID: portID,
-		Role:   role,
-		Raw:    parsed.Raw,
-	}, err
+		PortID:     portID,
+		Role:       role,
+		ClockState: clockState,
+		Raw:        parsed.Raw,
+	}, nil
 }
 
 func extractSummaryPTP4l(parsed *ptp4lParsed) (*Metrics, error) {
@@ -255,19 +256,35 @@ func extractRegularPTP4l(parsed *ptp4lParsed) (*Metrics, error) {
 	}, nil
 }
 
-func determineRole(event string) (constants.PTPPortRole, error) {
+func determineRole(event string) (constants.PTPPortRole, constants.ClockState) {
 	switch {
-	case strings.Contains(event, "UNCALIBRATED to SLAVE"):
-		return constants.PortRoleSlave, nil
-	case strings.Contains(event, "UNCALIBRATED to PASSIVE"), strings.Contains(event, "MASTER to PASSIVE"), strings.Contains(event, "SLAVE to PASSIVE"):
-		return constants.PortRolePassive, nil
-	case strings.Contains(event, "UNCALIBRATED to MASTER"), strings.Contains(event, "LISTENING to MASTER"):
-		return constants.PortRoleMaster, nil
-	case strings.Contains(event, "FAULT_DETECTED"), strings.Contains(event, "SYNCHRONIZATION_FAULT"):
-		return constants.PortRoleFaulty, nil
-	case strings.Contains(event, "UNCALIBRATED to LISTENING"), strings.Contains(event, "SLAVE to LISTENING"), strings.Contains(event, "INITIALIZING to LISTENING"):
-		return constants.PortRoleListening, nil
+	case strings.Contains(event, "UNCALIBRATED to SLAVE"),
+		strings.Contains(event, "LISTENING to SLAVE"):
+		return constants.PortRoleSlave, constants.ClockStateFreeRun
+	case strings.Contains(event, "UNCALIBRATED to PASSIVE"),
+		strings.Contains(event, "MASTER to PASSIVE"),
+		strings.Contains(event, "SLAVE to PASSIVE"),
+		strings.Contains(event, "LISTENING to PASSIVE"):
+		return constants.PortRolePassive, constants.ClockStateFreeRun
+	case strings.Contains(event, "UNCALIBRATED to MASTER"),
+		strings.Contains(event, "LISTENING to MASTER"):
+		return constants.PortRoleMaster, constants.ClockStateFreeRun
+	case strings.Contains(event, "FAULT_DETECTED"),
+		strings.Contains(event, "SYNCHRONIZATION_FAULT"),
+		strings.Contains(event, "SLAVE to UNCALIBRATED"),
+		strings.Contains(event, "MASTER to UNCALIBRATED on RS_SLAVE"),
+		strings.Contains(event, "LISTENING to UNCALIBRATED on RS_SLAVE"):
+		return constants.PortRoleFaulty, constants.ClockStateHoldover
+	case strings.Contains(event, "SLAVE to MASTER"),
+		strings.Contains(event, "SLAVE to GRAND_MASTER"):
+		return constants.PortRoleMaster, constants.ClockStateHoldover
+	case strings.Contains(event, "SLAVE to LISTENING"):
+		return constants.PortRoleListening, constants.ClockStateHoldover
+	case strings.Contains(event, "FAULTY to LISTENING"),
+		strings.Contains(event, "UNCALIBRATED to LISTENING"),
+		strings.Contains(event, "INITIALIZING to LISTENING"):
+		return constants.PortRoleListening, constants.ClockStateFreeRun
 	default:
-		return constants.PortRoleUnknown, fmt.Errorf("unrecognized role in event: %s", event)
+		return constants.PortRoleUnknown, constants.ClockStateFreeRun
 	}
 }
