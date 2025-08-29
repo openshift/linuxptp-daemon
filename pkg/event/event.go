@@ -219,10 +219,6 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		frequencyTraceable: false,
 		ReduceLog:          true,
 	}
-	if clockClassMetric != nil {
-		clockClassMetric.With(prometheus.Labels{
-			"process": PTP4lProcessName, "node": nodeName}).Set(248)
-	}
 	StateRegisterer = NewStateNotifier()
 	return ptpEvent
 
@@ -686,7 +682,9 @@ connect:
 				if event.WriteToLog && logDataValues != "" {
 					logOut = append(logOut, logDataValues)
 				}
-				e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
+				if !e.stdoutToSocket {
+					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
+				}
 			} else {
 				// Update the in MemData
 				dataDetails := e.addEvent(event)
@@ -887,6 +885,9 @@ func (e *EventHandler) GetPTPState(source EventSource, cfgName string) PTPState 
 
 // UpdateClockStateMetrics ...
 func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace string) {
+	if e.stdoutToSocket {
+		return
+	}
 	labels := prometheus.Labels{
 		"process": process, "node": e.nodeName, "iface": iFace}
 	if state == PTP_LOCKED {
@@ -981,6 +982,9 @@ func registerMetrics(m *prometheus.GaugeVec) {
 }
 
 func (e *EventHandler) unregisterMetrics(configName string, processName string) {
+	if e.stdoutToSocket {
+		return // no need to unregister metrics if events are going to socket
+	}
 	if data, ok := e.data[configName]; ok {
 		for _, v := range data {
 			if string(v.ProcessName) == processName || processName == "" {
@@ -1049,7 +1053,7 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 			}
 		} else {
 			e.clockClassMetric.With(prometheus.Labels{
-				"process": PTP4lProcessName, "node": e.nodeName}).Set(float64(clockClass))
+				"process": PTP4lProcessName, "node": e.nodeName, "config": clk.cfgName}).Set(float64(clockClass))
 		}
 		fmt.Printf("%s", clockClassOut)
 	}
