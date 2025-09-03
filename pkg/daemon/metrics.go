@@ -142,7 +142,7 @@ var (
 			Subsystem: PTPSubsystem,
 			Name:      "clock_class",
 			Help:      "6 = Locked, 7 = PRC unlocked in-spec, 52/187 = PRC unlocked out-of-spec, 135 = T-BC holdover in-spec, 165 = T-BC holdover out-of-spec, 248 = Default, 255 = Slave Only Clock",
-		}, []string{"process", "node"})
+		}, []string{"process", "node", "config"})
 
 	// InterfaceRole metrics to show current interface role
 	InterfaceRole = prometheus.NewGaugeVec(
@@ -256,7 +256,7 @@ func updatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, freq
 }
 
 // extractMetrics ...
-func extractMetrics(messageTag string, processName string, ifaces config.IFaces, output string) (configName, source string, offset float64, state string, iface string) {
+func extractMetrics(messageTag string, processName string, ifaces config.IFaces, output string, updateMetrics bool) (configName, source string, offset float64, state string, iface string) {
 	configName = strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
 	if configName != "" {
 		configName = strings.Split(configName, MessageTagSuffixSeperator)[0] // remove any suffix added to the configName
@@ -287,8 +287,10 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 			if offsetSource == master {
 				masterOffsetSource.set(configName, processName)
 			}
-			updatePTPMetrics(offsetSource, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
-			updateClockStateMetrics(processName, ifaceName, clockstate)
+			if updateMetrics {
+				updatePTPMetrics(offsetSource, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
+				updateClockStateMetrics(processName, ifaceName, clockstate)
+			}
 		}
 		source = processName
 		offset = ptpOffset
@@ -305,11 +307,14 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 				} else if role == FAULTY {
 					if slaveIface.isFaulty(configName, ifaces[portId-1].Name) &&
 						masterOffsetSource.get(configName) == ptp4lProcessName {
-						updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
-						updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
-						updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN)
+						if updateMetrics {
+							updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
+							updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
+							updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN)
+						}
 						masterOffsetIface.set(configName, "")
 						slaveIface.set(configName, "")
+						state = HOLDOVER
 					}
 				}
 			}
@@ -528,9 +533,9 @@ func UpdateInterfaceRoleMetrics(process string, iface string, role ptpPortRole) 
 }
 
 // UpdateClockClassMetrics ... update clock class metrics
-func UpdateClockClassMetrics(clockClass float64) {
+func UpdateClockClassMetrics(cfgName string, clockClass float64) {
 	ClockClassMetrics.With(prometheus.Labels{
-		"process": ptp4lProcessName, "node": NodeName}).Set(float64(clockClass))
+		"process": ptp4lProcessName, "config": cfgName, "node": NodeName}).Set(float64(clockClass))
 }
 
 func UpdateProcessStatusMetrics(process, cfgName string, status int64) {
