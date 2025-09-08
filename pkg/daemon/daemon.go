@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -56,6 +57,8 @@ var (
 	messageTagSuffixRegEx = regexp.MustCompile(`([a-zA-Z0-9]+\.[a-zA-Z0-9]+\.config):[a-zA-Z0-9]+(:[a-zA-Z0-9]+)?`)
 	clockIDRegEx          = regexp.MustCompile(`\/dev\/ptp\d+`)
 )
+
+// Per-process guard is sufficient because each process owns a unique config.
 
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
@@ -150,6 +153,7 @@ type ptpProcess struct {
 	nodeProfile       ptpv1.PtpProfile
 	parentClockClass  float64
 	pmcCheck          bool
+	clockClassRunning atomic.Bool
 	clockType         event.ClockType
 	ptpClockThreshold *ptpv1.PtpClockThreshold
 	haProfile         map[string][]string // stores list of interface name for each profile
@@ -168,6 +172,23 @@ func (p *ptpProcess) setStopped(val bool) {
 	p.execMutex.Lock()
 	p.stopped = val
 	p.execMutex.Unlock()
+}
+
+// TriggerPmcCheck sets pmcCheck to true in a thread-safe way
+func (p *ptpProcess) TriggerPmcCheck() {
+	p.execMutex.Lock()
+	p.pmcCheck = true
+	p.execMutex.Unlock()
+}
+
+// ConsumePmcCheck atomically reads and resets the pmcCheck flag.
+// It returns true if a PMC check should be performed.
+func (p *ptpProcess) ConsumePmcCheck() bool {
+	p.execMutex.Lock()
+	val := p.pmcCheck
+	p.pmcCheck = false
+	p.execMutex.Unlock()
+	return val
 }
 
 // Daemon is the main structure for linuxptp instance.
@@ -694,7 +715,7 @@ func (dn *Daemon) GetPhaseOffsetPinFilter(nodeProfile *ptpv1.PtpProfile) map[str
 func (dn *Daemon) HandlePmcTicker() {
 	for _, p := range dn.processManager.process {
 		if p.name == ptp4lProcessName {
-			p.pmcCheck = true
+			p.TriggerPmcCheck()
 		}
 	}
 }
@@ -737,6 +758,12 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 }
 
 func (p *ptpProcess) updateClockClass(c *net.Conn) {
+	// Per-process single-flight guard
+	if !p.clockClassRunning.CompareAndSwap(false, true) {
+		glog.Infof("clock class update already running for %s, skipping this run", p.configName)
+		return
+	}
+	defer p.clockClassRunning.Store(false)
 	defer func() {
 		if r := recover(); r != nil {
 			glog.Errorf("updateClockClass Recovered in f %#v", r)
@@ -760,7 +787,7 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 				// change to pint every minute or when the clock class changes
 				clockClassOut = fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %f\n", p.name, time.Now().Unix(), p.configName, p.parentClockClass)
 				if c == nil {
-					UpdateClockClassMetrics(clockClass) // no socket then update metrics
+					UpdateClockClassMetrics(p.configName, clockClass) // no socket then update metrics
 				} else {
 					_, err := (*c).Write([]byte(clockClassOut))
 					if err != nil {
@@ -850,12 +877,26 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 						d.ProcessStatus(p.c, PtpProcessUp)
 					}
 				}
+				// moving outside scanner loop to ensure  clock class update routine
+				// even if process hangs
+				go func() {
+					for {
+						select {
+						case <-p.exitCh:
+							glog.Infof("Exiting pmcCheck%s...", p.name)
+							return
+						default:
+							if p.ConsumePmcCheck() {
+								p.updateClockClass(p.c)
+							}
+							//Add a small sleep to avoid tight CPU loop
+							time.Sleep(100 * time.Millisecond)
+						}
+					}
+				}()
+
 				for scanner.Scan() {
 					output := scanner.Text()
-					if p.pmcCheck {
-						p.pmcCheck = false
-						go p.updateClockClass(p.c)
-					}
 
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
 						fmt.Printf("%s\n", output)
@@ -929,7 +970,7 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 		logEntry := synce.ParseLog(output)
 		p.ProcessSynceEvents(logEntry)
 	} else {
-		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
+		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output, p.c == nil)
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
 			var values map[event.ValueType]interface{}
 			ifaceName := masterOffsetIface.getByAlias(configName, iface).name
@@ -950,6 +991,17 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 				state = event.PTP_HOLDOVER // consider s1 state as holdover,this passed to event to create metrics and events
 			}
 			p.ProcessTs2PhcEvents(ptpOffset, source, ifaceName, state, values)
+		} else if clockState == HOLDOVER || clockState == LOCKED {
+			// in case of holdover without iface, still need to update clock class for T_G
+			if p.name != ts2phcProcessName && p.name != syncEProcessName { // TGM announce clock class via events
+				p.ConsumePmcCheck() // reset pmc check since we are updating clock class here
+				// on faulty port or recovery of slave port there might be a clock class change
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					p.updateClockClass(p.c)
+					glog.Infof("clock class updated %f", p.parentClockClass)
+				}()
+			}
 		}
 	}
 }
@@ -961,6 +1013,9 @@ func (p *ptpProcess) cmdStop() {
 		return
 	}
 	p.setStopped(true)
+	// reset runtime flags
+	p.ConsumePmcCheck()
+	p.clockClassRunning.Store(false)
 	if p.cmd.Process != nil {
 		glog.Infof("Sending TERM to (%s) PID: %d", p.name, p.cmd.Process.Pid)
 		err := p.cmd.Process.Signal(syscall.SIGTERM)
@@ -1041,6 +1096,9 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 	} else {
 		if iface != "" && iface != clockRealTime {
 			iface = utils.GetAlias(iface)
+		}
+		if p.c != nil {
+			return // no metrics when socket is used
 		}
 		switch ptpState {
 		case event.PTP_LOCKED:
@@ -1257,10 +1315,11 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 					ExtendedSSM: 0,
 				})
 				state = sDeviceConfig.LastClockState
-				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", logEntry.QL)
-				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.QL_DEFAULT_ENHSSM)
-				UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.QL_DEFAULT_ENHSSM))
-
+				if p.c == nil { // only update metrics if no socket is used
+					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", logEntry.QL)
+					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.QL_DEFAULT_ENHSSM)
+					UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.QL_DEFAULT_ENHSSM))
+				}
 			} else if sDeviceConfig.ExtendedTlv == synce.ExtendedTLV_ENABLED {
 				var lastQLState *synce.QualityLevelInfo
 				var ok bool
@@ -1284,9 +1343,11 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 						ExtendedSSM: lastQLState.ExtendedSSM,
 						Priority:    0,
 					})
-					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", lastQLState.SSM)
-					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", logEntry.ExtQl)
-					UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(lastQLState.SSM)+int(logEntry.ExtQl))
+					if p.c == nil {
+						UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", lastQLState.SSM)
+						UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", logEntry.ExtQl)
+						UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(lastQLState.SSM)+int(logEntry.ExtQl))
+					}
 
 					state = sDeviceConfig.LastClockState
 				} else if logEntry.QL != synce.QL_DEFAULT_SSM { //else we have only QL
