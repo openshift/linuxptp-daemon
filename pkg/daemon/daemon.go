@@ -689,7 +689,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			*configInput = configOutput
 		}
 
-		cmdLine = fmt.Sprintf("/usr/sbin/%s -f %s  %s ", pProcess, configPath, *configOpts)
+		cmdLine = fmt.Sprintf("/usr/sbin/%s -f %s %s", pProcess, configPath, *configOpts)
 		cmdLine = addScheduling(nodeProfile, cmdLine)
 		if pProcess == phc2sysProcessName {
 			haProfile, cmdLine = dn.ApplyHaProfiles(nodeProfile, cmdLine)
