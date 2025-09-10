@@ -6,6 +6,20 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// GetAlias generates a PHC (PTP Hardware Clock) identifier alias from network interface names.
+// It supports Intel and Mellanox naming formats with optional VLAN tags.
+//
+// Supported formats:
+//   - Intel: eth0 -> ethx, ens1f0 -> ens1fx, ens1f0.100 -> ens1fx.100
+//   - Mellanox: enP2s2f0np0 -> enP2s2fx, enP2s2f0np0.100 -> enP2s2fx.100
+//
+// For unsupported formats, returns the original interface name and logs an error.
+//
+// Parameters:
+//   - ifname: Network interface name (e.g., "ens1f0", "enP2s2f0np0", "eth0.100")
+//
+// Returns:
+//   - Alias string for PHC identification, or original name if format is unsupported
 func GetAlias(ifname string) string {
 	alias := ""
 	if ifname != "" {
