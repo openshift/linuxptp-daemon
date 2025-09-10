@@ -26,6 +26,20 @@ func Test_GetAlias(t *testing.T) {
 		{"eth0", "ethx"},
 		{"eth1.100", "ethx.100"},
 		{"eth1.100.XYZ", "ethx.100.XYZ"},
+		// Mellanox style naming
+		{"enP2s2f0np0", "enP2s2fx"},
+		{"enP1s1f1np1", "enP1s1fx"},
+		{"enP10s5f3np2", "enP10s5fx"},
+		{"ens1f3np3", "ens1fx"},
+		// Mellanox style naming with VLAN
+		{"enP2s2f0np0.100", "enP2s2fx.100"},
+		{"enP1s1f1np1.200", "enP1s1fx.200"},
+		{"enP10s5f3np2.300.XYZ", "enP10s5fx.300.XYZ"},
+		// Fallback cases (interfaces that don't match Intel or Mellanox format)
+		{"wlan", "wlan"},
+		{"lo", "lo"},
+		{"virbr", "virbr"},
+		{"docker", "docker"},
 	}
 	for _, tc := range testCases {
 		t.Run(fmt.Sprintf("%s->%s", tc.ifname, tc.expectedAlias), func(t *testing.T) {
