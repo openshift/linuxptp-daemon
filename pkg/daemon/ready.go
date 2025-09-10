@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -76,10 +77,46 @@ func (h readyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func StartReadyServer(bindAddress string, tracker *ReadyTracker) {
+type metricHandler struct {
+	tracker *ReadyTracker
+}
+
+func (h metricHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	if isReady, _ := h.tracker.Ready(); !isReady {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+
+	go func() {
+		var socketConnection net.Conn
+		for {
+			var err error
+			socketConnection, err = dialSocket()
+			if err == nil {
+				break
+			}
+		}
+		defer socketConnection.Close()
+
+		eventHandler := h.tracker.processManager.ptpEventHandler
+		eventHandler.EmitClockSyncLogs(socketConnection)
+		eventHandler.EmitPortRoleLogs(socketConnection)
+
+		processManager := h.tracker.processManager
+		processManager.EmitProcessStatusLogs()
+		processManager.EmitClockClassLogs(socketConnection)
+	}()
+}
+
+// StartReadyServer ...
+func StartReadyServer(bindAddress string, tracker *ReadyTracker, serveInitMetrics bool) {
 	glog.Info("Starting Ready Server")
 	mux := http.NewServeMux()
 	mux.Handle("/ready", readyHandler{tracker: tracker})
+	if serveInitMetrics {
+		mux.Handle("/emit-logs", metricHandler{tracker: tracker})
+	}
 	go utilwait.Until(func() {
 		err := http.ListenAndServe(bindAddress, mux)
 		if err != nil {

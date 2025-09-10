@@ -155,7 +155,9 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
 
 		interfaceName := process.ifaces[ptpEvent.PortID-1].Name
-		UpdateInterfaceRoleMetrics(process.name, interfaceName, convertParserRoleToMetricsRole(ptpEvent.Role))
+		role := convertParserRoleToMetricsRole(ptpEvent.Role)
+		UpdateInterfaceRoleMetrics(process.name, interfaceName, role)
+		process.handler.SetPortRole(configName, interfaceName, ptpEvent)
 
 		if configName == "" {
 			return
