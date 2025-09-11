@@ -71,6 +71,7 @@ var ptpProcesses = []string{
 	syncEProcessName,   // there can be only one synce Process per profile
 	ptp4lProcessName,   // there could be more than one ptp4l in the system
 	phc2sysProcessName, // there can be only one phc2sys process in the system
+	chronydProcessName, // there can be only one chronyd process in the system
 }
 
 var ptpTmpFiles = []string{
@@ -78,7 +79,17 @@ var ptpTmpFiles = []string{
 	syncEProcessName,
 	ptp4lProcessName,
 	phc2sysProcessName,
+	chronydProcessName,
 	pmcSocketName,
+}
+
+func dialSocket() (net.Conn, error) {
+	c, err := net.Dial("unix", eventSocket)
+	if err != nil {
+		glog.Errorf("error trying to connect to event socket")
+		time.Sleep(connectionRetryInterval)
+	}
+	return c, err
 }
 
 // ProcessManager manages a set of ptpProcess
@@ -132,10 +143,13 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 		glog.Error("process is not initialized in SetTestData()")
 		return
 	}
+	eventChannel := make(chan event.EventChannel)
+	closeManager := make(chan bool)
 	p.process[0].name = name
 	p.process[0].messageTag = msgTag
 	p.process[0].ifaces = ifaces
 	p.process[0].logParser = getParser(name)
+	p.process[0].handler = event.Init("test", false, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics)
 }
 
 // RunProcessPTPMetrics is used by unit tests
@@ -167,6 +181,40 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 
 }
 
+// EmitProcessStatusLogs ...
+func (p *ProcessManager) EmitProcessStatusLogs() {
+	for _, proc := range p.process {
+		status := PtpProcessUp
+		if proc.Stopped() {
+			status = PtpProcessDown
+		}
+		if proc.c == nil {
+			for {
+				var err error
+				proc.c, err = dialSocket()
+				if err == nil {
+					break
+				}
+			}
+		}
+		logProcessStatus(proc.name, proc.configName, status, proc.c)
+	}
+}
+
+// EmitClockClassLogs ...
+func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
+	for _, proc := range p.process {
+		if proc.name != ptp4lProcessName {
+			// If set then use current else get value
+			if proc.GrandmasterClockClass == 0 {
+				proc.updateClockClass(c)
+			} else {
+				proc.emitClockClassLogs(c)
+			}
+		}
+	}
+}
+
 type tBCProcessAttributes struct {
 	controlledPortsConfigFile string
 	// Time receiver interface name for T-BC clock monitoring
@@ -196,10 +244,11 @@ type ptpProcess struct {
 	ptpClockThreshold     *ptpv1.PtpClockThreshold
 	haProfile             map[string][]string // stores list of interface name for each profile
 	syncERelations        *synce.Relations
-	c                     *net.Conn
+	c                     net.Conn
 	hasCollectedMetrics   bool
 	tBCAttributes         tBCProcessAttributes
 	GrandmasterClockClass uint8
+	handler               *event.EventHandler
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -632,6 +681,13 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configFile = fmt.Sprintf("synce4l.%d.config", runID)
 			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
 			messageTag = fmt.Sprintf("[synce4l.%d.config]", runID)
+		case chronydProcessName:
+			configOpts = nodeProfile.ChronydOpts
+			configInput = nodeProfile.ChronydConf
+			socketPath = ""
+			configFile = fmt.Sprintf("chronyd.%d.config", runID)
+			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
+			messageTag = fmt.Sprintf("[chronyd.%d.config]", runID)
 		}
 
 		output := &Ptp4lConf{}
@@ -653,7 +709,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			nodeProfile.Interface = &iface
 		}
 
-		output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		if pProcess != chronydProcessName {
+			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		}
 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
@@ -678,7 +736,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			*configInput = configOutput
 		}
 
-		cmdLine = fmt.Sprintf("/usr/sbin/%s -f %s  %s ", pProcess, configPath, *configOpts)
+		cmdLine = fmt.Sprintf("/usr/sbin/%s -f %s %s", pProcess, configPath, *configOpts)
 		cmdLine = addScheduling(nodeProfile, cmdLine)
 		if pProcess == phc2sysProcessName {
 			haProfile, cmdLine = dn.ApplyHaProfiles(nodeProfile, cmdLine)
@@ -705,6 +763,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			logParser:            getParser(pProcess),
 			tBCAttributes:        tBCProcessAttributes{controlledPortsConfigFile: controlledConfigFile},
 			lastTransitionResult: event.PTP_NOTSET,
+			handler:              dn.processManager.ptpEventHandler,
 		}
 
 		if pProcess == ptp4lProcessName {
@@ -884,25 +943,33 @@ func addScheduling(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
 	return cmdLine
 }
 
-func processStatus(c *net.Conn, processName, messageTag string, status int64) {
+func processStatus(c net.Conn, processName, messageTag string, status int64) {
 	cfgName := strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
 	if cfgName != "" {
 		cfgName = strings.Split(cfgName, MessageTagSuffixSeperator)[0]
 	}
 	// ptp4l[5196819.100]: [ptp4l.0.config] PTP_PROCESS_STOPPED:0/1
-	deadProcessMsg := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d\n", processName, time.Now().Unix(), cfgName, status)
-	glog.Infof("%s\n", deadProcessMsg)
+
 	if c == nil {
 		UpdateProcessStatusMetrics(processName, cfgName, status)
 		return
 	}
-	_, err := (*c).Write([]byte(deadProcessMsg))
+	logProcessStatus(processName, cfgName, status, c)
+}
+
+func logProcessStatus(processName string, cfgName string, status int64, c net.Conn) {
+	if c == nil {
+		return
+	}
+	message := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d", processName, time.Now().Unix(), cfgName, status)
+	glog.Info(message)
+	_, err := c.Write([]byte(message + "\n"))
 	if err != nil {
 		glog.Errorf("Write error sending ptp4l/phc2sys process healths status%s:", err)
 	}
 }
 
-func (p *ptpProcess) updateClockClass(c *net.Conn) {
+func (p *ptpProcess) updateClockClass(c net.Conn) {
 	if p.nodeProfile.PtpSettings["clockType"] == TBC || p.nodeProfile.PtpSettings["controllingProfile"] != "" {
 		return
 	}
@@ -928,14 +995,18 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 		if c == nil {
 			UpdateClockClassMetrics(p.name, float64(p.GrandmasterClockClass)) // no socket then update metrics
 		} else {
-			clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, p.GrandmasterClockClass)
-			_, err := (*c).Write([]byte(clockClassOut))
-			if err != nil {
-				glog.Errorf("failed to write class change event %s", err.Error())
-			}
+			p.emitClockClassLogs(c)
 		}
 	} else {
 		glog.Errorf("error parsing PMC util for clock class change event %s", e.Error())
+	}
+}
+
+func (p *ptpProcess) emitClockClassLogs(c net.Conn) {
+	clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, p.GrandmasterClockClass)
+	_, err := c.Write([]byte(clockClassOut))
+	if err != nil {
+		glog.Errorf("failed to write class change event %s", err.Error())
 	}
 }
 
@@ -961,7 +1032,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
 	defer func() {
 		if stdoutToSocket && p.c != nil {
-			if err := (*p.c).Close(); err != nil {
+			if err := p.c.Close(); err != nil {
 				glog.Errorf("closing connection returned error %s", err)
 			}
 		}
@@ -994,6 +1065,9 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
+						if profileClockType == TBC {
+							p.tBCTransitionCheck(output, pm)
+						}
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(nil)
 						}
@@ -1010,11 +1084,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 				case <-p.exitCh:
 					done <- struct{}{}
 				default:
-					c, err := net.Dial("unix", eventSocket)
-					p.c = &c
+					p.c, err = dialSocket()
 					if err != nil {
-						glog.Errorf("error trying to connect to event socket")
-						time.Sleep(connectionRetryInterval)
 						goto connect
 					}
 				}
@@ -1061,7 +1132,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
 						p.announceHAFailOver(p.c, output) // do not use go routine since order of execution is important here
 					}
-					_, err2 := (*p.c).Write([]byte(removeMessageSuffix(output)))
+					_, err2 := p.c.Write([]byte(removeMessageSuffix(output)))
 					if err2 != nil {
 						glog.Errorf("Write %s error %s:", output, err2)
 						goto connect
@@ -1103,7 +1174,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 			p.cmd = newCmd
 		}
 		if stdoutToSocket && p.c != nil {
-			if err2 := (*p.c).Close(); err2 != nil {
+			if err2 := p.c.Close(); err2 != nil {
 				glog.Errorf("closing connection returned error %s", err2)
 			}
 		}
@@ -1299,7 +1370,7 @@ func listHaProfiles(nodeProfile *ptpv1.PtpProfile) (haProfiles []string) {
 	return
 }
 
-func (p *ptpProcess) announceHAFailOver(c *net.Conn, output string) {
+func (p *ptpProcess) announceHAFailOver(c net.Conn, output string) {
 	defer func() {
 		if r := recover(); r != nil {
 			glog.Errorf("Recovered in f %#v", r)
@@ -1352,7 +1423,7 @@ func (p *ptpProcess) announceHAFailOver(c *net.Conn, output string) {
 		UpdatePTPHAMetrics(currentProfile, inActiveProfiles, activeState)
 	} else {
 		for _, logProfile := range logString {
-			_, err := (*c).Write([]byte(logProfile))
+			_, err := c.Write([]byte(logProfile))
 			if err != nil {
 				glog.Errorf("failed to write class change event %s", err.Error())
 			}
