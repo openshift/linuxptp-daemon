@@ -29,6 +29,9 @@ import (
 // Git commit of current build set at build time
 var GitCommit = "Undefined"
 
+const labelRetries = 5
+const labelRetryInterval = time.Second
+
 type cliParams struct {
 	updateInterval  int
 	profileDir      string
@@ -106,11 +109,20 @@ func main() {
 		return
 	}
 
-	// label the current linux-ptp-daemon pod with a nodeName label
-	err = labelPod(kubeClient, nodeName, podName)
-	if err != nil {
-		glog.Errorf("failed to label linuxptp-daemon with node name, err: %v", err)
-		return
+	var labelErr error
+	for i := 1; i <= labelRetries; i++ {
+		// label the current linux-ptp-daemon pod with a nodeName label
+		labelErr = labelPod(kubeClient, nodeName, podName)
+		if labelErr != nil {
+			glog.Errorf("failed to label linuxptp-daemon with node name, err: %v. Will retry (%d/%d)", labelErr, i, labelRetries)
+			time.Sleep(labelRetryInterval)
+		} else {
+			// Labeling was successful so continue
+			break
+		}
+	}
+	if labelErr != nil {
+		glog.Fatalf("Failed to label linuxptp-daemon with node name, err: %v", labelErr)
 	}
 
 	hwconfigs := []ptpv1.HwConfig{}
