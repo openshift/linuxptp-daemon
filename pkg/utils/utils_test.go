@@ -35,6 +35,15 @@ func Test_GetAlias(t *testing.T) {
 		{"enP2s2f0np0.100", "enP2s2fx.100"},
 		{"enP1s1f1np1.200", "enP1s1fx.200"},
 		{"enP10s5f3np2.300.XYZ", "enP10s5fx.300.XYZ"},
+		// Already aliased interfaces (should return as-is)
+		{"ens7fx", "ens7fx"},
+		{"ethx", "ethx"},
+		{"enP2s2fx", "enP2s2fx"},
+		{"ens1fx.100", "ens1fx.100"},
+		{"ens20f20.100", "ens20fx.100"},
+		{"enP10s5fx.300.XYZ", "enP10s5fx.300.XYZ"},
+		// Special master interface
+		{"master", "master"},
 		// Fallback cases (interfaces that don't match Intel or Mellanox format)
 		{"wlan", "wlan"},
 		{"lo", "lo"},
