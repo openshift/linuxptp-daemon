@@ -2,8 +2,6 @@ package utils
 
 import (
 	"regexp"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // GetAlias generates a PHC (PTP Hardware Clock) identifier alias from network interface names.
@@ -23,6 +21,12 @@ import (
 func GetAlias(ifname string) string {
 	alias := ""
 	if ifname != "" {
+		// Check if it's already an aliased interface (ends with 'x' before optional VLAN)
+		alreadyAliasedPattern := regexp.MustCompile(`^(.+?)x(\..+)?$`)
+		if alreadyAliasedPattern.MatchString(ifname) {
+			return ifname
+		}
+
 		// Single regex to handle both Intel and Mellanox formats with optional VLAN
 		// Intel format: ens1f0, eth0, ens1f0.100 -> ens1fx, ethx, ens1fx.100
 		// Mellanox format: enP2s2f0np0, enP2s2f0np0.100 -> enP2s2fx, enP2s2fx.100
@@ -39,7 +43,6 @@ func GetAlias(ifname string) string {
 			}
 		} else {
 			// Interface doesn't match Intel or Mellanox format, return original interface name
-			log.Errorf("Interface %s does not match Intel or Mellanox naming format, using original interface name", ifname)
 			alias = ifname
 		}
 	}
