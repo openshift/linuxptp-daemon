@@ -637,6 +637,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		if pProcess != chronydProcessName {
 			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		} else {
+			output.profile_name = *nodeProfile.Name
 		}
 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
@@ -963,19 +965,30 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(nil)
-						}
-						if p.clockType == event.BC && strings.Contains(output, p.trIfaceName) {
-							if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
-								glog.Info("T-BC MOVE TO NORMAL")
-								pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
-							} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
-								strings.Contains(output, "SLAVE to") {
-								glog.Info("T-BC MOVE TO HOLDOVER")
-								pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
+							if p.name == chronydProcessName {
+								output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
+							}
+							output = pm.ProcessLog(p.name, output)
+							fmt.Printf("%s\n", output)
+							p.processPTPMetrics(output)
+							if p.name == ptp4lProcessName {
+								if strings.Contains(output, ClockClassChangeIndicator) {
+									go p.updateClockClass(nil)
+								}
+								if p.clockType == event.BC && strings.Contains(output, p.trIfaceName) {
+									if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
+										glog.Info("T-BC MOVE TO NORMAL")
+										pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
+									} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
+										strings.Contains(output, "SLAVE to") {
+										glog.Info("T-BC MOVE TO HOLDOVER")
+										pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
+									}
+								}
+							} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
+								p.announceHAFailOver(nil, output) // do not use go routine since order of execution is important here
 							}
 						}
-					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-						p.announceHAFailOver(nil, output) // do not use go routine since order of execution is important here
 					}
 				}
 				doneCh <- struct{}{}
@@ -1026,6 +1039,11 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
 						fmt.Printf("%s\n", output)
 					}
+					if p.name == chronydProcessName {
+						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
+					}
+					output = pm.ProcessLog(p.name, output)
+					fmt.Printf("%s\n", output)
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
 					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
 					// for ts2phc, we need to extract metrics to identify GM state
@@ -1177,8 +1195,10 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 	case "chronyd":
 		if enabled {
 			exec.Command("chronyc", "online").Output()
+			processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
 		} else {
 			exec.Command("chronyc", "offline").Output()
+			processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
 		}
 	case "phc2sys":
 		if enabled {
