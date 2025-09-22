@@ -565,6 +565,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		if pProcess != chronydProcessName {
 			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		} else {
+			output.profile_name = *nodeProfile.Name
 		}
 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
@@ -895,6 +897,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 						p.announceHAFailOver(nil, output) // do not use go routine since order of execution is important here
 					}
 				}
+
 				doneCh <- struct{}{}
 			}()
 		} else {
@@ -943,6 +946,11 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
 						fmt.Printf("%s\n", output)
 					}
+					if p.name == chronydProcessName {
+						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
+					}
+					output = pm.ProcessLog(p.name, output)
+					fmt.Printf("%s\n", output)
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
 					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
 					// for ts2phc, we need to extract metrics to identify GM state
@@ -1100,8 +1108,10 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 	case "chronyd":
 		if enabled {
 			exec.Command("chronyc", "online").Output()
+			processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
 		} else {
 			exec.Command("chronyc", "offline").Output()
+			processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
 		}
 	case "phc2sys":
 		if enabled {
