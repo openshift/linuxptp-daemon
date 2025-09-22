@@ -656,6 +656,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		if pProcess != chronydProcessName {
 			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		} else {
+			output.profile_name = *nodeProfile.Name
 		}
 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
@@ -1003,6 +1005,9 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
+					if p.name == chronydProcessName {
+						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
+					}
 					output = pm.ProcessLog(p.name, output)
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface
 					output = p.replaceClockID(output)
@@ -1048,9 +1053,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 				}
 				for scanner.Scan() {
 					output := scanner.Text()
-					if p.pmcCheck {
-						p.pmcCheck = false
-						go p.updateClockClass(p.c)
+					if p.name == chronydProcessName {
+						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
 					}
 					output = pm.ProcessLog(p.name, output)
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface
@@ -1201,8 +1205,10 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 	case "chronyd":
 		if enabled {
 			exec.Command("chronyc", "online").Output()
+			processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
 		} else {
 			exec.Command("chronyc", "offline").Output()
+			processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
 		}
 	case "phc2sys":
 		if enabled {
