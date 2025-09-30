@@ -82,7 +82,7 @@ func DiscoverPTPDevices() ([]string, error) {
 		}
 
 		// If the physfn doesn't exist this means the interface is not a virtual function so we ca add it to the list
-		if _, err := os.Stat(fmt.Sprintf("/sys/bus/pci/devices/%s/physfn", *dev.PCIAddress)); os.IsNotExist(err) {
+		if _, err = os.Stat(fmt.Sprintf("/sys/bus/pci/devices/%s/physfn", *dev.PCIAddress)); os.IsNotExist(err) {
 			nics = append(nics, dev.Name)
 		}
 	}
