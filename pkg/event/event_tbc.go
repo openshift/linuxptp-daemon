@@ -361,8 +361,9 @@ func (e *EventHandler) inSyncCondition(cfgName string) bool {
 		glog.Info("Leading clock in-sync condition is pending initialization")
 		return false
 	}
-	worstDpllOffset := e.getLargestOffset(cfgName)
-	if math.Abs(float64(worstDpllOffset)) < float64(e.LeadingClockData.inSyncConditionThreshold) {
+
+	meanOffset := e.getMeanOffset(cfgName)
+	if math.Abs(meanOffset) < float64(e.LeadingClockData.inSyncConditionThreshold) {
 		e.LeadingClockData.inSyncThresholdCounter++
 		if e.LeadingClockData.inSyncThresholdCounter >= e.LeadingClockData.inSyncConditionTimes {
 			return true
@@ -371,8 +372,9 @@ func (e *EventHandler) inSyncCondition(cfgName string) bool {
 		e.LeadingClockData.inSyncThresholdCounter = 0
 	}
 
-	glog.Info("sync condition not reached: offset ", worstDpllOffset, " count ",
+	glog.Info("sync condition not reached: mean offset ", meanOffset, " count ",
 		e.LeadingClockData.inSyncThresholdCounter, " out of ", e.LeadingClockData.inSyncConditionTimes)
+
 	return false
 }
 
@@ -432,6 +434,22 @@ func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 	}
 	glog.Info("Largest offset ", worstOffset)
 	return worstOffset
+}
+
+// getMeanOffset returns the mean offset window for the leadingIFace's DPLL
+func (e *EventHandler) getMeanOffset(cfgName string) float64 {
+	if data, ok := e.data[cfgName]; ok {
+		for _, d := range data {
+			if d.ProcessName == DPLL {
+				for _, dd := range d.Details {
+					if dd.IFace == e.clkSyncState[cfgName].leadingIFace {
+						return d.window.Mean()
+					}
+				}
+			}
+		}
+	}
+	return float64(FaultyPhaseOffset)
 }
 
 func (e *EventHandler) freeRunCondition(cfgName string) bool {
