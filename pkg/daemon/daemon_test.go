@@ -145,6 +145,14 @@ var testCases = []TestCase{
 		expectedPpsStatus:           SKIP,
 		expectedClockClassMetrics:   SKIP,
 		expectedInterfaceRole:       SKIP,
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens2f0",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-1",
+			},
+		},
 	},
 	{
 		log:                         "ts2phc[1896327.319]: [ts2phc.0.config] dev/ptp4  offset    -1 s2 freq      -2",
@@ -187,6 +195,14 @@ var testCases = []TestCase{
 		expectedPpsStatus:           SKIP,
 		expectedClockClassMetrics:   SKIP,
 		expectedInterfaceRole:       SKIP,
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens2f0",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-1",
+			},
+		},
 	},
 	{
 		log:                         "ptp4l[8542280.698]: [ptp4l.0.config] port 1: UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
@@ -289,6 +305,14 @@ var testCases = []TestCase{
 		expectedPpsStatus:           SKIP,
 		expectedClockClassMetrics:   SKIP,
 		expectedInterfaceRole:       SKIP,
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens10f0",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-3",
+			},
+		},
 	},
 	// Additional comprehensive test cases
 	{
@@ -341,6 +365,14 @@ var testCases = []TestCase{
 		expectedPpsStatus:           SKIP,
 		expectedClockClassMetrics:   SKIP,
 		expectedInterfaceRole:       SKIP,
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens15f1",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-4",
+			},
+		},
 	},
 	{
 		log:                         "ts2phc[1896332.824]: [ts2phc.5.config] dev/ptp12 offset        777 s1 freq   -88888",
@@ -500,6 +532,14 @@ var testCases = []TestCase{
 		expectedPpsStatus:           SKIP,
 		expectedClockClassMetrics:   SKIP,
 		expectedInterfaceRole:       SKIP,
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens40f0",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-40",
+			},
+		},
 	},
 	{
 		log:                         "phc2sys[1823133.400]: [phc2sys.2.config] CLOCK_REALTIME phc offset        42 s1 freq      +1 delay      1",

@@ -76,6 +76,15 @@ func (i *IFaces) String() string {
 	return b.String()
 }
 
+// GetIfNamesGroupedByPhc returns a map grouping interface name by phc
+func (i *IFaces) GetIfNamesGroupedByPhc() map[string][]string {
+	result := make(map[string][]string)
+	for _, ii := range *i {
+		result[ii.PhcId] = append(result[ii.PhcId], ii.Name)
+	}
+	return result
+}
+
 func GetKubeConfig() (*rest.Config, error) {
 	configFromFlags := func(kubeConfig string) (*rest.Config, error) {
 		if _, err := os.Stat(kubeConfig); err != nil {

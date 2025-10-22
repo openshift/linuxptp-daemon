@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/debug"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -775,13 +776,13 @@ connect:
 
 				// Update the metrics
 				if !e.stdoutToSocket { // if events not enabled
-					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), utils.GetAlias(event.IFace))
+					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), alias.GetAlias(event.IFace))
 					//  update all metric that was sent to events
 					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
 
 					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
 					if clockState.leadingIFace != LEADING_INTERFACE_UNKNOWN { // race condition ;
-						e.UpdateClockStateMetrics(clockState.state, string(event.ClockType), utils.GetAlias(clockState.leadingIFace))
+						e.UpdateClockStateMetrics(clockState.state, string(event.ClockType), alias.GetAlias(clockState.leadingIFace))
 					}
 				}
 				if event.ClockType == GM {
@@ -952,7 +953,7 @@ func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace st
 }
 
 func (e *EventHandler) updateMetrics(cfgName string, process EventSource, processData map[ValueType]interface{}, d *DataDetails) {
-	iface := utils.GetAlias(d.IFace)
+	iface := alias.GetAlias(d.IFace)
 
 	for dataType, value := range processData { // update process with metrics
 		var dataValue float64
