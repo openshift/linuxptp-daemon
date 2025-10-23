@@ -26,6 +26,9 @@ type E810Opts struct {
 	PhaseInputs         []PhaseInputs                `json:"interconnections"`
 }
 
+// GetPhaseInputs implements PhaseInputsProvider
+func (o E810Opts) GetPhaseInputs() []PhaseInputs { return o.PhaseInputs }
+
 type E810UblxCmds struct {
 	ReportOutput bool     `json:"reportOutput"`
 	Args         []string `json:"args"`

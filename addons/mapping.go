@@ -9,4 +9,6 @@ import (
 var PluginMapping = map[string]plugin.New{
 	"reference": generic.Reference,
 	"e810":      intel.E810,
+	"e825":      intel.E825,
+	"e830":      intel.E830,
 }

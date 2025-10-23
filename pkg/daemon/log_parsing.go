@@ -81,17 +81,19 @@ func processWithParser(process *ptpProcess, output string) {
 
 func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	// Convert interface from possible clock id
-	iface := process.ifaces.GetPhcID2IFace(ptpMetrics.Iface)
-	if iface != clockRealTime {
-		iface = utils.GetAlias(iface)
+	ifaceRaw := process.ifaces.GetPhcID2IFace(ptpMetrics.Iface) // real interface name
+	// Use alias only for metrics/labels; keep real iface in events/logs
+	ifaceForMetrics := ifaceRaw
+	if ifaceForMetrics != clockRealTime {
+		ifaceForMetrics = utils.GetAlias(ifaceForMetrics)
 	}
 
 	// Update PTP metrics using the parsed data
-	updatePTPMetrics(ptpMetrics.Source, process.name, iface, ptpMetrics.Offset, ptpMetrics.MaxOffset, ptpMetrics.FreqAdj, ptpMetrics.Delay)
+	updatePTPMetrics(ptpMetrics.Source, process.name, ifaceForMetrics, ptpMetrics.Offset, ptpMetrics.MaxOffset, ptpMetrics.FreqAdj, ptpMetrics.Delay)
 
 	// Update clock state metrics if available
 	if ptpMetrics.ClockState != "" {
-		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState))
+		updateClockStateMetrics(process.name, ifaceForMetrics, string(ptpMetrics.ClockState))
 	}
 
 	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
@@ -131,7 +133,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			ProcessName: event.TS2PHC,
 			State:       state,
 			CfgName:     configName,
-			IFace:       iface,
+			IFace:       ifaceRaw, // use real interface name in event/log
 			Values:      values,
 			ClockType:   process.clockType,
 			Time:        time.Now().UnixMilli(),
