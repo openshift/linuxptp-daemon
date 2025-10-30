@@ -75,7 +75,7 @@ func (d *Data) GetDataDetails(iface string) *DataDetails {
 	return nil
 }
 
-func (d *Data) AddEvent(event EventChannel, leadingInterface string) {
+func (d *Data) AddEvent(event EventChannel) {
 	for _, dd := range d.Details {
 		if dd.IFace == event.IFace {
 			if dd.time <= event.Time {
@@ -94,11 +94,6 @@ func (d *Data) AddEvent(event EventChannel, leadingInterface string) {
 					offset := off.(int64)
 					dd.Offset = offset
 					d.window.Insert(float64(offset))
-					if dd.IFace == leadingInterface {
-						glog.Infof("TEST-DATA-RAW: %f", d.window.LastInserted())
-						glog.Infof("TEST-DATA-FILTERED: %f", d.window.Mean())
-						glog.Infof("TEST-DATA-ABS-FILTERED: %f", d.window.AbsMean())
-					}
 				}
 
 			} else {
