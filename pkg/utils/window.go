@@ -124,6 +124,15 @@ func (w *Window) Insert(v float64) {
 	}
 }
 
+// LastInserted returns the last value inserted into the window
+func (w *Window) LastInserted() float64 {
+	lastIndex := w.nextIndex - 1
+	if lastIndex < 0 {
+		lastIndex = w.size - 1
+	}
+	return w.data[lastIndex]
+}
+
 // SetWeights sets the weights for the window values.
 // Returns an error if the weights slice is larger than the window size.
 func (w *Window) SetWeights(weights []float64) error {
