@@ -26,6 +26,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 
+	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
@@ -210,7 +211,7 @@ func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
 			if proc.GrandmasterClockClass == 0 {
 				proc.updateClockClass(c)
 			} else {
-				proc.emitClockClassLogs(c)
+				utils.EmitClockClass(proc.c, proc.name, proc.configName, fbprotocol.ClockClass(proc.GrandmasterClockClass))
 			}
 		}
 	}
@@ -1010,18 +1011,10 @@ func (p *ptpProcess) updateClockClass(c net.Conn) {
 		if c == nil {
 			UpdateClockClassMetrics(p.name, float64(p.GrandmasterClockClass)) // no socket then update metrics
 		} else {
-			p.emitClockClassLogs(c)
+			utils.EmitClockClass(p.c, p.name, p.configName, fbprotocol.ClockClass(p.GrandmasterClockClass))
 		}
 	} else {
 		glog.Errorf("error parsing PMC util for clock class change event %s", e.Error())
-	}
-}
-
-func (p *ptpProcess) emitClockClassLogs(c net.Conn) {
-	clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, p.GrandmasterClockClass)
-	_, err := c.Write([]byte(clockClassOut))
-	if err != nil {
-		glog.Errorf("failed to write class change event %s", err.Error())
 	}
 }
 

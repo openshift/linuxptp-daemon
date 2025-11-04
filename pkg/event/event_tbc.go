@@ -248,22 +248,12 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 }
 
 func (e *EventHandler) announceClockClass(clockClass int, cfgName string, c net.Conn) {
-	message := fmt.Sprintf("ptp4l[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", time.Now().Unix(),
-		cfgName, clockClass)
-	if e.stdoutToSocket {
-		if c != nil {
-			_, err := c.Write([]byte(message))
-			if err != nil {
-				glog.Errorf("failed to write class change event %s", err.Error())
-			}
-		} else {
-			glog.Errorf("failed to write class change event, connection is nil")
-		}
-	} else if e.clockClassMetric != nil {
+	e.clockClass = fbprotocol.ClockClass(clockClass)
+	utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+	if !e.stdoutToSocket && e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
 			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
 	}
-	glog.Infof("%s", message)
 }
 
 // Implements Rec. ITU-T G.8275 (2024) Amd. 1 (08/2024)
