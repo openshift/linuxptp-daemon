@@ -122,7 +122,7 @@ func (c *ClockChain) resolveInterconnections(e810Opts E810Opts, nodeProfile *ptp
 		if err != nil {
 			return nil, err
 		}
-		glog.Infof("card: %%v", card)
+		glog.Infof("card: %+v", card)
 		if !card.GnssInput && card.UpstreamPort == "" {
 			externalDelay := card.Input.DelayPs
 			connector := card.Input.Connector
