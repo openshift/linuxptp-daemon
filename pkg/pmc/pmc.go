@@ -21,8 +21,9 @@ var (
 	cmdSetExternalGMPropertiesNP = "SET EXTERNAL_GRANDMASTER_PROPERTIES_NP"
 	cmdGetTimePropertiesDS       = "GET TIME_PROPERTIES_DATA_SET"
 	cmdGetCurrentDS              = "GET CURRENT_DATA_SET"
-	cmdTimeout                   = 2000 * time.Millisecond
-	sigTimeout                   = 500 * time.Millisecond
+	cmdTimeout                   = 2 * time.Second
+	pollTimeout                  = 3 * time.Second
+	montiorStartTimeout          = time.Minute
 	numRetry                     = 6
 	pmcCmdConstPart              = "pmc -u -b 0 -f /var/run/"
 	grandmasterSettingsNPRegExp  = regexp.MustCompile((&protocol.GrandmasterSettings{}).RegEx())
@@ -30,6 +31,7 @@ var (
 	externalGMPropertiesNPRegExp = regexp.MustCompile((&protocol.ExternalGrandmasterProperties{}).RegEx())
 	timePropertiesDSRegExp       = regexp.MustCompile((&protocol.TimePropertiesDS{}).RegEx())
 	currentDSRegExp              = regexp.MustCompile((&protocol.CurrentDS{}).RegEx())
+	subscribedEventsRegExp       = regexp.MustCompile((&protocol.SubscribedEvents{}).RegEx())
 )
 
 // RunPMCExp ... go expect to run PMC util cmd
@@ -107,7 +109,7 @@ func RunPMCExpSetGMSettings(configFileName string, g protocol.GrandmasterSetting
 	return
 }
 
-// RunPMCExpGetParentDS ... GET PARENT_DATA_SET
+// RunPMCExpGetParentDS ... GET
 func RunPMCExpGetParentDS(configFileName string) (p protocol.ParentDataSet, err error) {
 	cmdStr := cmdGetParentDataSet
 	pmcCmd := pmcCmdConstPart + configFileName
@@ -416,4 +418,59 @@ func getCurrentDS(exp *expect.GExpect) (*protocol.CurrentDS, error) {
 	}
 	glog.Infof("CURRENT_DATA_SET result: %s", matched)
 	return protocol.ProcessMessage[protocol.CurrentDS](matches)
+}
+
+func getSubcribeEvents(exp *expect.GExpect) (*protocol.SubscribedEvents, error) {
+	err := exp.Send("GET SUBSCRIBE_EVENTS_NP\n")
+	if err != nil {
+		return nil, err
+	}
+	_, matches, err := exp.Expect(subscribedEventsRegExp, pollTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return protocol.ProcessMessage[protocol.SubscribedEvents](matches)
+}
+
+// GetPMCMontior spawns and initializes a PMC monitoring process.
+func GetPMCMontior(configFileName string) (*expect.GExpect, <-chan error, error) {
+	timeout := time.After(10 * montiorStartTimeout)
+	for {
+		cmd := pmcCmdConstPart + configFileName
+		glog.Errorf("Spawning process '%s' for monitoring pmc", cmd)
+		exp, r, err := expect.Spawn(cmd, -1)
+		if err != nil {
+			glog.Errorf("Failed to spawn moniotring pmc process")
+		}
+		select {
+		case <-timeout:
+			return exp, r, fmt.Errorf("timed out waiting for pmc to start")
+		case <-r:
+			return exp, r, fmt.Errorf("pmc need to be restarted")
+		default:
+			if _, subscribeErr := getSubcribeEvents(exp); subscribeErr != nil {
+				continue
+			}
+			return exp, r, nil
+		}
+	}
+}
+
+// GetMonitorRegex returns a regex pattern for monitoring PMC events based on configuration.
+func GetMonitorRegex(monitorParentData bool) *regexp.Regexp {
+	parts := make([]string, 0)
+	// TODO: Find port state message and make regex
+	// if pmc.monitorPortState {
+	// 		parts = append(parts, )
+	// }
+
+	// TODO: find PMC TimeSync message and make regex
+	// if pmc.monitorTimeSync {
+	// 		parts = append(parts, )
+	// }
+
+	if monitorParentData {
+		parts = append(parts, parentDataSetRegExp.String())
+	}
+	return regexp.MustCompile(`(?m).* seq \d+ RESPONSE MANAGEMENT .*\s*` + strings.Join(parts, `|`))
 }
