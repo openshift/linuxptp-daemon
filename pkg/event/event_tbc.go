@@ -247,8 +247,11 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 	return rclockSyncState
 }
 
-func (e *EventHandler) announceClockClass(clockClass int, cfgName string, c net.Conn) {
-	e.clockClass = fbprotocol.ClockClass(clockClass)
+// AnnounceClockClass announces clock class changes to the event handler and writes to the connection.
+func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn) {
+	e.clockClass = clockClass
+	e.clockAccuracy = clockAcc
+
 	utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
 	if !e.stdoutToSocket && e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
@@ -266,7 +269,7 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 	}
 	glog.Infof("EGP %++v", egp)
 	go pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, egp)
-	e.announceClockClass(int(e.clkSyncState[cfgName].clockClass), cfgName, c)
+	e.AnnounceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
 			ClockClass:              e.clkSyncState[cfgName].clockClass,
@@ -318,29 +321,38 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
 	if err != nil {
 		glog.Error(err)
 	}
-	e.LeadingClockData.upstreamTimeProperties = &results.TimePropertiesDS
-	e.LeadingClockData.upstreamParentDataSet = &results.ParentDataSet
-	e.LeadingClockData.upstreamCurrentDSStepsRemoved = results.CurrentDS.StepsRemoved
+	e.DownstreamAnnounceIWF(cfgName, c, results)
+}
+
+// DownstreamAnnounceIWF announces downstream IWF (Interworking Function) updates.
+func (e *EventHandler) DownstreamAnnounceIWF(
+	cfgName string,
+	c net.Conn,
+	datasets pmc.ParentTimeCurrentDS,
+) {
+	e.LeadingClockData.upstreamTimeProperties = &datasets.TimePropertiesDS
+	e.LeadingClockData.upstreamParentDataSet = &datasets.ParentDataSet
+	e.LeadingClockData.upstreamCurrentDSStepsRemoved = datasets.CurrentDS.StepsRemoved
 
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
-			ClockClass:              fbprotocol.ClockClass(results.ParentDataSet.GrandmasterClockClass),
-			ClockAccuracy:           fbprotocol.ClockAccuracy(results.ParentDataSet.GrandmasterClockAccuracy),
-			OffsetScaledLogVariance: results.ParentDataSet.GrandmasterOffsetScaledLogVariance,
+			ClockClass:              fbprotocol.ClockClass(datasets.ParentDataSet.GrandmasterClockClass),
+			ClockAccuracy:           fbprotocol.ClockAccuracy(datasets.ParentDataSet.GrandmasterClockAccuracy),
+			OffsetScaledLogVariance: datasets.ParentDataSet.GrandmasterOffsetScaledLogVariance,
 		},
-		TimePropertiesDS: results.TimePropertiesDS,
+		TimePropertiesDS: datasets.TimePropertiesDS,
 	}
 	es := protocol.ExternalGrandmasterProperties{
-		GrandmasterIdentity: results.ParentDataSet.GrandmasterIdentity,
+		GrandmasterIdentity: datasets.ParentDataSet.GrandmasterIdentity,
 		// stepsRemoved at this point is already incremented, representing the current clock position
-		StepsRemoved: results.CurrentDS.StepsRemoved,
+		StepsRemoved: datasets.CurrentDS.StepsRemoved,
 	}
 	glog.Infof("%++v", es)
-	e.announceClockClass(int(gs.ClockQuality.ClockClass), cfgName, c)
-	if err = pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, es); err != nil {
+	e.AnnounceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName, c)
+	if err := pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, es); err != nil {
 		glog.Error(err)
 	}
-	if err = pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs); err != nil {
+	if err := pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs); err != nil {
 		glog.Error(err)
 	}
 	glog.Infof("%++v", es)

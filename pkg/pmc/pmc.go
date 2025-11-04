@@ -459,15 +459,7 @@ func GetPMCMontior(configFileName string) (*expect.GExpect, <-chan error, error)
 // GetMonitorRegex returns a regex pattern for monitoring PMC events based on configuration.
 func GetMonitorRegex(monitorParentData bool) *regexp.Regexp {
 	parts := make([]string, 0)
-	// TODO: Find port state message and make regex
-	// if pmc.monitorPortState {
-	// 		parts = append(parts, )
-	// }
-
-	// TODO: find PMC TimeSync message and make regex
-	// if pmc.monitorTimeSync {
-	// 		parts = append(parts, )
-	// }
+	// TODO: Add other messages
 
 	if monitorParentData {
 		parts = append(parts, parentDataSetRegExp.String())
