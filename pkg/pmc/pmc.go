@@ -5,12 +5,12 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/golang/glog"
 	expect "github.com/google/goexpect"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 var (
@@ -40,20 +40,7 @@ func RunPMCExp(configFileName, cmdStr string, promptRE *regexp.Regexp) (result s
 	if err != nil {
 		return "", []string{}, err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	if err = e.Send(cmdStr + "\n"); err == nil {
 		result, matches, err = e.Expect(promptRE, cmdTimeout)
@@ -75,20 +62,7 @@ func RunPMCExpGetGMSettings(configFileName string) (g protocol.GrandmasterSettin
 	if err != nil {
 		return g, err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
@@ -115,24 +89,12 @@ func RunPMCExpSetGMSettings(configFileName string, g protocol.GrandmasterSetting
 	cmdStr := cmdSetGMSettings
 	cmdStr += strings.Replace(g.String(), "\n", " ", -1)
 	pmcCmd := pmcCmdConstPart + configFileName
+	glog.Infof("%s \"%s\"", pmcCmd, cmdStr)
 	e, r, err := expect.Spawn(pmcCmd, -1)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	if err = e.Send(cmdStr + "\n"); err == nil {
 		result, _, err1 := e.Expect(grandmasterSettingsNPRegExp, cmdTimeout)
@@ -154,20 +116,7 @@ func RunPMCExpGetParentDS(configFileName string) (p protocol.ParentDataSet, err 
 	if err != nil {
 		return p, err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	for i := 0; i < numRetry; i++ {
 		glog.Infof("%s retry %d", cmdGetParentDataSet, i)
@@ -199,20 +148,7 @@ func RunPMCExpGetExternalGMPropertiesNP(configFileName string) (egp protocol.Ext
 	if err != nil {
 		return
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
@@ -245,20 +181,7 @@ func RunPMCExpSetExternalGMPropertiesNP(configFileName string, egp protocol.Exte
 	if err != nil {
 		return err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	if err = e.Send(cmdStr + "\n"); err == nil {
 		result, dbg, err1 := e.Expect(externalGMPropertiesNPRegExp, cmdTimeout)
@@ -281,20 +204,7 @@ func RunPMCExpGetTimePropertiesDS(configFileName string) (tp protocol.TimeProper
 	if err != nil {
 		return
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
@@ -325,20 +235,7 @@ func RunPMCExpGetCurrentDS(configFileName string) (cds protocol.CurrentDS, err e
 	if err != nil {
 		return
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
@@ -415,20 +312,7 @@ func RunPMCExpGetMultiple(configFileName string) (results MultipleResults, err e
 	if err != nil {
 		return results, err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	// Command 1: GET PARENT_DATA_SET
 	glog.Infof("Sending command: %s", cmdGetParentDataSet)
