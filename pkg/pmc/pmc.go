@@ -294,17 +294,17 @@ func RunPMCGetParentDS(configFileName string) (p protocol.ParentDataSet, err err
 	return p, nil
 }
 
-// MultipleResults holds the results from multiple PMC commands
-type MultipleResults struct {
+// ParentTimeCurrentDS holds the results from multiple PMC commands
+type ParentTimeCurrentDS struct {
 	ParentDataSet    protocol.ParentDataSet
 	TimePropertiesDS protocol.TimePropertiesDS
 	CurrentDS        protocol.CurrentDS
 }
 
-// RunPMCExpGetMultiple runs PMC in interactive mode and sends three commands sequentially:
+// RunPMCExpGetParentTimeAndCurrentDataSets runs PMC in interactive mode and sends three commands sequentially:
 // GET PARENT_DATA_SET, GET TIME_PROPERTIES_DATA_SET, and GET CURRENT_DATA_SET
 // This is more efficient than spawning separate PMC processes for each command
-func RunPMCExpGetMultiple(configFileName string) (results MultipleResults, err error) {
+func RunPMCExpGetParentTimeAndCurrentDataSets(configFileName string) (results ParentTimeCurrentDS, err error) {
 	pmcCmd := pmcCmdConstPart + configFileName
 	glog.Infof("%s - running multiple commands", pmcCmd)
 
@@ -315,58 +315,105 @@ func RunPMCExpGetMultiple(configFileName string) (results MultipleResults, err e
 	defer utils.CloseExpect(e, r)
 
 	// Command 1: GET PARENT_DATA_SET
+	parentDS, err := getParentDS(e)
+	if err != nil {
+		return results, err
+	}
+	results.ParentDataSet = *parentDS
+
+	// Command 2: GET TIME_PROPERTIES_DATA_SET
+	timePropertiesDS, err := getTimePropertiesDS(e)
+	if err != nil {
+		return results, err
+	}
+	results.TimePropertiesDS = *timePropertiesDS
+
+	// Command 3: GET CURRENT_DATA_SET
+	currentDS, err := getCurrentDS(e)
+	if err != nil {
+		return results, err
+	}
+	results.CurrentDS = *currentDS
+
+	return results, nil
+}
+
+// RunPMCExpGetTimeAndCurrentDataSets runs PMC in interactive mode and sends three commands sequentially:
+// GET TIME_PROPERTIES_DATA_SET, and GET CURRENT_DATA_SET
+// This is more efficient than spawning separate PMC processes for each command
+func RunPMCExpGetTimeAndCurrentDataSets(configFileName string) (results ParentTimeCurrentDS, err error) {
+	pmcCmd := pmcCmdConstPart + configFileName
+	glog.Infof("%s - running multiple commands", pmcCmd)
+
+	e, r, err := expect.Spawn(pmcCmd, -1)
+	if err != nil {
+		return results, err
+	}
+	defer utils.CloseExpect(e, r)
+
+	// Command 2: GET TIME_PROPERTIES_DATA_SET
+	timePropertiesDS, err := getTimePropertiesDS(e)
+	if err != nil {
+		return results, err
+	}
+	results.TimePropertiesDS = *timePropertiesDS
+
+	// Command 3: GET CURRENT_DATA_SET
+	currentDS, err := getCurrentDS(e)
+	if err != nil {
+		return results, err
+	}
+	results.CurrentDS = *currentDS
+
+	return results, nil
+}
+
+func getParentDS(exp *expect.GExpect) (*protocol.ParentDataSet, error) {
+	results := &protocol.ParentDataSet{}
+
 	glog.Infof("Sending command: %s", cmdGetParentDataSet)
-	if err = e.Send(cmdGetParentDataSet + "\n"); err != nil {
+	if err := exp.Send(cmdGetParentDataSet + "\n"); err != nil {
 		return results, fmt.Errorf("failed to send PARENT_DATA_SET command: %v", err)
 	}
 
-	result, matches, err1 := e.Expect(parentDataSetRegExp, cmdTimeout)
-	if err1 != nil {
-		glog.Errorf("PARENT_DATA_SET result match error: %v", err1)
-		return results, fmt.Errorf("failed to parse PARENT_DATA_SET output: %v", err1)
+	matched, matches, err := exp.Expect(parentDataSetRegExp, cmdTimeout)
+	if err != nil {
+		glog.Errorf("PARENT_DATA_SET result match error: %v", err)
+		return results, fmt.Errorf("failed to parse PARENT_DATA_SET output: %v", err)
 	}
-	glog.Infof("PARENT_DATA_SET result: %s", result)
-	for i, m := range matches[1:] {
-		if i < len(results.ParentDataSet.Keys()) {
-			results.ParentDataSet.Update(results.ParentDataSet.Keys()[i], m)
-		}
-	}
+	glog.Infof("PARENT_DATA_SET result: %s", matched)
+	return protocol.ProcessMessage[protocol.ParentDataSet](matches)
+}
 
-	// Command 2: GET TIME_PROPERTIES_DATA_SET
+func getTimePropertiesDS(exp *expect.GExpect) (*protocol.TimePropertiesDS, error) {
+	results := &protocol.TimePropertiesDS{}
 	glog.Infof("Sending command: %s", cmdGetTimePropertiesDS)
-	if err = e.Send(cmdGetTimePropertiesDS + "\n"); err != nil {
+	if err := exp.Send(cmdGetTimePropertiesDS + "\n"); err != nil {
 		return results, fmt.Errorf("failed to send TIME_PROPERTIES_DATA_SET command: %v", err)
 	}
 
-	result, matches, err1 = e.Expect(timePropertiesDSRegExp, cmdTimeout)
-	if err1 != nil {
-		glog.Errorf("TIME_PROPERTIES_DATA_SET result match error: %v", err1)
-		return results, fmt.Errorf("failed to parse TIME_PROPERTIES_DATA_SET output: %v", err1)
+	matched, matches, err := exp.Expect(timePropertiesDSRegExp, cmdTimeout)
+	if err != nil {
+		glog.Errorf("TIME_PROPERTIES_DATA_SET result match error: %v", err)
+		return results, fmt.Errorf("failed to parse TIME_PROPERTIES_DATA_SET output: %v", err)
 	}
-	glog.Infof("TIME_PROPERTIES_DATA_SET result: %s", result)
-	for i, m := range matches[1:] {
-		if i < len(results.TimePropertiesDS.Keys()) {
-			results.TimePropertiesDS.Update(results.TimePropertiesDS.Keys()[i], m)
-		}
-	}
+	glog.Infof("TIME_PROPERTIES_DATA_SET result: %s", matched)
+	return protocol.ProcessMessage[protocol.TimePropertiesDS](matches)
+}
 
-	// Command 3: GET CURRENT_DATA_SET
+func getCurrentDS(exp *expect.GExpect) (*protocol.CurrentDS, error) {
+	results := &protocol.CurrentDS{}
+
 	glog.Infof("Sending command: %s", cmdGetCurrentDS)
-	if err = e.Send(cmdGetCurrentDS + "\n"); err != nil {
+	if err := exp.Send(cmdGetCurrentDS + "\n"); err != nil {
 		return results, fmt.Errorf("failed to send CURRENT_DATA_SET command: %v", err)
 	}
 
-	result, matches, err1 = e.Expect(currentDSRegExp, cmdTimeout)
-	if err1 != nil {
-		glog.Errorf("CURRENT_DATA_SET result match error: %v", err1)
-		return results, fmt.Errorf("failed to parse CURRENT_DATA_SET output: %v", err1)
+	matched, matches, err := exp.Expect(currentDSRegExp, cmdTimeout)
+	if err != nil {
+		glog.Errorf("CURRENT_DATA_SET result match error: %v", err)
+		return results, fmt.Errorf("failed to parse CURRENT_DATA_SET output: %v", err)
 	}
-	glog.Infof("CURRENT_DATA_SET result: %s", result)
-	for i, m := range matches[1:] {
-		if i < len(results.CurrentDS.Keys()) {
-			results.CurrentDS.Update(results.CurrentDS.Keys()[i], m)
-		}
-	}
-
-	return results, nil
+	glog.Infof("CURRENT_DATA_SET result: %s", matched)
+	return protocol.ProcessMessage[protocol.CurrentDS](matches)
 }

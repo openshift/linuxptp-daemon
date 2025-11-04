@@ -314,7 +314,7 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
 	ptpCfgName := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
 	glog.Infof("downstreamAnnounceIWF: %s", ptpCfgName)
-	results, err := pmc.RunPMCExpGetMultiple(ptpCfgName)
+	results, err := pmc.RunPMCExpGetParentTimeAndCurrentDataSets(ptpCfgName)
 	if err != nil {
 		glog.Error(err)
 	}
