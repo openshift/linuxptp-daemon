@@ -270,10 +270,11 @@ func TestGetLargestOffset(t *testing.T) {
 	recentTime := currentTime * 1000
 
 	tests := []struct {
-		name     string
-		cfgName  string
-		data     map[string][]*Data
-		expected int64
+		name         string
+		cfgName      string
+		data         map[string][]*Data
+		clkSyncState map[string]*clockSyncState
+		expected     int64
 	}{
 		{
 			name:     "No data for config",
@@ -298,6 +299,11 @@ func TestGetLargestOffset(t *testing.T) {
 					{ProcessName: "other", Details: []*DataDetails{}},
 				},
 			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
+				},
+			},
 			expected: FaultyPhaseOffset,
 		},
 		{
@@ -308,6 +314,11 @@ func TestGetLargestOffset(t *testing.T) {
 					{ProcessName: DPLL, Details: []*DataDetails{
 						{IFace: "eth0", Offset: 100, time: recentTime},
 					}},
+				},
+			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
 				},
 			},
 			expected: 100,
@@ -324,6 +335,11 @@ func TestGetLargestOffset(t *testing.T) {
 					}},
 				},
 			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
+				},
+			},
 			expected: 25,
 		},
 		{
@@ -336,6 +352,11 @@ func TestGetLargestOffset(t *testing.T) {
 						{IFace: "eth1", Offset: 5, time: recentTime},
 						{IFace: "eth2", Offset: -10, time: recentTime},
 					}},
+				},
+			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
 				},
 			},
 			expected: -30,
@@ -352,6 +373,11 @@ func TestGetLargestOffset(t *testing.T) {
 					}},
 				},
 			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
+				},
+			},
 			expected: -25,
 		},
 		{
@@ -366,6 +392,11 @@ func TestGetLargestOffset(t *testing.T) {
 					}},
 				},
 			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
+				},
+			},
 			expected: 20,
 		},
 		{
@@ -378,6 +409,11 @@ func TestGetLargestOffset(t *testing.T) {
 						{IFace: "eth1", Offset: 50, time: staleTime - 500},  // stale, ignored
 						{IFace: "eth2", Offset: 30, time: staleTime - 200},  // stale, ignored
 					}},
+				},
+			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
 				},
 			},
 			expected: FaultyPhaseOffset,
@@ -398,6 +434,11 @@ func TestGetLargestOffset(t *testing.T) {
 					}},
 				},
 			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
+				},
+			},
 			expected: -40,
 		},
 		{
@@ -409,6 +450,11 @@ func TestGetLargestOffset(t *testing.T) {
 						{IFace: "eth0", Offset: 0, time: recentTime},
 						{IFace: "eth1", Offset: 0, time: recentTime},
 					}},
+				},
+			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
 				},
 			},
 			expected: 0,
@@ -425,13 +471,18 @@ func TestGetLargestOffset(t *testing.T) {
 					}},
 				},
 			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
+				},
+			},
 			expected: 10,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := EventHandler{data: tt.data}
+			e := EventHandler{data: tt.data, clkSyncState: tt.clkSyncState}
 			result := e.getLargestOffset(tt.cfgName)
 			assert.Equal(t, tt.expected, result)
 		})
