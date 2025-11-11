@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -102,29 +103,37 @@ func GetPhcId(iface string) string {
 
 func getPTPClockIndex(iface string) (int, error) {
 	if !ethtoolInstalled() {
-		return 0, fmt.Errorf("discoverDevices(): ethtool not installed. Cannot grab NIC capabilities")
+		return 0, fmt.Errorf("discoverDevices(): ethtool not installed")
 	}
-
-	// Command to get PTP clock info
-	cmd := exec.Command("ethtool", "-T", iface)
-
-	// Execute the command and capture output
-	out, err := cmd.CombinedOutput()
+	out, err := exec.Command("ethtool", "-T", iface).CombinedOutput()
 	if err != nil {
 		return -1, fmt.Errorf("failed to run ethtool: %w", err)
 	}
 
-	// Regex to extract clock index
-	re := regexp.MustCompile(`PTP Hardware Clock: (\d+)`)
-	match := re.FindSubmatch(out)
-	if match == nil {
-		return -1, fmt.Errorf("no PTP hardware clock found on %s", iface)
+	// Try classic format
+	if m := regexp.MustCompile(`PTP Hardware Clock:\s*(\d+)`).FindSubmatch(out); m != nil {
+		var idx int
+		_, err = fmt.Sscan(string(m[1]), &idx)
+		return idx, err
 	}
-	// Convert captured index string to integer
-	var clockIndex int
-	_, err = fmt.Sscanln(string(match[1]), &clockIndex)
-	if err != nil {
-		return 0, err
+
+	// Try provider index format (seen in some containers)
+	if m := regexp.MustCompile(`Hardware timestamp provider index:\s*(\d+)`).FindSubmatch(out); m != nil {
+		var idx int
+		_, err = fmt.Sscan(string(m[1]), &idx)
+		return idx, err
 	}
-	return clockIndex, nil
+
+	// Sysfs fallback
+	matches, err := filepath.Glob(fmt.Sprintf("/sys/class/net/%s/ptp/ptp*", iface))
+	if err == nil && len(matches) > 0 {
+		base := filepath.Base(matches[0]) // e.g., "ptp0"
+		if strings.HasPrefix(base, "ptp") {
+			var idx int
+			_, err = fmt.Sscan(strings.TrimPrefix(base, "ptp"), &idx)
+			return idx, err
+		}
+	}
+
+	return -1, fmt.Errorf("no PTP clock index found for %s", iface)
 }
