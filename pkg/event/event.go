@@ -28,6 +28,7 @@ type ValueType string
 const (
 	PTPNamespace = "openshift"
 	PTPSubsystem = "ptp"
+	WindowSize   = 10
 )
 
 // nolint:all
@@ -1029,6 +1030,7 @@ func (e *EventHandler) GetData(cfgName string, processName EventSource) *Data {
 	d := &Data{
 		ProcessName: processName,
 		State:       PTP_UNKNOWN,
+		window:      *utils.NewWindow(WindowSize),
 	}
 	e.data[cfgName] = append(e.data[cfgName], d)
 	return d

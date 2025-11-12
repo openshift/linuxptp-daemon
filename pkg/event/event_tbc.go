@@ -361,8 +361,9 @@ func (e *EventHandler) inSyncCondition(cfgName string) bool {
 		glog.Info("Leading clock in-sync condition is pending initialization")
 		return false
 	}
-	worstDpllOffset := e.getLargestOffset(cfgName)
-	if math.Abs(float64(worstDpllOffset)) < float64(e.LeadingClockData.inSyncConditionThreshold) {
+
+	worstOffset := e.getLargestOffset(cfgName)
+	if math.Abs(float64(worstOffset)) < float64(e.LeadingClockData.inSyncConditionThreshold) {
 		e.LeadingClockData.inSyncThresholdCounter++
 		if e.LeadingClockData.inSyncThresholdCounter >= e.LeadingClockData.inSyncConditionTimes {
 			return true
@@ -371,8 +372,9 @@ func (e *EventHandler) inSyncCondition(cfgName string) bool {
 		e.LeadingClockData.inSyncThresholdCounter = 0
 	}
 
-	glog.Info("sync condition not reached: offset ", worstDpllOffset, " count ",
+	glog.Info("sync condition not reached: worst offset ", worstOffset, " count ",
 		e.LeadingClockData.inSyncThresholdCounter, " out of ", e.LeadingClockData.inSyncConditionTimes)
+
 	return false
 }
 
@@ -421,7 +423,11 @@ func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 					continue
 				}
 				if worstOffset == FaultyPhaseOffset {
-					worstOffset = dd.Offset
+					if dd.IFace == e.clkSyncState[cfgName].leadingIFace {
+						worstOffset = int64(d.window.Mean())
+					} else {
+						worstOffset = dd.Offset
+					}
 				} else {
 					if math.Abs(float64(dd.Offset)) > math.Abs(float64(worstOffset)) {
 						worstOffset = dd.Offset
