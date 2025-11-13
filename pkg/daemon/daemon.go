@@ -770,7 +770,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ptp4lProcessName {
 			// Skip PMC creation for controlled profiles
-			if controllingProfile, isControlled := (*nodeProfile).PtpSettings["controllingProfile"]; isControlled && controllingProfile != "" && profileClockType == TBC {
+			if controllingProfile, isControlled := (*nodeProfile).PtpSettings["controllingProfile"]; isControlled && controllingProfile != "" {
 				// See DownstreamIWF
 				glog.Infof("Skipping PMC monitoring for controlled profile %s", *nodeProfile.Name)
 			} else {

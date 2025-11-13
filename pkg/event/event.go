@@ -228,8 +228,10 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		frequencyTraceable: false,
 		ReduceLog:          true,
 		LeadingClockData: &LeadingClockParams{
-			downstreamTimeProperties: &protocol.TimePropertiesDS{},
+			upstreamParentDataSet:    &protocol.ParentDataSet{},
+			upstreamTimeProperties:   &protocol.TimePropertiesDS{},
 			downstreamParentDataSet:  &protocol.ParentDataSet{},
+			downstreamTimeProperties: &protocol.TimePropertiesDS{},
 		},
 		portRole: map[string]map[string]*parser.PTPEvent{},
 	}
