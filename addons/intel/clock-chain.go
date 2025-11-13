@@ -128,7 +128,7 @@ func (c *ClockChain) resolveInterconnections(opts PhaseInputsProvider, nodeProfi
 		if err != nil {
 			return nil, err
 		}
-		glog.Infof("card: %%v", card)
+		glog.Infof("card: %+v", card)
 		if !card.GnssInput && card.UpstreamPort == "" {
 			externalDelay := card.Input.DelayPs
 			connector := card.Input.Connector

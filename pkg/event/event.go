@@ -620,17 +620,7 @@ connect:
 					return
 				case <-classTicker.C: // send clock class event 60 secs interval
 					if cfgName != "" {
-						clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), cfgName, e.clockClass)
-						if e.stdoutToSocket {
-							if c != nil {
-								_, err := c.Write([]byte(clockClassOut))
-								if err != nil {
-									glog.Errorf("failed to write class change event %s", err.Error())
-								}
-							} else {
-								glog.Errorf("failed to write class change event, connection is nil")
-							}
-						}
+						utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
 					}
 				}
 			}
@@ -1057,7 +1047,7 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 		glog.Infof("updated clock class for last clock class %d to %d with clock accuracy %d", clk.clockClass, clockClass, clockAccuracy)
 		e.clockClass = clockClass
 		e.clockAccuracy = clockAccuracy
-		clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
+		clockClassOut := utils.GetClockClassLogMessage(PTP4lProcessName, clk.cfgName, clockClass)
 		if e.stdoutToSocket {
 			if c != nil {
 				_, err := c.Write([]byte(clockClassOut))
