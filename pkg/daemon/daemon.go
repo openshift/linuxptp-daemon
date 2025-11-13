@@ -770,19 +770,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ptp4lProcessName {
 			// Skip PMC creation for controlled profiles
-			if controllingProfile, isControlled := (*nodeProfile).PtpSettings["controllingProfile"]; isControlled && controllingProfile != "" {
+			if controllingProfile, isControlled := (*nodeProfile).PtpSettings["controllingProfile"]; isControlled && controllingProfile != "" && profileClockType == TBC {
+				// See DownstreamIWF
 				glog.Infof("Skipping PMC monitoring for controlled profile %s", *nodeProfile.Name)
 			} else {
-				controlledConfigs := make([]string, 0)
-				if controlledConfigFile != "" {
-					controlledConfigs = append(controlledConfigs, controlledConfigFile)
-				}
-
 				pmcClockType, clockTypeFound := (*nodeProfile).PtpSettings["clockType"]
 				if !clockTypeFound {
 					pmcClockType = string(clockType)
 				}
-				pmcProcess := NewPMCProcess(runID, dn.processManager.ptpEventHandler, pmcClockType, controlledConfigs)
+				pmcProcess := NewPMCProcess(runID, dn.processManager.ptpEventHandler, pmcClockType)
 				pmcProcess.CmdInit()
 				// TODO addScheduling
 				dprocess.depProcess = append(dprocess.depProcess, pmcProcess)
