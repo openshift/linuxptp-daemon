@@ -143,10 +143,6 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				}
 			}
 			if e810Opts.PhaseInputs != nil {
-				if unitTest {
-					// Mock clock chain DPLL pins in unit test
-					clockChain.DpllPins = DpllPins
-				}
 				clockChain, err = InitClockChain(e810Opts, nodeProfile)
 				if err != nil {
 					return err
