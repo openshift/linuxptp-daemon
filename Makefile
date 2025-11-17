@@ -1,3 +1,9 @@
+# Check if .env file exists and include it
+ifneq (,$(wildcard ./.env))
+    include ./.env
+    export
+endif
+
 IMAGE_NAME ?= linuxptp-daemon-image
 IMAGE_TAG_BASE ?= ghcr.io/k8snetworkplumbingwg/$(IMAGE_NAME)
 VERSION ?=latest
