@@ -23,7 +23,7 @@ fmt:
 	./hack/gofmt.sh
 
 test:
-	SKIP_GNSS_MONITORING=1 go test ./... --tags=unittests -coverprofile=cover.out
+	SKIP_GNSS_MONITORING=1 go test ./... --tags=unittests -coverprofile=coverage.out
 
 lint:
 	golangci-lint run
