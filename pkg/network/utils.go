@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -72,33 +73,17 @@ func DiscoverPTPDevices() ([]string, error) {
 		}
 
 		if !netParseEthtoolTimeStampFeature(&out) {
+			glog.Infof("Skipping NIC %v as it does not support HW timestamping", dev.Name)
 			continue
 		}
 
-		link, err := os.Readlink(fmt.Sprintf("/sys/class/net/%s", dev.Name))
-		if err != nil {
-			glog.Infof("could not grab NIC PCI address for %v: %v", dev.Name, err)
-			continue
-		}
-
-		var PCIAddr string
-		pathSegments := strings.Split(link, "/")
-		if len(pathSegments)-3 <= 0 {
-			glog.Infof("unexpected sysfs address for %v: %v", dev.Name, out.String())
-			continue
-		}
-
-		// sysfs address for N3000 looks like: ../../devices/pci0000:85/0000:85:00.0/0000:86:00.0/0000:87:10.0/0000:8a:00.1/net/eth1
-		// sysfs address looks like: /sys/devices/pci0000:17/0000:17:02.0/0000:19:00.5/net/eno1
-		PCIAddr = pathSegments[len(pathSegments)-3]
-
-		if _, err := os.Stat(fmt.Sprintf("/sys/bus/pci/devices/%s", PCIAddr)); os.IsNotExist(err) {
-			glog.Infof("unexpected device address for device name %s PCI %s: %v", dev.Name, PCIAddr, err)
+		if dev.PCIAddress == nil {
+			glog.Warningf("Skipping NIC %v as it does not have a PCI address", dev.Name)
 			continue
 		}
 
 		// If the physfn doesn't exist this means the interface is not a virtual function so we ca add it to the list
-		if _, err := os.Stat(fmt.Sprintf("/sys/bus/pci/devices/%s/physfn", PCIAddr)); os.IsNotExist(err) {
+		if _, err = os.Stat(fmt.Sprintf("/sys/bus/pci/devices/%s/physfn", *dev.PCIAddress)); os.IsNotExist(err) {
 			nics = append(nics, dev.Name)
 		}
 	}
@@ -118,29 +103,37 @@ func GetPhcId(iface string) string {
 
 func getPTPClockIndex(iface string) (int, error) {
 	if !ethtoolInstalled() {
-		return 0, fmt.Errorf("discoverDevices(): ethtool not installed. Cannot grab NIC capabilities")
+		return 0, fmt.Errorf("discoverDevices(): ethtool not installed")
 	}
-
-	// Command to get PTP clock info
-	cmd := exec.Command("ethtool", "-T", iface)
-
-	// Execute the command and capture output
-	out, err := cmd.CombinedOutput()
+	out, err := exec.Command("ethtool", "-T", iface).CombinedOutput()
 	if err != nil {
 		return -1, fmt.Errorf("failed to run ethtool: %w", err)
 	}
 
-	// Regex to extract clock index
-	re := regexp.MustCompile(`PTP Hardware Clock: (\d+)`)
-	match := re.FindSubmatch(out)
-	if match == nil {
-		return -1, fmt.Errorf("no PTP hardware clock found on %s", iface)
+	// Try classic format
+	if m := regexp.MustCompile(`PTP Hardware Clock:\s*(\d+)`).FindSubmatch(out); m != nil {
+		var idx int
+		_, err = fmt.Sscan(string(m[1]), &idx)
+		return idx, err
 	}
-	// Convert captured index string to integer
-	var clockIndex int
-	_, err = fmt.Sscanln(string(match[1]), &clockIndex)
-	if err != nil {
-		return 0, err
+
+	// Try provider index format (seen in some containers)
+	if m := regexp.MustCompile(`Hardware timestamp provider index:\s*(\d+)`).FindSubmatch(out); m != nil {
+		var idx int
+		_, err = fmt.Sscan(string(m[1]), &idx)
+		return idx, err
 	}
-	return clockIndex, nil
+
+	// Sysfs fallback
+	matches, err := filepath.Glob(fmt.Sprintf("/sys/class/net/%s/ptp/ptp*", iface))
+	if err == nil && len(matches) > 0 {
+		base := filepath.Base(matches[0]) // e.g., "ptp0"
+		if strings.HasPrefix(base, "ptp") {
+			var idx int
+			_, err = fmt.Sscan(strings.TrimPrefix(base, "ptp"), &idx)
+			return idx, err
+		}
+	}
+
+	return -1, fmt.Errorf("no PTP clock index found for %s", iface)
 }

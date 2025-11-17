@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -16,6 +17,7 @@ type Data struct {
 	Details     DDetails    // array of iface and  offset
 	State       PTPState    // have the worst state here
 	logData     string      // iface that is connected to GNSS
+	window      utils.Window
 }
 
 // DataMetrics ...
@@ -89,7 +91,9 @@ func (d *Data) AddEvent(event EventChannel) {
 				dd.logData = event.GetLogData()
 				off, fnd := event.Values[OFFSET]
 				if fnd {
-					dd.Offset = off.(int64)
+					offset := off.(int64)
+					dd.Offset = offset
+					d.window.Insert(float64(offset))
 				}
 
 			} else {

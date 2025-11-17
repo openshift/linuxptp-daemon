@@ -20,7 +20,7 @@ import (
 
 var (
 	// PorotoVersionRegEx ...
-	PorotoVersionRegEx = regexp.MustCompile(`PROTVER=+(\d+)`)
+	PorotoVersionRegEx = regexp.MustCompile(`PROTVER=+(\d+\.\d+)`)
 	// AntennaStatusRegEx ...
 	AntennaStatusRegEx = regexp.MustCompile(`antStatus[[:space:]]+(\d+)[[:space:]]antPower[[:space:]]+(\d+)`)
 	// NavStatusRegEx ...
@@ -57,6 +57,14 @@ type UBlox struct {
 	buffermutex  sync.Mutex
 }
 
+// protocolVersion returns detected protocol version or the default.
+func (u *UBlox) protocolVersion() string {
+	if u != nil && u.protoVersion != nil && *u.protoVersion != "" {
+		return *u.protoVersion
+	}
+	return ubloxProtoVersion
+}
+
 // NewUblox ... create new Ublox
 func NewUblox() (*UBlox, error) {
 	u := &UBlox{
@@ -65,6 +73,11 @@ func NewUblox() (*UBlox, error) {
 		bufferlen:    0,
 	}
 	u.setStatus(UBXTOOL_NEW)
+	if protoVersion, err := u.MonVersion(CMD_PROTO_VERSION, PorotoVersionRegEx); err == nil && protoVersion != nil && *protoVersion != "" {
+		u.protoVersion = protoVersion
+	} else {
+		glog.Warningf("UBlox protocol version detection failed, using default %s: %v", u.protocolVersion(), err)
+	}
 	u.EnableNMEA()
 	u.DisableBinary()
 
@@ -227,8 +240,7 @@ func (u *UBlox) UbloxPollInit() {
 		u.buffer = nil
 		u.buffermutex.Unlock()
 		wait := 1000000000
-		args := []string{"-u", UBXCommand, "-t", "-P", "29.20", "-w", fmt.Sprintf("%d", wait)}
-		//python -u /usr/local/bin/ubxtool -t -p NAV-CLOCK -p NAV-STATUS -P 29.20 -w 10
+		args := []string{"-u", UBXCommand, "-t", "-P", u.protocolVersion(), "-w", fmt.Sprintf("%d", wait)}
 		u.cmd = exec.Command("python3", args...)
 		stdoutreader, _ := u.cmd.StdoutPipe()
 		u.reader = bufio.NewReader(stdoutreader)
@@ -299,7 +311,7 @@ func (u *UBlox) UbloxPollStop() {
 // DisableBinary ...  disable binary
 func (u *UBlox) DisableBinary() {
 	// Enable binary protocol
-	args := []string{"-d", "BINARY", "-P", "29.20"}
+	args := []string{"-d", "BINARY", "-P", u.protocolVersion()}
 	if err := exec.Command(UBXCommand, args...).Run(); err != nil {
 		glog.Errorf("error executing ubxtool command: %s", err)
 	} else {
@@ -310,7 +322,7 @@ func (u *UBlox) DisableBinary() {
 // EnableNMEA ... enable nmea
 func (u *UBlox) EnableNMEA() {
 	// Enable binary protocol
-	args := []string{"-e", "NMEA", "-P", "29.20"}
+	args := []string{"-e", "NMEA", "-P", u.protocolVersion()}
 	if err := exec.Command(UBXCommand, args...).Run(); err != nil {
 		glog.Errorf("error executing ubxtool command: %s", err)
 	} else {

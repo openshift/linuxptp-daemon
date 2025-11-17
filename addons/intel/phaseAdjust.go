@@ -129,8 +129,8 @@ func sendDelayCompensation(comp *[]delayCompensation, DpllPins []*dpll.PinInfo) 
 }
 
 func addClockID(iface string, nodeProfile *ptpv1.PtpProfile) (*string, error) {
-	dpllClockIdStr := fmt.Sprintf("%s[%s]", "clockId", iface)
-	clockID, found := (*nodeProfile).PtpSettings[dpllClockIdStr]
+	dpllClockIDStr := fmt.Sprintf("clockId[%s]", iface)
+	clockID, found := (*nodeProfile).PtpSettings[dpllClockIDStr]
 	if !found {
 		return nil, fmt.Errorf("plugin E810 error: can't find clock ID for interface %s - are all pins configured?", iface)
 	}
