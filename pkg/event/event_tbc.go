@@ -54,17 +54,19 @@ type LeadingClockParams struct {
 	upstreamTimeProperties        *protocol.TimePropertiesDS
 	upstreamParentDataSet         *protocol.ParentDataSet
 	upstreamCurrentDSStepsRemoved uint16
-	downstreamTimeProperties      *protocol.TimePropertiesDS
-	downstreamParentDataSet       *protocol.ParentDataSet
-	leadingInterface              string
-	controlledPortsConfig         string
-	inSyncConditionThreshold      int
-	inSyncConditionTimes          int
-	toFreeRunThreshold            int
-	MaxInSpecOffset               uint64
-	lastInSpec                    bool
-	inSyncThresholdCounter        int
-	clockID                       string
+
+	downstreamTimeProperties *protocol.TimePropertiesDS
+	downstreamParentDataSet  *protocol.ParentDataSet
+
+	leadingInterface         string
+	controlledPortsConfig    string
+	inSyncConditionThreshold int
+	inSyncConditionTimes     int
+	toFreeRunThreshold       int
+	MaxInSpecOffset          uint64
+	lastInSpec               bool
+	inSyncThresholdCounter   int
+	clockID                  string
 }
 
 func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncState {
@@ -75,7 +77,6 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 	// For External GM data announces in the locked state, update whenever any of the
 	// information elements change
 	updateDownstreamData := false
-	leadingTS2phcActive := false
 
 	leadingInterface := e.getLeadingInterfaceBC()
 	if leadingInterface == LEADING_INTERFACE_UNKNOWN {
@@ -102,30 +103,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 			case DPLL:
 				dpllState = d.State
 			case TS2PHCProcessName:
-				if event.IFace == leadingInterface {
-					leadingTS2phcActive = true
-				}
 				ts2phcState = d.State
-			case PTP4lProcessName:
-
-				if leadingTS2phcActive && event.IFace == leadingInterface {
-					// In T-BC configuration, leading card PHC is either updated by ts2phc, or by ptp4l
-					// During holdover, when ts2phc is active, ptp4l is not updating the PHC
-					// During the normal operation, ptp4l is updating the PHC, and ts2phc events stop
-					// However, the data with the processName "ts2phc" is still present in the data map
-					// If taken into account, it will contribute an outdated information into the decision making
-					// The construct below detects the transition from ts2phc to ptp4l and invalidates the ts2phc data
-					for _, tsphcData := range data {
-						if tsphcData.ProcessName == TS2PHCProcessName {
-							for _, tsphcDetail := range tsphcData.Details {
-								if tsphcDetail.time < time.Now().Unix()-StaleEventAfter {
-									tsphcDetail.Offset = 0
-									leadingTS2phcActive = false
-								}
-							}
-						}
-					}
-				}
 			}
 		}
 	} else {
@@ -162,15 +140,13 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 			e.LeadingClockData.lastInSpec = true
 			updateDownstreamData = true
 		} else {
-			// upstream data changed? If changed, update downstream data
-			if e.LeadingClockData.upstreamParentDataSet != nil && e.LeadingClockData.upstreamTimeProperties != nil &&
-				e.LeadingClockData.downstreamParentDataSet != nil && e.LeadingClockData.downstreamTimeProperties != nil {
-				if *e.LeadingClockData.upstreamParentDataSet != *e.LeadingClockData.downstreamParentDataSet ||
-					*e.LeadingClockData.upstreamTimeProperties != *e.LeadingClockData.downstreamTimeProperties {
-					e.LeadingClockData.downstreamParentDataSet = e.LeadingClockData.upstreamParentDataSet
-					e.LeadingClockData.downstreamTimeProperties = e.LeadingClockData.upstreamTimeProperties
-					updateDownstreamData = true
-				}
+			if *e.LeadingClockData.upstreamTimeProperties != *e.LeadingClockData.downstreamTimeProperties {
+				e.LeadingClockData.downstreamTimeProperties = e.LeadingClockData.upstreamTimeProperties
+				updateDownstreamData = true
+			}
+			if *e.LeadingClockData.upstreamParentDataSet != *e.LeadingClockData.downstreamParentDataSet {
+				e.LeadingClockData.downstreamParentDataSet = e.LeadingClockData.upstreamParentDataSet
+				updateDownstreamData = true
 			}
 		}
 	case PTP_HOLDOVER:
@@ -227,11 +203,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 	}
 
 	if updateDownstreamData {
-		if gSycState.state == PTP_LOCKED {
-			go e.downstreamAnnounceIWF(cfgName, c)
-		} else {
-			go e.announceLocalData(cfgName, c)
-		}
+		go e.updateDownstreamData(cfgName, c)
 	}
 	// this will reduce log noise and prints 1 per sec
 	logTime := time.Now().Unix()
@@ -245,6 +217,50 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 			dpllState, ts2phcState, e.clkSyncState[cfgName].state, e.clkSyncState[cfgName].clockOffset)
 	}
 	return rclockSyncState
+}
+
+// UpdateUpstreamData updates the upstream time properties, parent data set, and current data set
+// for the leading clock and triggers downstream data updates when changes are detected.
+func (e *EventHandler) UpdateUpstreamData(cfgName string, c net.Conn, data pmc.ParentTimeCurrentDS) {
+	updateDownstream := false
+	if *e.LeadingClockData.upstreamTimeProperties != data.TimePropertiesDS {
+		e.LeadingClockData.upstreamTimeProperties = &data.TimePropertiesDS
+		updateDownstream = true
+	}
+	if *e.LeadingClockData.upstreamParentDataSet != data.ParentDataSet {
+		e.LeadingClockData.upstreamParentDataSet = &data.ParentDataSet
+		updateDownstream = true
+	}
+	if e.LeadingClockData.upstreamCurrentDSStepsRemoved != data.CurrentDS.StepsRemoved {
+		e.LeadingClockData.upstreamCurrentDSStepsRemoved = data.CurrentDS.StepsRemoved
+		updateDownstream = true
+	}
+	if _, ok := e.clkSyncState[cfgName]; ok && updateDownstream {
+		e.updateDownstreamData(cfgName, c)
+	}
+}
+
+func (e *EventHandler) updateDownstreamData(cfgName string, c net.Conn) {
+	if data, ok := e.clkSyncState[cfgName]; !ok {
+		return
+	} else if data.state == PTP_LOCKED {
+		go e.downstreamAnnounceIWF(
+			cfgName, c,
+			*e.LeadingClockData.upstreamParentDataSet,
+			*e.LeadingClockData.upstreamTimeProperties,
+			e.LeadingClockData.upstreamCurrentDSStepsRemoved,
+		)
+	} else {
+		go e.announceLocalData(cfgName, c)
+	}
+}
+
+// EmitClockClass emits the current clock class and accuracy for the specified configuration.
+func (e *EventHandler) EmitClockClass(cfgName string, c net.Conn) {
+	if _, ok := e.clkSyncState[cfgName]; !ok {
+		return
+	}
+	e.AnnounceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
 }
 
 // AnnounceClockClass announces clock class changes to the event handler and writes to the connection.
@@ -291,13 +307,13 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 		gs.TimePropertiesDS.FrequencyTraceable = false
 		gs.TimePropertiesDS.CurrentUtcOffset = int32(leap.GetUtcOffset())
 	case fbprotocol.ClockClass(165), fbprotocol.ClockClass(135):
-		if e.LeadingClockData.upstreamTimeProperties == nil {
+		if e.LeadingClockData.downstreamTimeProperties == nil {
 			glog.Info("Pending upstream clock data acquisition, skip updates")
 			return
 		}
-		gs.TimePropertiesDS.CurrentUtcOffsetValid = e.LeadingClockData.upstreamTimeProperties.CurrentUtcOffsetValid
-		gs.TimePropertiesDS.Leap59 = e.LeadingClockData.upstreamTimeProperties.Leap59
-		gs.TimePropertiesDS.Leap61 = e.LeadingClockData.upstreamTimeProperties.Leap61
+		gs.TimePropertiesDS.CurrentUtcOffsetValid = e.LeadingClockData.downstreamTimeProperties.CurrentUtcOffsetValid
+		gs.TimePropertiesDS.Leap59 = e.LeadingClockData.downstreamTimeProperties.Leap59
+		gs.TimePropertiesDS.Leap61 = e.LeadingClockData.downstreamTimeProperties.Leap61
 		gs.TimePropertiesDS.PtpTimescale = true
 		if e.clkSyncState[cfgName].clockClass == fbprotocol.ClockClass(135) {
 			gs.TimePropertiesDS.TimeTraceable = true
@@ -306,46 +322,30 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 		}
 		// TODO: get the real freq traceability status when implemented
 		gs.TimePropertiesDS.FrequencyTraceable = false
-		gs.TimePropertiesDS.CurrentUtcOffset = e.LeadingClockData.upstreamTimeProperties.CurrentUtcOffset
+		gs.TimePropertiesDS.CurrentUtcOffset = e.LeadingClockData.downstreamTimeProperties.CurrentUtcOffset
 
 	default:
 	}
 	go pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs)
 }
 
-// this function runs in a goroutine
-func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
+// this function runs in a goroutine should only be called when locked
+func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn, upstreamParentDataSet protocol.ParentDataSet, upstreamTimeProperties protocol.TimePropertiesDS, stepsRemoved uint16) {
 	ptpCfgName := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
 	glog.Infof("downstreamAnnounceIWF: %s", ptpCfgName)
-	results, err := pmc.RunPMCExpGetParentTimeAndCurrentDataSets(ptpCfgName)
-	if err != nil {
-		glog.Error(err)
-	}
-	e.DownstreamAnnounceIWF(cfgName, c, results)
-}
-
-// DownstreamAnnounceIWF announces downstream IWF (Interworking Function) updates.
-func (e *EventHandler) DownstreamAnnounceIWF(
-	cfgName string,
-	c net.Conn,
-	datasets pmc.ParentTimeCurrentDS,
-) {
-	e.LeadingClockData.upstreamTimeProperties = &datasets.TimePropertiesDS
-	e.LeadingClockData.upstreamParentDataSet = &datasets.ParentDataSet
-	e.LeadingClockData.upstreamCurrentDSStepsRemoved = datasets.CurrentDS.StepsRemoved
 
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
-			ClockClass:              fbprotocol.ClockClass(datasets.ParentDataSet.GrandmasterClockClass),
-			ClockAccuracy:           fbprotocol.ClockAccuracy(datasets.ParentDataSet.GrandmasterClockAccuracy),
-			OffsetScaledLogVariance: datasets.ParentDataSet.GrandmasterOffsetScaledLogVariance,
+			ClockClass:              fbprotocol.ClockClass(upstreamParentDataSet.GrandmasterClockClass),
+			ClockAccuracy:           fbprotocol.ClockAccuracy(upstreamParentDataSet.GrandmasterClockAccuracy),
+			OffsetScaledLogVariance: upstreamParentDataSet.GrandmasterOffsetScaledLogVariance,
 		},
-		TimePropertiesDS: datasets.TimePropertiesDS,
+		TimePropertiesDS: upstreamTimeProperties,
 	}
 	es := protocol.ExternalGrandmasterProperties{
-		GrandmasterIdentity: datasets.ParentDataSet.GrandmasterIdentity,
+		GrandmasterIdentity: upstreamParentDataSet.GrandmasterIdentity,
 		// stepsRemoved at this point is already incremented, representing the current clock position
-		StepsRemoved: datasets.CurrentDS.StepsRemoved,
+		StepsRemoved: stepsRemoved,
 	}
 	glog.Infof("%++v", es)
 	e.AnnounceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName, c)
@@ -356,6 +356,11 @@ func (e *EventHandler) DownstreamAnnounceIWF(
 		glog.Error(err)
 	}
 	glog.Infof("%++v", es)
+
+	// As we gave updated the downstream lets set the datasets
+	e.LeadingClockData.downstreamParentDataSet = &upstreamParentDataSet
+	e.LeadingClockData.downstreamTimeProperties = &upstreamTimeProperties
+	e.LeadingClockData.upstreamCurrentDSStepsRemoved = stepsRemoved
 }
 
 func (e *EventHandler) inSyncCondition(cfgName string) bool {
