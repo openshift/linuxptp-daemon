@@ -77,7 +77,6 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 	// For External GM data announces in the locked state, update whenever any of the
 	// information elements change
 	updateDownstreamData := false
-	leadingTS2phcActive := false
 
 	leadingInterface := e.getLeadingInterfaceBC()
 	if leadingInterface == LEADING_INTERFACE_UNKNOWN {
@@ -104,30 +103,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 			case DPLL:
 				dpllState = d.State
 			case TS2PHCProcessName:
-				if event.IFace == leadingInterface {
-					leadingTS2phcActive = true
-				}
 				ts2phcState = d.State
-			case PTP4lProcessName:
-
-				if leadingTS2phcActive && event.IFace == leadingInterface {
-					// In T-BC configuration, leading card PHC is either updated by ts2phc, or by ptp4l
-					// During holdover, when ts2phc is active, ptp4l is not updating the PHC
-					// During the normal operation, ptp4l is updating the PHC, and ts2phc events stop
-					// However, the data with the processName "ts2phc" is still present in the data map
-					// If taken into account, it will contribute an outdated information into the decision making
-					// The construct below detects the transition from ts2phc to ptp4l and invalidates the ts2phc data
-					for _, tsphcData := range data {
-						if tsphcData.ProcessName == TS2PHCProcessName {
-							for _, tsphcDetail := range tsphcData.Details {
-								if tsphcDetail.time < time.Now().Unix()-StaleEventAfter {
-									tsphcDetail.Offset = 0
-									leadingTS2phcActive = false
-								}
-							}
-						}
-					}
-				}
 			}
 		}
 	} else {
