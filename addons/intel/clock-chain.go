@@ -3,7 +3,6 @@ package intel
 import (
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strconv"
 	"time"
@@ -14,27 +13,6 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
-// FileSystemInterface defines the interface for filesystem operations to enable mocking
-type FileSystemInterface interface {
-	ReadDir(dirname string) ([]os.DirEntry, error)
-	WriteFile(filename string, data []byte, perm os.FileMode) error
-}
-
-// RealFileSystem implements FileSystemInterface using real OS operations
-type RealFileSystem struct{}
-
-// ReadDir reads the contents of the directory specified by dirname
-func (fs *RealFileSystem) ReadDir(dirname string) ([]os.DirEntry, error) {
-	return os.ReadDir(dirname)
-}
-
-// WriteFile writes the data to the file specified by filename
-func (fs *RealFileSystem) WriteFile(filename string, data []byte, perm os.FileMode) error {
-	return os.WriteFile(filename, data, perm)
-}
-
-// Default filesystem implementation
-var filesystem FileSystemInterface = &RealFileSystem{}
 
 type ClockChainType int
 type ClockChain struct {
