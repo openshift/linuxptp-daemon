@@ -69,6 +69,15 @@ type LeadingClockParams struct {
 	clockID                  string
 }
 
+func newLeadingClockParams() *LeadingClockParams {
+	return &LeadingClockParams{
+		upstreamParentDataSet:    &protocol.ParentDataSet{},
+		upstreamTimeProperties:   &protocol.TimePropertiesDS{},
+		downstreamParentDataSet:  &protocol.ParentDataSet{},
+		downstreamTimeProperties: &protocol.TimePropertiesDS{},
+	}
+}
+
 func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncState {
 	cfgName := event.CfgName
 	dpllState := PTP_NOTSET
