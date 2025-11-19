@@ -22,14 +22,13 @@ const (
 )
 
 // NewPMCProcess creates a new PMC process instance for monitoring PTP events.
-func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string, controlledConfigs []string) *PMCProcess {
+func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string) *PMCProcess {
 	return &PMCProcess{
 		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
 		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
 		monitorParentData: true,
 		eventHandler:      eventHandler,
 		clockType:         clockType,
-		controlledConfigs: controlledConfigs,
 	}
 }
 
@@ -47,7 +46,6 @@ type PMCProcess struct {
 	c                 net.Conn
 	messageTag        string
 	eventHandler      *event.EventHandler
-	controlledConfigs []string
 }
 
 // Name returns the process name.
@@ -110,20 +108,7 @@ func (pmc *PMCProcess) EmitClockClassLogs(c net.Conn) {
 	if c != nil {
 		pmc.c = c
 	}
-	pmc.eventHandler.AnnounceClockClass(
-		fbprotocol.ClockClass(pmc.parentDS.GrandmasterClockClass),
-		fbprotocol.ClockAccuracy(pmc.parentDS.GrandmasterClockAccuracy),
-		pmc.configFileName,
-		pmc.c,
-	)
-	for _, controlledConfig := range pmc.controlledConfigs {
-		pmc.eventHandler.AnnounceClockClass(
-			fbprotocol.ClockClass(pmc.parentDS.GrandmasterClockClass),
-			fbprotocol.ClockAccuracy(pmc.parentDS.GrandmasterClockAccuracy),
-			controlledConfig,
-			pmc.c,
-		)
-	}
+	go pmc.eventHandler.EmitClockClass(pmc.configFileName, pmc.c)
 }
 
 // Poll polls the parent data set from PMC.
@@ -205,7 +190,7 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 					// maybe we should attempt a poll here?
 					continue
 				}
-				pmc.handleParentDS(*processedMessage)
+				go pmc.handleParentDS(*processedMessage)
 			}
 		}
 	}
@@ -216,26 +201,19 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 	oldParentDS := pmc.parentDS
 	pmc.parentDS = &parentDS
 
-	if oldParentDS == nil || oldParentDS.GrandmasterClockClass != parentDS.GrandmasterClockClass {
-		pmc.eventHandler.AnnounceClockClass(
-			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
-			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockAccuracy),
-			pmc.configFileName,
-			pmc.c,
-		)
-	}
-
 	if pmc.clockType == TBC {
 		data, pmcErr := pmcPkg.RunPMCExpGetTimeAndCurrentDataSets(pmc.configFileName)
 		if pmcErr != nil {
 			glog.Warningf("Failed to fetch TIME_PROPERTIES_DATA_SET and CURRENT_DATA_SET")
 		}
 		data.ParentDataSet = parentDS
-
-		pmc.eventHandler.DownstreamAnnounceIWF(pmc.configFileName, pmc.c, data)
-		for _, controlledConfig := range pmc.controlledConfigs {
-			pmc.eventHandler.DownstreamAnnounceIWF(controlledConfig, pmc.c, data)
-		}
+		pmc.eventHandler.UpdateUpstreamData(pmc.configFileName, pmc.c, data)
+	} else if oldParentDS == nil || oldParentDS.GrandmasterClockClass != parentDS.GrandmasterClockClass {
+		go pmc.eventHandler.AnnounceClockClass(
+			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
+			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockClass),
+			pmc.configFileName, pmc.c,
+		)
 	}
 }
 
