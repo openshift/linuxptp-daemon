@@ -97,7 +97,7 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 			// Setup clockID (prefer ice modue clock ID for e830)
 			clockIDs := make(map[string]uint64)
 			for _, device := range allDevices {
-				clockID := getClockIDE810(device)
+				clockID := getPCIClockID(device)
 				clockIDs[device] = clockID
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				nodeProfile.PtpSettings[dpllClockIDStr] = strconv.FormatUint(clockID, 10)

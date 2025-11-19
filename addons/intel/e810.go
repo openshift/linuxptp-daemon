@@ -1,7 +1,6 @@
 package intel
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -99,7 +98,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			for device, pins := range e810Opts.DevicePins {
 				dpllClockIdStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				if !unitTest {
-					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getClockIDE810(device), 10)
+					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getPCIClockID(device), 10)
 					for pin, value := range pins {
 						deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
 						phcs, err := os.ReadDir(deviceDir)
@@ -138,7 +137,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					break
 				}
 				for pinProperty, value := range properties {
-					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getClockIDE810(iface), 10), pinProperty}, ".")
+					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getPCIClockID(iface), 10), pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
 				}
 			}
@@ -247,37 +246,6 @@ func E810(name string) (*plugin.Plugin, *interface{}) {
 	}
 	var iface interface{} = &pluginData
 	return &_plugin, &iface
-}
-
-func getClockIDE810(device string) uint64 {
-	const (
-		PCI_EXT_CAP_ID_DSN       = 3
-		PCI_CFG_SPACE_SIZE       = 256
-		PCI_EXT_CAP_NEXT_OFFSET  = 2
-		PCI_EXT_CAP_OFFSET_SHIFT = 4
-		PCI_EXT_CAP_DATA_OFFSET  = 4
-	)
-	b, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/device/config", device))
-	if err != nil {
-		glog.Error(err)
-		return 0
-	}
-	// Extended capability space starts right on PCI_CFG_SPACE
-	var offset uint16 = PCI_CFG_SPACE_SIZE
-	var id uint16
-	for {
-		id = binary.LittleEndian.Uint16(b[offset:])
-		if id != PCI_EXT_CAP_ID_DSN {
-			if id == 0 {
-				glog.Errorf("can't find DSN for device %s", device)
-				return 0
-			}
-			offset = binary.LittleEndian.Uint16(b[offset+PCI_EXT_CAP_NEXT_OFFSET:]) >> PCI_EXT_CAP_OFFSET_SHIFT
-			continue
-		}
-		break
-	}
-	return binary.LittleEndian.Uint64(b[offset+PCI_EXT_CAP_DATA_OFFSET:])
 }
 
 func loadPins(path string) (*[]dpll_netlink.PinInfo, error) {
