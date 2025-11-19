@@ -227,13 +227,8 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		outOfSpec:          false,
 		frequencyTraceable: false,
 		ReduceLog:          true,
-		LeadingClockData: &LeadingClockParams{
-			upstreamParentDataSet:    &protocol.ParentDataSet{},
-			upstreamTimeProperties:   &protocol.TimePropertiesDS{},
-			downstreamParentDataSet:  &protocol.ParentDataSet{},
-			downstreamTimeProperties: &protocol.TimePropertiesDS{},
-		},
-		portRole: map[string]map[string]*parser.PTPEvent{},
+		LeadingClockData:   newLeadingClockParams(),
+		portRole:           map[string]map[string]*parser.PTPEvent{},
 	}
 
 	StateRegisterer = NewStateNotifier()
@@ -650,7 +645,7 @@ connect:
 			// replace ts2phc logs here
 			if event.Reset { // clean up
 				debug.ClearState() // clear any state data used for debug
-				e.LeadingClockData = &LeadingClockParams{}
+				e.LeadingClockData = newLeadingClockParams()
 				if event.ProcessName == TS2PHC {
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName) // this will delete all index
