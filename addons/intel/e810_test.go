@@ -2,6 +2,7 @@ package intel
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"testing"
@@ -110,7 +111,8 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 	// Verify that clockChain was initialized (SetPinDefaults is called as part of InitClockChain)
 	// If SetPinDefaults wasn't called, InitClockChain would have failed
 	assert.NotNil(t, clockChain, "clockChain should be initialized")
-	assert.Equal(t, ClockTypeTBC, clockChain.Type, "clockChain should be T-BC type")
+	ccData := clockChain.(*ClockChain)
+	assert.Equal(t, ClockTypeTBC, ccData.Type, "clockChain should be T-BC type")
 	assert.NotNil(t, mockPinSet.commands, "Ensure clockChain.SetPinDefaults was called")
 
 	// Verify all expected filesystem calls were made
@@ -240,6 +242,47 @@ func TestEnableE810Outputs(t *testing.T) {
 			mockFS.VerifyAllCalls(t)
 		})
 	}
+}
+
+func Test_AfterRunPTPCommandE810ClockChain(t *testing.T) {
+	unitTest = true
+	profile, err := loadProfile("./testdata/profile-tgm.yaml")
+	assert.NoError(t, err)
+	p, d := E810("e810")
+
+	err = p.AfterRunPTPCommand(d, profile, "bad command")
+	assert.NoError(t, err)
+
+	mClockChain := &mockClockChain{}
+	clockChain = mClockChain
+	err = p.AfterRunPTPCommand(d, profile, "reset-to-default")
+	assert.NoError(t, err)
+	mClockChain.assertCallCounts(t, 0, 0, 1)
+
+	mClockChain.returnErr = fmt.Errorf("Fake error")
+	err = p.AfterRunPTPCommand(d, profile, "reset-to-default")
+	assert.Error(t, err)
+	mClockChain.assertCallCounts(t, 0, 0, 2)
+
+	mClockChain = &mockClockChain{}
+	clockChain = mClockChain
+	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-entry")
+	assert.NoError(t, err)
+	mClockChain.assertCallCounts(t, 0, 1, 0)
+	mClockChain.returnErr = fmt.Errorf("Fake error")
+	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-entry")
+	assert.Error(t, err)
+	mClockChain.assertCallCounts(t, 0, 2, 0)
+
+	mClockChain = &mockClockChain{}
+	clockChain = mClockChain
+	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-exit")
+	assert.NoError(t, err)
+	mClockChain.assertCallCounts(t, 1, 0, 0)
+	mClockChain.returnErr = fmt.Errorf("Fake error")
+	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-exit")
+	assert.Error(t, err)
+	mClockChain.assertCallCounts(t, 2, 0, 0)
 }
 
 func Test_PopulateHwConfdigE810(t *testing.T) {

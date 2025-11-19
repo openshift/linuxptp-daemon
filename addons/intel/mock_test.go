@@ -1,7 +1,7 @@
 package intel
 
 import (
-	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -41,6 +41,10 @@ type MockFileSystem struct {
 	currentReadDir   int
 	currentWriteFile int
 	currentReadFile  int
+	// Allowed (but not verified) calls and responses
+	allowedReadDir   map[string]ReadDirCall
+	allowedReadFile  map[string]ReadFileCall
+	allowedWriteFile map[string]WriteFileCall
 }
 
 func setupMockFS() (*MockFileSystem, func()) {
@@ -77,6 +81,17 @@ func (m *MockFileSystem) ExpectReadDir(path string, dirs []os.DirEntry, err erro
 	})
 }
 
+func (m *MockFileSystem) AllowReadDir(path string, dirs []os.DirEntry, err error) {
+	if m.allowedReadDir == nil {
+		m.allowedReadDir = make(map[string]ReadDirCall)
+	}
+	m.allowedReadDir[path] = ReadDirCall{
+		expectedPath: path,
+		returnDirs:   dirs,
+		returnError:  err,
+	}
+}
+
 func (m *MockFileSystem) ExpectWriteFile(path string, data []byte, perm os.FileMode, err error) {
 	m.writeFileCalls = append(m.writeFileCalls, WriteFileCall{
 		expectedPath: path,
@@ -84,6 +99,15 @@ func (m *MockFileSystem) ExpectWriteFile(path string, data []byte, perm os.FileM
 		expectedPerm: perm,
 		returnError:  err,
 	})
+}
+
+func (m *MockFileSystem) AllowWriteFile(path string) {
+	if m.allowedWriteFile == nil {
+		m.allowedWriteFile = make(map[string]WriteFileCall)
+	}
+	m.allowedWriteFile[path] = WriteFileCall{
+		expectedPath: path,
+	}
 }
 
 func (m *MockFileSystem) ExpectReadFile(path string, data []byte, err error) {
@@ -94,39 +118,60 @@ func (m *MockFileSystem) ExpectReadFile(path string, data []byte, err error) {
 	})
 }
 
+func (m *MockFileSystem) AllowReadFile(path string, data []byte, err error) {
+	if m.allowedReadFile == nil {
+		m.allowedReadFile = make(map[string]ReadFileCall)
+	}
+	m.allowedReadFile[path] = ReadFileCall{
+		expectedPath: path,
+		returnData:   data,
+		returnError:  err,
+	}
+}
+
 func (m *MockFileSystem) ReadDir(dirname string) ([]os.DirEntry, error) {
+	if allowed, ok := m.allowedReadDir[dirname]; ok {
+		return allowed.returnDirs, allowed.returnError
+	}
 	if m.currentReadDir >= len(m.readDirCalls) {
-		return nil, errors.New("unexpected ReadDir call")
+		return nil, fmt.Errorf("unexpected ReadDir call (%s)", dirname)
 	}
 	call := m.readDirCalls[m.currentReadDir]
 	m.currentReadDir++
 	// Allow wildcard matching - if expectedPath is empty, accept any path
 	if call.expectedPath != "" && call.expectedPath != dirname {
-		return nil, errors.New("ReadDir called with unexpected path")
+		return nil, fmt.Errorf("ReadDir called with unexpected path (%s), was expecting %s", dirname, call.expectedPath)
 	}
 	return call.returnDirs, call.returnError
 }
 
-func (m *MockFileSystem) WriteFile(filename string, _ []byte, _ os.FileMode) error {
+func (m *MockFileSystem) WriteFile(filename string, data []byte, _ os.FileMode) error {
+	if _, ok := m.allowedWriteFile[filename]; ok {
+		m.AllowReadFile(filename, data, nil)
+		return nil
+	}
 	if m.currentWriteFile >= len(m.writeFileCalls) {
-		return errors.New("unexpected WriteFile call")
+		return fmt.Errorf("unexpected WriteFile call (%s)", filename)
 	}
 	call := m.writeFileCalls[m.currentWriteFile]
 	m.currentWriteFile++
 	if call.expectedPath != "" && call.expectedPath != filename {
-		return errors.New("WriteFile called with unexpected path")
+		return fmt.Errorf("WriteFile called with unexpected path (%s), was expecting %s", filename, call.expectedPath)
 	}
 	return call.returnError
 }
 
 func (m *MockFileSystem) ReadFile(filename string) ([]byte, error) {
+	if allowed, ok := m.allowedReadFile[filename]; ok {
+		return allowed.returnData, allowed.returnError
+	}
 	if m.currentReadFile >= len(m.readFileCalls) {
-		return nil, errors.New("Unexpected ReadFile call")
+		return nil, fmt.Errorf("Unexpected ReadFile call (%s)", filename)
 	}
 	call := m.readFileCalls[m.currentReadFile]
 	m.currentReadFile++
 	if call.expectedPath != "" && call.expectedPath != filename {
-		return nil, errors.New("ReadFile called with unexpected filename")
+		return nil, fmt.Errorf("ReadFile called with unexpected filename (%s), was expecting %s", filename, call.expectedPath)
 	}
 	return call.returnData, call.returnError
 }
@@ -159,4 +204,36 @@ func loadProfile(path string) (*ptpv1.PtpProfile, error) {
 		return &ptpv1.PtpProfile{}, err
 	}
 	return &profile, nil
+}
+
+type mockClockChain struct {
+	returnErr             error
+	enterNormalTBCCount   int
+	enterHoldoverTBCCount int
+	setPinDefaultsCount   int
+}
+
+func (m *mockClockChain) EnterNormalTBC() error {
+	m.enterNormalTBCCount++
+	return m.returnErr
+}
+
+func (m *mockClockChain) EnterHoldoverTBC() error {
+	m.enterHoldoverTBCCount++
+	return m.returnErr
+}
+
+func (m *mockClockChain) SetPinDefaults() error {
+	m.setPinDefaultsCount++
+	return m.returnErr
+}
+
+func (m *mockClockChain) GetLeadingNIC() CardInfo {
+	return CardInfo{}
+}
+
+func (m *mockClockChain) assertCallCounts(t *testing.T, expectedNormalTBC, expectedHoldoverTBC, expectedSetPinDefaults int) {
+	assert.Equal(t, expectedNormalTBC, m.enterNormalTBCCount, "Expected enterNormalTBCCount")
+	assert.Equal(t, expectedHoldoverTBC, m.enterHoldoverTBCCount, "Expected enterHoldoverTBCCount")
+	assert.Equal(t, expectedSetPinDefaults, m.setPinDefaultsCount, "Expected setPinDefaultsCount")
 }

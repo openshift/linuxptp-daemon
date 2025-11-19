@@ -47,10 +47,11 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 	p, d := E810("e810")
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
-	assert.Equal(t, ClockTypeTBC, clockChain.Type, "identified a wrong clock type")
-	assert.Equal(t, "5799633565432596414", clockChain.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
-	assert.Equal(t, 9, len(clockChain.LeadingNIC.Pins), "wrong number of configurable pins")
-	assert.Equal(t, "ens4f1", clockChain.LeadingNIC.UpstreamPort, "wrong upstream port")
+	ccData := clockChain.(*ClockChain)
+	assert.Equal(t, ClockTypeTBC, ccData.Type, "identified a wrong clock type")
+	assert.Equal(t, "5799633565432596414", ccData.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
+	assert.Equal(t, 9, len(ccData.LeadingNIC.Pins), "wrong number of configurable pins")
+	assert.Equal(t, "ens4f1", ccData.LeadingNIC.UpstreamPort, "wrong upstream port")
 
 	// Test holdover entry
 	mockPinSet.reset()
@@ -110,10 +111,11 @@ func Test_ProcessProfileTtscClockChain(t *testing.T) {
 	p, d := E810("e810")
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
-	assert.Equal(t, ClockTypeTBC, clockChain.Type, "identified a wrong clock type")
-	assert.Equal(t, "5799633565432596414", clockChain.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
-	assert.Equal(t, 9, len(clockChain.LeadingNIC.Pins), "wrong number of configurable pins")
-	assert.Equal(t, "ens4f1", clockChain.LeadingNIC.UpstreamPort, "wrong upstream port")
+	ccData := clockChain.(*ClockChain)
+	assert.Equal(t, ClockTypeTBC, ccData.Type, "identified a wrong clock type")
+	assert.Equal(t, "5799633565432596414", ccData.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
+	assert.Equal(t, 9, len(ccData.LeadingNIC.Pins), "wrong number of configurable pins")
+	assert.Equal(t, "ens4f1", ccData.LeadingNIC.UpstreamPort, "wrong upstream port")
 	assert.NotNil(t, mockPinSet.commands, "Ensure some pins were set")
 
 	// Test holdover entry
@@ -151,13 +153,14 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify we have the expected clock chain structure
-	assert.Equal(t, ClockTypeTBC, clockChain.Type)
-	assert.Equal(t, "ens4f0", clockChain.LeadingNIC.Name)
-	assert.Equal(t, 2, len(clockChain.OtherNICs), "should have 2 other NICs (ens5f0, ens8f0)")
+	ccData := clockChain.(*ClockChain)
+	assert.Equal(t, ClockTypeTBC, ccData.Type)
+	assert.Equal(t, "ens4f0", ccData.LeadingNIC.Name)
+	assert.Equal(t, 2, len(ccData.OtherNICs), "should have 2 other NICs (ens5f0, ens8f0)")
 
 	// Verify each NIC has pins populated
-	assert.Greater(t, len(clockChain.LeadingNIC.Pins), 0, "leading NIC should have pins")
-	for i, nic := range clockChain.OtherNICs {
+	assert.Greater(t, len(ccData.LeadingNIC.Pins), 0, "leading NIC should have pins")
+	for i, nic := range ccData.OtherNICs {
 		assert.Greater(t, len(nic.Pins), 0, "other NIC %d should have pins", i)
 	}
 
@@ -176,7 +179,7 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 
 	for _, cmd := range *mockPinSet.commands {
 		// Find which pin this command refers to by searching all pins
-		for _, pin := range clockChain.DpllPins {
+		for _, pin := range ccData.DpllPins {
 			if pin.ID == cmd.ID {
 				clockIDsSeen[pin.ClockID] = true
 				pinLabelsSeen[pin.BoardLabel] = true
