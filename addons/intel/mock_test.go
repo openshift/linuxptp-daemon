@@ -203,6 +203,9 @@ func loadProfile(path string) (*ptpv1.PtpProfile, error) {
 	if err != nil {
 		return &ptpv1.PtpProfile{}, err
 	}
+	if profile.Name == nil {
+		return &profile, fmt.Errorf("Could not parse profile")
+	}
 	return &profile, nil
 }
 
