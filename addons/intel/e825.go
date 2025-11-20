@@ -176,7 +176,7 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 				// Execute user-supplied UblxCmds first:
 				*pluginData.hwplugins = append(*pluginData.hwplugins, e825Opts.UblxCmds.runAll()...)
 				// Finish with the default commands:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, getDefaultUblxCmds().runAll()...)
+				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
 			case "tbc-ho-exit":
 				_, err = clockChain.EnterNormalTBC()
 				if err != nil {
