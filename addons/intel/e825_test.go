@@ -39,10 +39,10 @@ func Test_AfterRunPTPCommandE825(t *testing.T) {
 		"CFG-MSG,1,3,1",
 		"CFG-MSG,0xf0,0x02,0",
 		"CFG-MSG,0xf0,0x03,0",
-		"CFG-MSGOUT-NMEA_ID_VTG_I2C,0",
-		"CFG-MSGOUT-NMEA_ID_GST_I2C,0",
-		"CFG-MSGOUT-NMEA_ID_ZDA_I2C,0",
-		"CFG-MSGOUT-NMEA_ID_GBS_I2C,0",
+		"CFG-MSGOUT-NMEA_ID_VTG_USB,0",
+		"CFG-MSGOUT-NMEA_ID_GST_USB,0",
+		"CFG-MSGOUT-NMEA_ID_ZDA_USB,0",
+		"CFG-MSGOUT-NMEA_ID_GBS_USB,0",
 		"SAVE",
 	}
 	found := make([]string, 0, len(requiredUblxCmds))
