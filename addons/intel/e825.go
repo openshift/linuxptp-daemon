@@ -348,33 +348,3 @@ func E825(name string) (*plugin.Plugin, *interface{}) {
 	var iface interface{} = &pluginData
 	return &_plugin, &iface
 }
-
-// getClockIDByModule returns ClockID for a given DPLL module name, preferring PPS type if present
-func getClockIDByModule(module string) (uint64, error) {
-	if unitTest {
-		return 0, fmt.Errorf("netlink disabled in unit test")
-	}
-	conn, err := dpll_netlink.Dial(nil)
-	if err != nil {
-		return 0, err
-	}
-	//nolint:errcheck
-	defer conn.Close()
-	devices, err := conn.DumpDeviceGet()
-	if err != nil {
-		return 0, err
-	}
-	var anyID uint64
-	for _, d := range devices {
-		if strings.EqualFold(d.ModuleName, module) {
-			if d.Type == 1 { // PPS
-				return d.ClockID, nil
-			}
-			anyID = d.ClockID
-		}
-	}
-	if anyID != 0 {
-		return anyID, nil
-	}
-	return 0, fmt.Errorf("module %s DPLL not found", module)
-}
