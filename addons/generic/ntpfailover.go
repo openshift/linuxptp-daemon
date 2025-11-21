@@ -46,7 +46,8 @@ const (
 )
 
 var (
-	ts2phcOffsetRegex = regexp.MustCompile("offset .*s[23] freq")
+	ts2phcOffsetRegex  = regexp.MustCompile("offset .*s[23] freq")
+	chronydOnlineRegex = regexp.MustCompile("chronyd .* starting")
 )
 
 func onPTPConfigChangeNtpFailover(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
@@ -165,6 +166,12 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 							if currentTime.After(pluginData.expiryTime) {
 								pluginData.pcfsmState = pcsmsOutOfSpec
 								continue
+							}
+						}
+						if pname == chronydPname && chronydOnlineRegex.MatchString(log) {
+							chronydSetEnabled, ok := pluginData.cmdSetEnabled[chronydPname]
+							if ok {
+								chronydSetEnabled(false)
 							}
 						}
 						break done
