@@ -71,6 +71,7 @@ func Test_UbxCmdRun(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "result", stdout)
 	assert.Equal(t, 1, len(execMock.actualCalls))
+	assert.Equal(t, []string{"-w", "0.1", "arg"}, execMock.actualCalls[0].args)
 
 	execMock.setDefaults("", errors.New("Error"))
 	_, err = cmd.run()
@@ -82,10 +83,10 @@ func Test_UbxCmdListRunAll(t *testing.T) {
 	execMock, execRestore := setupExecMock()
 	defer execRestore()
 	execMock.setDefaults("", errors.New("Unexpected call"))
-	execMock.expect([]string{"arg1"}, "result1", nil)
-	execMock.expect([]string{"arg2"}, "result2", nil)
-	execMock.expect([]string{"arg3"}, "", errors.New("error3"))
-	execMock.expect([]string{"arg4"}, "", errors.New("error4"))
+	execMock.expect([]string{"-w", "0.1", "arg1"}, "result1", nil)
+	execMock.expect([]string{"-w", "2", "arg2"}, "result2", nil)
+	execMock.expect([]string{"-w", "0.1", "arg3"}, "", errors.New("error3"))
+	execMock.expect([]string{"-w", "0.1", "arg4"}, "", errors.New("error4"))
 
 	cmdList := UblxCmdList{
 		UblxCmd{
@@ -94,7 +95,7 @@ func Test_UbxCmdListRunAll(t *testing.T) {
 		},
 		UblxCmd{
 			ReportOutput: true,
-			Args:         []string{"arg2"},
+			Args:         []string{"-w", "2", "arg2"},
 		},
 		UblxCmd{
 			ReportOutput: false,

@@ -3,6 +3,7 @@ package intel
 import (
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/golang/glog"
@@ -82,8 +83,13 @@ func defaultUblxCmds() UblxCmdList {
 
 // run a single UblxCmd and return the result
 func (cmd UblxCmd) run() (string, error) {
-	glog.Infof("Running ubxtool with: %s", strings.Join(cmd.Args, ", "))
-	stdout, err := execCombined("/usr/local/bin/ubxtool", cmd.Args...)
+	args := cmd.Args
+	if !slices.Contains(cmd.Args, "-w") {
+		// Default wait time is 2s per command; prefer 0.1s
+		args = append([]string{"-w", "0.1"}, args...)
+	}
+	glog.Infof("Running ubxtool with: %s", strings.Join(args, ", "))
+	stdout, err := execCombined("/usr/local/bin/ubxtool", args...)
 	return string(stdout), err
 }
 
