@@ -47,8 +47,10 @@ func Test_AfterRunPTPCommandE810(t *testing.T) {
 	}
 	found := make([]string, 0, len(requiredUblxCmds))
 	for _, call := range mockExec.actualCalls {
-		if slices.Contains(requiredUblxCmds, call.args[1]) {
-			found = append(found, call.args[1])
+		for _, arg := range call.args {
+			if slices.Contains(requiredUblxCmds, arg) {
+				found = append(found, arg)
+			}
 		}
 	}
 	assert.Equal(t, requiredUblxCmds, found)
