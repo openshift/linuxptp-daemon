@@ -66,11 +66,11 @@ var (
 var configPrefix = config.DefaultConfigPath
 
 var ptpProcesses = []string{
+	chronydProcessName, // there can be only one chronyd process in the system
 	ts2phcProcessName,  // there can be only one ts2phc process in the system
 	syncEProcessName,   // there can be only one synce Process per profile
 	ptp4lProcessName,   // there could be more than one ptp4l in the system
 	phc2sysProcessName, // there can be only one phc2sys process in the system
-	chronydProcessName, // there can be only one chronyd process in the system
 }
 
 var ptpTmpFiles = []string{
