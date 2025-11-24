@@ -13,15 +13,17 @@ const (
 
 // CloseExpect gracefully closes a GExpect instance by sending SIGTERM and waiting for completion.
 func CloseExpect(exp *expect.GExpect, r <-chan error) {
+	if exp == nil {
+		return
+	}
+	defer exp.Close()
 	exp.SendSignal(syscall.SIGTERM)
 	for timeout := time.After(sigTimeout); ; {
 		select {
 		case <-r:
-			exp.Close()
 			return
 		case <-timeout:
 			exp.Send("\x03")
-			exp.Close()
 			return
 		}
 	}
