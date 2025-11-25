@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
@@ -34,6 +35,7 @@ func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string
 
 // PMCProcess manages a PMC (PTP Management Client) process for monitoring PTP events.
 type PMCProcess struct {
+	lock              sync.Mutex
 	configFileName    string
 	stopped           bool
 	monitorPortState  bool
@@ -55,19 +57,33 @@ func (pmc *PMCProcess) Name() string {
 
 // Stopped returns whether the process has been stopped.
 func (pmc *PMCProcess) Stopped() bool {
+	pmc.lock.Lock()
+	defer pmc.lock.Unlock()
 	return pmc.stopped
+}
+
+func (pmc *PMCProcess) getAndSetStopped(val bool) bool {
+	pmc.lock.Lock()
+	defer pmc.lock.Unlock()
+	oldVal := pmc.stopped
+	pmc.stopped = val
+	return oldVal
 }
 
 // CmdStop signals the process to stop.
 func (pmc *PMCProcess) CmdStop() {
-	pmc.stopped = true
-	pmc.exitCh <- struct{}{}
+	pmc.getAndSetStopped(true)
+	// Close the channel to broadcast stop signal to all receivers
+	select {
+	case <-pmc.exitCh:
+		// Already closed
+	default:
+		close(pmc.exitCh)
+	}
 }
 
 // CmdInit initializes the process state.
 func (pmc *PMCProcess) CmdInit() {
-	pmc.stopped = false
-	pmc.exitCh = make(chan struct{}, 1)
 }
 
 // ProcessStatus processes status updates for the PMC process.
@@ -123,8 +139,18 @@ func (pmc *PMCProcess) Poll() error {
 
 // CmdRun starts the PMC monitoring process.
 func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
+	isStopped := pmc.getAndSetStopped(false)
+	if isStopped {
+		return
+	}
+	pmc.exitCh = make(chan struct{}, 1)
+
 	go func() {
 		for {
+			if pmc.Stopped() {
+				return
+			}
+
 			var c net.Conn
 			if stdToSocket {
 				cAttempt, dialErr := dialSocket()
@@ -134,7 +160,7 @@ func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
 				c = cAttempt
 			}
 			monitorErr := pmc.Monitor(c)
-			if monitorErr == nil {
+			if monitorErr == nil && pmc.Stopped() {
 				// No error completed gracefully
 				return
 			}
@@ -154,6 +180,10 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 
 	exp, r, err := pmcPkg.GetPMCMontior(pmc.configFileName)
 	if err != nil {
+		// Clean up the spawned process if initialization failed
+		if exp != nil {
+			utils.CloseExpect(exp, r)
+		}
 		return err
 	}
 	defer utils.CloseExpect(exp, r)
@@ -209,7 +239,7 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 		data.ParentDataSet = parentDS
 		pmc.eventHandler.UpdateUpstreamData(pmc.configFileName, pmc.c, data)
 	} else if oldParentDS == nil || oldParentDS.GrandmasterClockClass != parentDS.GrandmasterClockClass {
-		go pmc.eventHandler.AnnounceClockClass(
+		pmc.eventHandler.AnnounceClockClass(
 			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
 			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockClass),
 			pmc.configFileName, pmc.c,
@@ -222,9 +252,16 @@ func (pmc *PMCProcess) Monitor(c net.Conn) error {
 	for {
 		err := pmc.monitor(c)
 		if err != nil {
-			// If there is an error we need to restart
-			glog.Info("pmc process hit an issue (%s). restarting...", err)
-			continue
+			// Check if we should stop before restarting
+			select {
+			case <-pmc.exitCh:
+				glog.Info("PMC Monitor stopping gracefully")
+				return nil
+			default:
+				// If there is an error we need to restart
+				glog.Info("pmc process hit an issue (%s). restarting...", err)
+				continue
+			}
 		}
 		return err
 	}
