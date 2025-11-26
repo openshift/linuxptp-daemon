@@ -110,10 +110,12 @@ func RunPMCExpSetGMSettings(configFileName string, g protocol.GrandmasterSetting
 }
 
 // RunPMCExpGetParentDS ... GET
-func RunPMCExpGetParentDS(configFileName string) (p protocol.ParentDataSet, err error) {
+func RunPMCExpGetParentDS(configFileName string, logOuput bool) (p protocol.ParentDataSet, err error) {
 	cmdStr := cmdGetParentDataSet
 	pmcCmd := pmcCmdConstPart + configFileName
-	glog.Infof("%s \"%s\"", pmcCmd, cmdStr)
+	if logOuput {
+		glog.Infof("%s \"%s\"", pmcCmd, cmdStr)
+	}
 	e, r, err := expect.Spawn(pmcCmd, -1)
 	if err != nil {
 		return p, err
@@ -131,7 +133,9 @@ func RunPMCExpGetParentDS(configFileName string) (p protocol.ParentDataSet, err 
 				glog.Errorf("pmc result match error %v", err1)
 				return p, err1
 			}
-			glog.Infof("pmc result: %s", result)
+			if logOuput {
+				glog.Infof("pmc result: %s", result)
+			}
 			for i, m := range matches[1:] {
 				p.Update(p.Keys()[i], m)
 			}
@@ -435,12 +439,21 @@ func getSubcribeEvents(exp *expect.GExpect) (*protocol.SubscribedEvents, error) 
 // GetPMCMontior spawns and initializes a PMC monitoring process.
 func GetPMCMontior(configFileName string) (*expect.GExpect, <-chan error, error) {
 	timeout := time.After(10 * montiorStartTimeout)
+	var exp *expect.GExpect
+	var r <-chan error
+	var err error
+
 	for {
+		if exp != nil {
+			utils.CloseExpect(exp, r)
+			time.Sleep(10 * time.Millisecond)
+		}
 		cmd := pmcCmdConstPart + configFileName
 		glog.Errorf("Spawning process '%s' for monitoring pmc", cmd)
-		exp, r, err := expect.Spawn(cmd, -1)
+		exp, r, err = expect.Spawn(cmd, -1)
 		if err != nil {
 			glog.Errorf("Failed to spawn moniotring pmc process")
+			continue
 		}
 		select {
 		case <-timeout:

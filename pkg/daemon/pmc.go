@@ -28,6 +28,7 @@ func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string
 		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
 		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
 		monitorParentData: true,
+		parentDSCh:        make(chan protocol.ParentDataSet, 10),
 		eventHandler:      eventHandler,
 		clockType:         clockType,
 	}
@@ -43,6 +44,7 @@ type PMCProcess struct {
 	monitorParentData bool
 	monitorCMLDS      bool
 	parentDS          *protocol.ParentDataSet
+	parentDSCh        chan protocol.ParentDataSet
 	exitCh            chan struct{}
 	clockType         string
 	c                 net.Conn
@@ -73,10 +75,8 @@ func (pmc *PMCProcess) getAndSetStopped(val bool) bool {
 // CmdStop signals the process to stop.
 func (pmc *PMCProcess) CmdStop() {
 	pmc.getAndSetStopped(true)
-	// Close the channel to broadcast stop signal to all receivers
 	select {
 	case <-pmc.exitCh:
-		// Already closed
 	default:
 		close(pmc.exitCh)
 	}
@@ -127,16 +127,6 @@ func (pmc *PMCProcess) EmitClockClassLogs(c net.Conn) {
 	go pmc.eventHandler.EmitClockClass(pmc.configFileName, pmc.c)
 }
 
-// Poll polls the parent data set from PMC.
-func (pmc *PMCProcess) Poll() error {
-	parentDS, err := pmcPkg.RunPMCExpGetParentDS(pmc.configFileName)
-	if err != nil {
-		return err
-	}
-	pmc.handleParentDS(parentDS)
-	return nil
-}
-
 // CmdRun starts the PMC monitoring process.
 func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
 	isStopped := pmc.getAndSetStopped(false)
@@ -161,11 +151,32 @@ func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
 			}
 			monitorErr := pmc.Monitor(c)
 			if monitorErr == nil && pmc.Stopped() {
-				// No error completed gracefully
 				return
 			}
 		}
 	}()
+}
+
+// workerSignal represents a signal from the expectWorker to the main monitor loop
+type workerSignal struct {
+	err            error
+	restartProcess bool
+}
+
+// Poll runs a Poll operation in a goroutine and sends the result to the struct's ParentDataSet channel
+func (pmc *PMCProcess) Poll() {
+	select {
+	case <-pmc.exitCh:
+		return
+	default:
+	}
+
+	parentDS, err := pmcPkg.RunPMCExpGetParentDS(pmc.configFileName, false)
+	if err != nil {
+		return
+	}
+
+	pmc.parentDSCh <- parentDS
 }
 
 func (pmc *PMCProcess) monitor(conn net.Conn) error {
@@ -173,14 +184,8 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 		pmc.c = conn
 	}
 
-	err := pmc.Poll() // Set/Anounce current value to initialise or incase message was missed.
-	if err != nil {
-		glog.Error("Failed to initialise clock class")
-	}
-
 	exp, r, err := pmcPkg.GetPMCMontior(pmc.configFileName)
 	if err != nil {
-		// Clean up the spawned process if initialization failed
 		if exp != nil {
 			utils.CloseExpect(exp, r)
 		}
@@ -191,42 +196,68 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 	subscribeCmd := pmc.getMonitorSubcribeCommand()
 	glog.Infof("Sending '%s' to pmc", subscribeCmd)
 	exp.Send(subscribeCmd + "\n")
+
+	workerCh := make(chan workerSignal, 5)
+
+	go pmc.expectWorker(exp, pmc.parentDSCh, workerCh)
+
 	for {
-		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), pollTimeout)
 		select {
 		case <-r:
 			glog.Warningf("PMC monitoring process exited")
 			return fmt.Errorf("PMC needs to restart")
 		case <-pmc.exitCh:
-			return nil // TODO close gracefully
-		default:
-			if expectErr != nil {
-				if _, ok := expectErr.(expect.TimeoutError); ok {
-					continue
-				} else if strings.Contains(expectErr.Error(), "EOF") || strings.Contains(expectErr.Error(), "exit") {
-					glog.Warningf("PMC process exited (%v)", expectErr)
-					return fmt.Errorf("PMC needs to restart")
-				}
-				glog.Errorf("Error waiting for notification: %v", expectErr)
-				continue
-			}
-			if len(matches) == 0 {
-				continue
-			}
-			if strings.Contains(matches[0], "PARENT_DATA_SET") {
-				processedMessage, procErr := protocol.ProcessMessage[protocol.ParentDataSet](matches)
-				if procErr != nil {
-					glog.Warningf("failed to process message for PARENT_DATA_SET: %s", procErr)
-					// maybe we should attempt a poll here?
-					continue
-				}
-				go pmc.handleParentDS(*processedMessage)
+			return nil
+		case parentDS := <-pmc.parentDSCh:
+			go pmc.handleParentDS(parentDS)
+		case signal := <-workerCh:
+			if signal.restartProcess {
+				glog.Warningf("PMC process exited (%v)", signal.err)
+				return fmt.Errorf("PMC needs to restart")
 			}
 		}
 	}
 }
 
+func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- protocol.ParentDataSet, signalCh chan<- workerSignal) {
+	for {
+		select {
+		case <-pmc.exitCh:
+			return
+		default:
+		}
+
+		go pmc.Poll() // Check if anything changed while handling the last message
+		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), -1)
+
+		if expectErr != nil {
+			if _, ok := expectErr.(expect.TimeoutError); ok {
+				continue
+			} else if strings.Contains(expectErr.Error(), "EOF") || strings.Contains(expectErr.Error(), "exit") {
+				signalCh <- workerSignal{err: expectErr, restartProcess: true}
+				return
+			}
+			continue
+		}
+
+		if len(matches) > 0 && strings.Contains(matches[0], "PARENT_DATA_SET") {
+			processedMessage, procErr := protocol.ProcessMessage[protocol.ParentDataSet](matches)
+			if procErr != nil {
+				glog.Warningf("failed to process message for PARENT_DATA_SET: %s", procErr)
+			} else {
+				parentDSCh <- *processedMessage
+			}
+		}
+
+	}
+}
+
 func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
+	if pmc.parentDS != nil && pmc.parentDS.Equal(&parentDS) {
+		glog.Infof("ParentDataSet unchanged, skipping processing for %s", pmc.configFileName)
+		return
+	}
+
 	glog.Info(parentDS)
 	oldParentDS := pmc.parentDS
 	pmc.parentDS = &parentDS
@@ -252,13 +283,11 @@ func (pmc *PMCProcess) Monitor(c net.Conn) error {
 	for {
 		err := pmc.monitor(c)
 		if err != nil {
-			// Check if we should stop before restarting
 			select {
 			case <-pmc.exitCh:
 				glog.Info("PMC Monitor stopping gracefully")
 				return nil
 			default:
-				// If there is an error we need to restart
 				glog.Info("pmc process hit an issue (%s). restarting...", err)
 				continue
 			}
