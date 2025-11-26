@@ -22,7 +22,7 @@ var pluginNameE825 = "e825"
 // E825Opts is the options structure for e825 plugin
 type E825Opts struct {
 	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
-	UblxCmds            []E810UblxCmds               `json:"ublxCmds"`
+	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
 	DevicePins          map[string]map[string]string `json:"pins"`
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
@@ -96,7 +96,7 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 						for _, phc := range phcs {
 							pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
 							glog.Infof("echo %s > %s", value, pinPath)
-							err = os.WriteFile(pinPath, []byte(value), 0666)
+							err = os.WriteFile(pinPath, []byte(value), 0o666)
 							if err != nil {
 								glog.Error("e825 failed to write " + value + " to " + pinPath + ": " + err.Error())
 							}
@@ -155,11 +155,11 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 
 // AfterRunPTPCommandE825 performs actions after certain PTP commands for e825 plugin
 func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, command string) error {
+	pluginData := (*data).(*E825PluginData)
 	glog.Info("calling AfterRunPTPCommandE825 for e825 plugin")
 	var e825Opts E825Opts
 	var err error
 	var optsByteArray []byte
-	var stdout []byte
 
 	e825Opts.EnableDefaultConfig = false
 
@@ -172,23 +172,11 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			}
 			switch command {
 			case "gpspipe":
-				glog.Infof("AfterRunPTPCommandE825 doing ublx config for command: %s", command)
-				for _, ublxOpt := range append(e825Opts.UblxCmds, getDefaultUblxCmds()...) {
-					ublxArgs := ublxOpt.Args
-					glog.Infof("Running /usr/bin/ubxtool with args %s", strings.Join(ublxArgs, ", "))
-					stdout, _ = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput()
-					//stdout, err = exec.Command("/usr/local/bin/ubxtool", "-p", "STATUS").CombinedOutput()
-					if data != nil && ublxOpt.ReportOutput {
-						_data := *data
-						glog.Infof("Saving status to hwconfig: %s", string(stdout))
-						var pluginData = _data.(*E825PluginData)
-						_pluginData := *pluginData
-						statusString := fmt.Sprintf("ublx data: %s", string(stdout))
-						*_pluginData.hwplugins = append(*_pluginData.hwplugins, statusString)
-					} else {
-						glog.Infof("Not saving status to hwconfig: %s", string(stdout))
-					}
-				}
+				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
+				// Execute user-supplied UblxCmds first:
+				*pluginData.hwplugins = append(*pluginData.hwplugins, e825Opts.UblxCmds.runAll()...)
+				// Finish with the default commands:
+				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
 			case "tbc-ho-exit":
 				_, err = clockChain.EnterNormalTBC()
 				if err != nil {
@@ -222,7 +210,7 @@ func PopulateHwConfigE825(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error 
 	//*hwconfigs = append(*hwconfigs, hwConfig)
 	if data != nil {
 		_data := *data
-		var pluginData = _data.(*E825PluginData)
+		pluginData := _data.(*E825PluginData)
 		_pluginData := *pluginData
 		if _pluginData.hwplugins != nil {
 			for _, _hwconfig := range *_pluginData.hwplugins {
@@ -245,7 +233,8 @@ func E825(name string) (*plugin.Plugin, *interface{}) {
 	glog.Infof("registering e825 plugin")
 	hwplugins := []string{}
 	pluginData := E825PluginData{hwplugins: &hwplugins}
-	_plugin := plugin.Plugin{Name: "e825",
+	_plugin := plugin.Plugin{
+		Name:               "e825",
 		OnPTPConfigChange:  OnPTPConfigChangeE825,
 		AfterRunPTPCommand: AfterRunPTPCommandE825,
 		PopulateHwConfig:   PopulateHwConfigE825,
