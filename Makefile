@@ -1,3 +1,9 @@
+# Check if .env file exists and include it
+ifneq (,$(wildcard ./.env))
+    include ./.env
+    export
+endif
+
 IMAGE_NAME ?= linuxptp-daemon-image
 IMAGE_TAG_BASE ?= ghcr.io/k8snetworkplumbingwg/$(IMAGE_NAME)
 VERSION ?=latest
@@ -17,7 +23,7 @@ fmt:
 	./hack/gofmt.sh
 
 test:
-	SKIP_GNSS_MONITORING=1 go test ./... --tags=unittests -coverprofile=cover.out
+	SKIP_GNSS_MONITORING=1 go test ./... --tags=unittests -coverprofile=coverage.out
 
 lint:
 	golangci-lint run

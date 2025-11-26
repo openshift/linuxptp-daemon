@@ -17,3 +17,6 @@ bin/
 *.out
 .idea/
 .vscode/
+
+# Personal environment overrides
+.env

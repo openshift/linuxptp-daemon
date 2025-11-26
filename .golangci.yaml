@@ -1,77 +1,78 @@
+version: "2"
 run:
   concurrency: 8
-  timeout: 5m
   issues-exit-code: 1
   tests: true
-  skip-dirs:
-    - vendor
-  skip-dirs-use-default: false
-output:
-  format: colored-line-number
-  print-issued-lines: true
-  print-linter-name: true
 issues:
-  exclude-use-default: false
-  exclude:
-    - 'ST1000: at least one file in a package should have a package comment'
-    - 'package-comments: should have a package comment'
-  new-from-rev: a0b6d0f80677ca0888edc2b71758ccb99ced6978
-linters-settings:
-  govet:
-    # Enable all analyzers.
-    # Default: false
-    enable-all: true
-    # Disable analyzers by name.
-    # Run `go tool vet help` to see all analyzers.
-    # Default: []
-    disable:
-      - fieldalignment # too strict
-    # Settings per analyzer.
-    settings:
-      shadow:
-        # Whether to be strict about shadowing; can be noisy.
-        # Default: false
-        strict: true
-
-
-  gocyclo:
-    # minimal code complexity to report, 30 by default (but we recommend 10-20)
-    min-complexity: 45
-  goconst:
-    min-len: 3
-    min-occurrences: 4
-  decorder:
-    # Required order of `type`, `const`, `var` and `func` declarations inside a file.
-    # Default: types before constants before variables before functions.
-    dec-order:
-      - type
-      - const
-      - var
-      - func
-
+  new-from-rev: c7189faf231efff709e18047f4aaa092ed8df33c
 linters:
-  disable-all: true
-  enable: # NOTE: please keep this list alphabetically sorted
+  settings:
+    govet:
+      # Enable all analyzers.
+      # Default: false
+      enable-all: true
+      # Disable analyzers by name.
+      # Run `go tool vet help` to see all analyzers.
+      # Default: []
+      disable:
+        - fieldalignment
+      # Settings per analyzer.
+      settings:
+        shadow:
+          # Whether to be strict about shadowing; can be noisy.
+          # Default: false
+          strict: true
+    gocyclo:
+      # minimal code complexity to report, 30 by default (but we recommend 10-20)
+      min-complexity: 45
+    goconst:
+      min-len: 3
+      min-occurrences: 4
+    decorder:
+      # Required order of `type`, `const`, `var` and `func` declarations inside a file.
+      # Default: types before constants before variables before functions.
+      dec-order:
+        - type
+        - const
+        - var
+        - func
+  exclusions:
+    generated: lax
+    rules:
+      - path: (.+)\.go$
+        text: "ST1000: at least one file in a package should have a package comment"
+      - path: (.+)\.go$
+        text: "package-comments: should have a package comment"
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - vendor$
+  default: none
+  enable:
     - bodyclose
     - decorder
     - dogsled
-    #- errcheck
     - goconst
     - gocyclo
-    - goimports
     #- gosec
-    - gosimple
     - govet
     - ineffassign
-    - megacheck
     - misspell
     - revive
-    - stylecheck
-    - staticcheck # is a go vet on steroids, applying a ton of static analysis checks
-    - typecheck
+    - staticcheck
     - unconvert
     - unparam
     - unused
     - whitespace
-  fast: false
-
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - vendor$
