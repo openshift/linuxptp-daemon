@@ -3,6 +3,7 @@ package intel
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,6 +28,12 @@ type E825Opts struct {
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
 	PhaseInputs         []PhaseInputs                `json:"interconnections"`
+	Gnss                GnssOptions                  `json:"gnss"`
+}
+
+// GnssOptions defines GNSS-specific options for the e825
+type GnssOptions struct {
+	Disabled bool `json:"disabled"`
 }
 
 // GetPhaseInputs implements PhaseInputsProvider
@@ -35,6 +42,7 @@ func (o E825Opts) GetPhaseInputs() []PhaseInputs { return o.PhaseInputs }
 // E825PluginData is the data structure for e825 plugin
 type E825PluginData struct {
 	hwplugins *[]string
+	dpllPins  []*dpll_netlink.PinInfo
 }
 
 // EnableE825PTPConfig is the script to enable default e825 PTP configuration
@@ -46,7 +54,8 @@ echo "No E825 specific configuration is needed"
 `
 
 // OnPTPConfigChangeE825 performs actions on PTP config change for e825 plugin
-func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error {
+func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
+	pluginData := (*data).(*E825PluginData)
 	glog.Info("calling onPTPConfigChange for e825 plugin")
 	var e825Opts E825Opts
 	var err error
@@ -148,9 +157,78 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 			} else {
 				glog.Error("no clock chain set")
 			}
+			// Always enforce GNSS setting (default = enabled)
+			pluginData.setupGnss(e825Opts.Gnss)
 		}
 	}
 	return nil
+}
+
+func (d *E825PluginData) populateDpllPins() error {
+	if unitTest {
+		return nil
+	}
+	conn, err := dpll_netlink.Dial(nil)
+	if err != nil {
+		return fmt.Errorf("failed to dial DPLL: %w", err)
+	}
+	defer conn.Close()
+	d.dpllPins, err = conn.DumpPinGet()
+	if err != nil {
+		return fmt.Errorf("failed to dump DPLL pins: %w", err)
+	}
+	return nil
+}
+
+// Setup mockable pin setting function
+var e825DoPinSet = BatchPinSet
+
+func pinCmdSetState(pin *dpll_netlink.PinInfo, connectable bool) dpll_netlink.PinParentDeviceCtl {
+	newState := uint32(dpll_netlink.PinStateSelectable)
+	if !connectable {
+		newState = uint32(dpll_netlink.PinStateDisconnected)
+	}
+	command := dpll_netlink.PinParentDeviceCtl{
+		ID:           pin.ID,
+		PinParentCtl: make([]dpll_netlink.PinControl, 0),
+	}
+	for _, parent := range pin.ParentDevice {
+		command.PinParentCtl = append(command.PinParentCtl, dpll_netlink.PinControl{
+			PinParentID: parent.ParentID,
+			State:       &newState,
+		})
+	}
+	return command
+}
+
+func (d *E825PluginData) setupGnss(gnss GnssOptions) error {
+	if len(d.dpllPins) == 0 {
+		err := d.populateDpllPins()
+		if err != nil {
+			return fmt.Errorf("could not detect any DPLL pins: %w", err)
+		}
+	}
+	commands := []dpll_netlink.PinParentDeviceCtl{}
+	affectedPins := []string{}
+	for _, pin := range d.dpllPins {
+		// Look for all GNSS input pins whose state can be changed
+		if pin.Type == dpll_netlink.PinTypeGNSS &&
+			(pin.Capabilities&dpll_netlink.PinCapState != 0) &&
+			pin.ParentDevice[0].Direction == dpll_netlink.PinDirectionInput {
+			affectedPins = append(affectedPins, pin.BoardLabel)
+			commands = append(commands, pinCmdSetState(pin, !gnss.Disabled))
+		}
+	}
+	action := "enable"
+	if gnss.Disabled {
+		action = "disable"
+	}
+	if len(commands) == 0 {
+		glog.Errorf("Could not locate any GNSS pins to %s", action)
+		return errors.New("no GNSS pins found")
+	}
+	glog.Infof("Will %s %d GNSS pins: %v", action, len(commands), affectedPins)
+	return e825DoPinSet(&commands)
 }
 
 // AfterRunPTPCommandE825 performs actions after certain PTP commands for e825 plugin
