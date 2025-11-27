@@ -20,7 +20,7 @@ The `ts2phc` will monitor the `ptp4l` instance bound to the TR port. If the TR p
 To include the custom `ts2phc` build in the container image, the `Dockerfile` must be modified. For example:
 
 ```bash
-FROM golang:1.23.5 AS builder
+FROM golang:1.24.0 AS builder
 WORKDIR /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon
 COPY . .
 RUN make clean && make
