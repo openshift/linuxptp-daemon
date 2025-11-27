@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
 )
@@ -87,4 +88,133 @@ func Test_PopulateHwConfdigE825(t *testing.T) {
 		},
 	},
 		output)
+}
+
+type mockBatchPinSet struct {
+	commands *[]dpll.PinParentDeviceCtl
+}
+
+func (m *mockBatchPinSet) mock(commands *[]dpll.PinParentDeviceCtl) error {
+	m.commands = commands
+	return nil
+}
+
+func Test_setupGnss(t *testing.T) {
+	unitTest = true
+	tcs := []struct {
+		name             string
+		gnss             GnssOptions
+		dpll             []*dpll.PinInfo
+		expectError      bool
+		expectedCmdCount int
+	}{
+		{
+			name:        "No DPLL Pins",
+			dpll:        []*dpll.PinInfo{},
+			expectError: true,
+		},
+		{
+			name: "No matching GNSS Pins",
+			dpll: []*dpll.PinInfo{
+				{
+					ID:           1,
+					BoardLabel:   "SkipMe",
+					Type:         dpll.PinTypeEXT,
+					Capabilities: dpll.PinCapState,
+				},
+				{
+					ID:           2,
+					BoardLabel:   "SkipMe-Too",
+					Type:         dpll.PinTypeGNSS,
+					Capabilities: 0,
+				},
+			},
+			expectError: true,
+		},
+		{
+			name: "Single matching pin (enable)",
+			gnss: GnssOptions{
+				Disabled: false,
+			},
+			dpll: []*dpll.PinInfo{
+				{
+					ID:           1,
+					BoardLabel:   "SkipMe",
+					Type:         dpll.PinTypeEXT,
+					Capabilities: dpll.PinCapPrio,
+				},
+				{
+					BoardLabel:   "GNSS_1PPS_IN",
+					ID:           2,
+					Type:         dpll.PinTypeGNSS,
+					Capabilities: dpll.PinCapPrio | dpll.PinCapState,
+					ParentDevice: []dpll.PinParentDevice{
+						{
+							ParentID:  uint32(1),
+							Direction: dpll.PinDirectionInput,
+						},
+						{
+							ParentID:  uint32(2),
+							Direction: dpll.PinDirectionInput,
+						},
+					},
+				},
+			},
+			expectedCmdCount: 1,
+		},
+		{
+			name: "Single matching pin (disable)",
+			gnss: GnssOptions{
+				Disabled: true,
+			},
+			dpll: []*dpll.PinInfo{
+				{
+					ID:           1,
+					Type:         dpll.PinTypeEXT,
+					Capabilities: dpll.PinCapPrio,
+				},
+				{
+					ID:           2,
+					Type:         dpll.PinTypeGNSS,
+					Capabilities: dpll.PinCapPrio | dpll.PinCapState,
+					ParentDevice: []dpll.PinParentDevice{
+						{
+							ParentID:  uint32(1),
+							Direction: dpll.PinDirectionInput,
+						},
+						{
+							ParentID:  uint32(2),
+							Direction: dpll.PinDirectionInput,
+						},
+					},
+				},
+			},
+			expectedCmdCount: 1,
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(tt *testing.T) {
+			mockPinSet := mockBatchPinSet{}
+			e825DoPinSet = mockPinSet.mock
+			data := E825PluginData{
+				dpllPins: tc.dpll,
+			}
+			err := data.setupGnss(tc.gnss)
+			if tc.expectError {
+				assert.Error(tt, err)
+			} else {
+				assert.NoError(tt, err)
+				assert.Equal(tt, tc.expectedCmdCount, len(*mockPinSet.commands))
+				expectedState := uint32(dpll.PinStateSelectable)
+				if tc.gnss.Disabled {
+					expectedState = uint32(dpll.PinStateDisconnected)
+				}
+				for _, cmd := range *mockPinSet.commands {
+					for _, ctrl := range cmd.PinParentCtl {
+						assert.Equal(tt, expectedState, *ctrl.State)
+					}
+				}
+			}
+		})
+	}
 }
