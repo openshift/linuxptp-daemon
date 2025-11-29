@@ -433,7 +433,10 @@ func readAndUpdatePtpConfigFromFile(profileDir, nodeName string, ptpConfUpdate *
 		return fmt.Errorf("error reading node profile: %w", err)
 	}
 
-	if err = ptpConfUpdate.UpdateConfig(nodeProfilesJSON); err != nil {
+	// Check if security files changed (set by fsnotify in daemon.go)
+	ptpAuthUpdated := daemon.GetAndResetSecurityFilesChanged()
+
+	if err = ptpConfUpdate.UpdateConfig(nodeProfilesJSON, ptpAuthUpdated); err != nil {
 		return fmt.Errorf("error updating the node configuration using the profiles loaded: %w", err)
 	}
 	return nil
