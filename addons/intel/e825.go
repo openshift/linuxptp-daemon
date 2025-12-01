@@ -25,6 +25,7 @@ type E825Opts struct {
 	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
 	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
 	DevicePins          map[string]map[string]string `json:"pins"`
+	DeviceFreqencies    map[string][]string          `json:"frequencies"`
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
 	PhaseInputs         []PhaseInputs                `json:"interconnections"`
@@ -95,19 +96,29 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					} else {
 						(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(getClockIDE825(device), 10)
 					}
-					for pin, value := range pins {
-						deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
-						phcs, pErr := os.ReadDir(deviceDir)
-						if pErr != nil {
-							glog.Error("e825 failed to read " + deviceDir + ": " + pErr.Error())
-							continue
-						}
-						for _, phc := range phcs {
+					deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
+					phcs, perr := os.ReadDir(deviceDir)
+					if perr != nil {
+						glog.Errorf("e825 failed to read %s: %s", deviceDir, perr)
+						continue
+					}
+					for _, phc := range phcs {
+						for pin, value := range pins {
 							pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
-							glog.Infof("echo %s > %s", value, pinPath)
+							glog.Infof("Setting \"%s\" > %s", value, pinPath)
 							err = os.WriteFile(pinPath, []byte(value), 0o666)
 							if err != nil {
-								glog.Error("e825 failed to write " + value + " to " + pinPath + ": " + err.Error())
+								glog.Errorf("e825 pin write failure: %s", err)
+							}
+						}
+						if periods, hasPeriodConfig := e825Opts.DeviceFreqencies[device]; hasPeriodConfig {
+							periodPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/period", device, phc.Name())
+							for _, value := range periods {
+								glog.Infof("Setting \"%s\" > %s", value, periodPath)
+								err = os.WriteFile(periodPath, []byte(value), 0o666)
+								if err != nil {
+									glog.Errorf("e825 period write failure: %s", err)
+								}
 							}
 						}
 					}
