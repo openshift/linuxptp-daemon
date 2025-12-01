@@ -153,6 +153,14 @@ func ParseDeviceReplies(msgs []genetlink.Message) ([]*DoDeviceGetReply, error) {
 				reply.ClockID = ad.Uint64()
 			case DpllType:
 				reply.Type = ad.Uint32()
+			case DpllLockStatusError:
+				reply.LockStatusError = ad.Uint32()
+			case DpllClockQualityLevel:
+				reply.ClockQualityLevel = append(reply.ClockQualityLevel, ad.Uint32())
+			case DpllPhaseOffsetMonitor:
+				reply.PhaseOffsetMonitor = ad.Uint32()
+			case DpllPhaseOffsetAverageFactor:
+				reply.PhaseOffsetAverageFactor = ad.Uint32()
 			default:
 				log.Println("default", ad.Type(), len(ad.Bytes()), ad.Bytes())
 			}
@@ -239,14 +247,18 @@ type DoDeviceGetRequest struct {
 
 // DoDeviceGetReply is used with the DoDeviceGet method.
 type DoDeviceGetReply struct {
-	ID            uint32
-	ModuleName    string
-	Mode          uint32
-	ModeSupported []uint32
-	LockStatus    uint32
-	Temp          int32
-	ClockID       uint64
-	Type          uint32
+	ID                       uint32
+	ModuleName               string
+	Mode                     uint32
+	ModeSupported            []uint32
+	LockStatus               uint32
+	Temp                     int32
+	ClockID                  uint64
+	Type                     uint32
+	LockStatusError          uint32
+	ClockQualityLevel        []uint32
+	PhaseOffsetMonitor       uint32
+	PhaseOffsetAverageFactor uint32
 }
 
 func ParsePinReplies(msgs []genetlink.Message) ([]*PinInfo, error) {
@@ -360,6 +372,20 @@ func ParsePinReplies(msgs []genetlink.Message) ([]*PinInfo, error) {
 				})
 			case DpllPinEsyncPulse:
 				reply.EsyncPulse = ad.Uint32()
+			case DpllPinReferenceSync:
+				ad.Nested(func(ad *netlink.AttributeDecoder) error {
+					var temp ReferenceSync
+					for ad.Next() {
+						switch ad.Type() {
+						case DpllPinID:
+							temp.ID = ad.Uint32()
+						}
+					}
+					reply.ReferenceSync = append(reply.ReferenceSync, temp)
+					return nil
+				})
+			case DpllPinPhaseAdjustGran:
+				reply.PhaseAdjustGran = ad.Uint32()
 			default:
 				log.Printf("unrecognized type: %d\n", ad.Type())
 			}
@@ -459,12 +485,20 @@ type PinInfo struct {
 	EsyncFrequency            int64
 	EsyncFrequencySupported   []FrequencyRange
 	EsyncPulse                uint32
+	ReferenceSync             []ReferenceSync
+	PhaseAdjustGran           uint32
 }
 
 // FrequencyRange contains nested netlink attributes.
 type FrequencyRange struct {
 	FrequencyMin uint64 `json:"frequencyMin"`
 	FrequencyMax uint64 `json:"frequencyMax"`
+}
+
+// ReferenceSync represents a reference-sync pin pair.
+type ReferenceSync struct {
+	ID    uint32 `json:"id"`
+	State uint32 `json:"state"`
 }
 
 // PinParentDevice contains nested netlink attributes.
