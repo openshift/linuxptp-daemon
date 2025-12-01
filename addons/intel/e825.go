@@ -28,7 +28,6 @@ type E825Opts struct {
 	DeviceFreqencies    map[string][]string          `json:"frequencies"`
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
-	PhaseInputs         []PhaseInputs                `json:"interconnections"`
 	Gnss                GnssOptions                  `json:"gnss"`
 }
 
@@ -36,9 +35,6 @@ type E825Opts struct {
 type GnssOptions struct {
 	Disabled bool `json:"disabled"`
 }
-
-// GetPhaseInputs implements PhaseInputsProvider
-func (o E825Opts) GetPhaseInputs() []PhaseInputs { return o.PhaseInputs }
 
 // E825PluginData is the data structure for e825 plugin
 type E825PluginData struct {
@@ -154,22 +150,19 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					(*nodeProfile).PtpSettings[key] = value
 				}
 			}
-			if e825Opts.PhaseInputs != nil {
-				if unitTest {
-					// Mock clock chain DPLL pins in unit test
-					clockChain.DpllPins = DpllPins
-				}
-				clockChain, err = InitClockChain(e825Opts, nodeProfile)
-				if err != nil {
-					return err
-				}
-				(*nodeProfile).PtpSettings["leadingInterface"] = clockChain.LeadingNIC.Name
-				(*nodeProfile).PtpSettings["upstreamPort"] = clockChain.LeadingNIC.UpstreamPort
-			} else {
-				glog.Error("no clock chain set")
-			}
 			// Always enforce GNSS setting (default = enabled)
 			pluginData.setupGnss(e825Opts.Gnss)
+			// Configure leadingInterface when in BC mode
+			if nodeProfile.PtpSettings["clockType"] == "T-BC" {
+				if len(e825Opts.DevicePins) > 1 {
+					glog.Errorf("e825 configuration expects exactly one device, but %d were configured", len(e825Opts.DevicePins))
+				}
+				for device := range e825Opts.DevicePins {
+					glog.Infof("Configuring leading device %s pins for BC configuration", device)
+					(*nodeProfile).PtpSettings["leadingInterface"] = device
+					(*nodeProfile).PtpSettings["upstreamPort"] = ""
+				}
+			}
 		}
 	}
 	return nil
@@ -266,24 +259,6 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 				*pluginData.hwplugins = append(*pluginData.hwplugins, e825Opts.UblxCmds.runAll()...)
 				// Finish with the default commands:
 				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
-			case "tbc-ho-exit":
-				_, err = clockChain.EnterNormalTBC()
-				if err != nil {
-					return fmt.Errorf("e825: failed to enter T-BC normal mode")
-				}
-				glog.Info("e825: enter T-BC normal mode")
-			case "tbc-ho-entry":
-				_, err = clockChain.EnterHoldoverTBC()
-				if err != nil {
-					return fmt.Errorf("e825: failed to enter T-BC holdover")
-				}
-				glog.Info("e825: enter T-BC holdover")
-			case "reset-to-default":
-				_, err = clockChain.SetPinDefaults()
-				if err != nil {
-					return fmt.Errorf("e825: failed to reset pins to default")
-				}
-				glog.Info("e825: reset pins to default")
 			default:
 				glog.Infof("AfterRunPTPCommandE825 doing nothing for command: %s", command)
 			}
