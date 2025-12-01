@@ -1,4 +1,4 @@
-FROM golang:1.23.5 AS builder
+FROM golang:1.24.0 AS builder
 WORKDIR /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon
 COPY . .
 RUN make clean && make

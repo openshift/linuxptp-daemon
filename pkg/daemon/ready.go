@@ -104,8 +104,8 @@ func (h metricHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		eventHandler.EmitPortRoleLogs(socketConnection)
 
 		processManager := h.tracker.processManager
-		processManager.EmitProcessStatusLogs()
-		processManager.EmitClockClassLogs(socketConnection)
+		go processManager.EmitProcessStatusLogs()
+		go processManager.EmitClockClassLogs(socketConnection)
 	}()
 }
 

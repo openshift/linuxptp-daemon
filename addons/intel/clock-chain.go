@@ -297,7 +297,7 @@ func writeSysFs(path string, val string) error {
 	glog.Infof("writing " + val + " to " + path)
 	err := filesystem.WriteFile(path, []byte(val), 0666)
 	if err != nil {
-		return fmt.Errorf("e810 failed to write " + val + " to " + path + ": " + err.Error())
+		return fmt.Errorf("e810 failed to write "+val+" to "+path+": %v", err.Error())
 	}
 	return nil
 }
@@ -386,7 +386,7 @@ func (c *ClockChain) EnableE810Outputs() error {
 	deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", c.LeadingNIC.Name)
 	phcs, err := filesystem.ReadDir(deviceDir)
 	if err != nil {
-		return fmt.Errorf("e810 failed to read " + deviceDir + ": " + err.Error())
+		return fmt.Errorf("e810 failed to read "+deviceDir+": %v", err.Error())
 	}
 	if len(phcs) > 1 {
 		glog.Error("e810 cards should have one PHC per NIC, but %s has %d",
