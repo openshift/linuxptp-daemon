@@ -207,14 +207,12 @@ func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
 			for _, dp := range proc.depProcess {
 				if dp.Name() == PMCProcessName {
 					pmc := dp.(*PMCProcess)
-					// If set then use current else get value
-					if pmc.parentDS == nil {
-						if err := pmc.Poll(); err != nil {
-							glog.Errorf("Failed to fetch pmc PARENT_DATA_SET: %s", err)
-							continue
-						}
+					if pmc.parentDS != nil {
+						// if parentDS is nil that means the clock class will
+						// be announced as soon as we get one
+						// therefore no need force it.
+						pmc.EmitClockClassLogs(c)
 					}
-					pmc.EmitClockClassLogs(c)
 				}
 			}
 		}

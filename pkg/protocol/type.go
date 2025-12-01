@@ -331,6 +331,27 @@ func (p *ParentDataSet) String() string {
 	return result
 }
 
+// Equal compares two ParentDataSet instances for equality
+func (p *ParentDataSet) Equal(other *ParentDataSet) bool {
+	if p == nil && other == nil {
+		return true
+	}
+	if p == nil || other == nil {
+		return false
+	}
+
+	return p.ParentPortIdentity == other.ParentPortIdentity &&
+		p.ParentStats == other.ParentStats &&
+		p.ObservedParentOffsetScaledLogVariance == other.ObservedParentOffsetScaledLogVariance &&
+		p.ObservedParentClockPhaseChangeRate == other.ObservedParentClockPhaseChangeRate &&
+		p.GrandmasterPriority1 == other.GrandmasterPriority1 &&
+		p.GrandmasterClockClass == other.GrandmasterClockClass &&
+		p.GrandmasterClockAccuracy == other.GrandmasterClockAccuracy &&
+		p.GrandmasterOffsetScaledLogVariance == other.GrandmasterOffsetScaledLogVariance &&
+		p.GrandmasterPriority2 == other.GrandmasterPriority2 &&
+		p.GrandmasterIdentity == other.GrandmasterIdentity
+}
+
 // ValueRegEx provides the regex method for the ExternalGrandmasterProperties values matching
 func (e *ExternalGrandmasterProperties) ValueRegEx() map[string]string {
 	return map[string]string{
