@@ -44,6 +44,8 @@ const (
 	DpllType
 	DpllLockStatusError
 	DpllClockQualityLevel
+	DpllPhaseOffsetMonitor
+	DpllPhaseOffsetAverageFactor
 )
 
 // DpllPinTypes defines the attribute-set for dpll_a_pin
@@ -77,6 +79,8 @@ const (
 	DpllPinEsyncFrequency
 	DpllPinEsyncFrequencySupported
 	DpllPinEsyncPulse
+	DpllPinReferenceSync
+	DpllPinPhaseAdjustGran
 )
 
 // DpllCmds defines DPLL subsystem commands encoding
@@ -122,6 +126,33 @@ const (
 	LockStatusFFOTooHigh
 )
 
+// GetLockStatusError returns lock status error as a string
+func GetLockStatusError(le uint32) string {
+	lockStatusErrorMap := map[uint32]string{
+		LockStatusErrorNone:      "none",
+		LockStatusErrorUndefined: "undefined",
+		LockStatusErrorMediaDown: "media-down",
+		LockStatusFFOTooHigh:     "fto-too-high",
+	}
+	return lockStatusErrorMap[le]
+}
+
+// PhaseOffsetMonitor defines phase offset monitor enable / disable states.
+const (
+	PhaseOffsetMonitorAttribute = iota
+	PhaseOffsetMonitorEnabled
+	PhaseOffsetMonitorDisabled
+)
+
+// GetPhaseOffsetMonitor returns phase offset monitor as a string
+func GetPhaseOffsetMonitor(po uint32) string {
+	phaseOffsetMonitorMap := map[uint32]string{
+		PhaseOffsetMonitorEnabled:  "enabled",
+		PhaseOffsetMonitorDisabled: "disabled",
+	}
+	return phaseOffsetMonitorMap[po]
+}
+
 // ClockQualityLevel defines possible clock quality levels when on holdover
 const (
 	ClockQualityLevel = iota
@@ -134,6 +165,35 @@ const (
 	ClockQualityLevelITUOpt1EEEC
 	ClockQualityLevelItuOpt1EPRC
 )
+
+// GetClockQualityLevels returns clock quality levels as a string
+func GetClockQualityLevels(cqs []uint32) string {
+	clockQualityLevels := make([]string, 0)
+	for _, cq := range cqs {
+		clockQualityLevels = append(clockQualityLevels, GetClockQualityLevel(cq))
+	}
+	return strings.Join(clockQualityLevels, ",")
+}
+
+// GetClockQualityLevel returns clock quality level as a string
+func GetClockQualityLevel(cq uint32) string {
+	clockQualityLevelMap := map[uint32]string{
+		ClockQualityLevel:             "itu-opt1-prc",
+		ClockQualityLevelITUOpt1PRC:   "itu-opt1-prc",
+		ClockQualityLevelITUOpt1SSUA:  "itu-opt1-ssua",
+		ClockQualityLevelITUOpt1SSUB:  "itu-opt1-ssub",
+		ClockQualityLevelITUOpt1EEC1:  "itu-opt1-eec1",
+		ClockQualityLevelITUOpt1PRTC:  "itu-opt1-prtc",
+		ClockQualityLevelITUOpt1EPRTC: "itu-opt1-eprtc",
+		ClockQualityLevelITUOpt1EEEC:  "itu-opt1-eeec",
+		ClockQualityLevelItuOpt1EPRC:  "itu-opt1-eprc",
+	}
+	cqStr, found := clockQualityLevelMap[cq]
+	if found {
+		return cqStr
+	}
+	return ""
+}
 
 // DpllTypeAttribute defines DPLL types
 const (
@@ -187,15 +247,19 @@ func GetMode(md uint32) string {
 
 // DpllStatusHR represents human-readable DPLL status
 type DpllStatusHR struct {
-	Timestamp     time.Time `json:"timestamp"`
-	ID            uint32    `json:"id"`
-	ModuleName    string    `json:"moduleName"`
-	Mode          string    `json:"mode"`
-	ModeSupported string    `json:"modeSupported"`
-	LockStatus    string    `json:"lockStatus"`
-	ClockID       string    `json:"clockId"`
-	Type          string    `json:"type"`
-	Temp          float64   `json:"temp"`
+	Timestamp                time.Time `json:"timestamp"`
+	ID                       uint32    `json:"id"`
+	ModuleName               string    `json:"moduleName"`
+	Mode                     string    `json:"mode"`
+	ModeSupported            string    `json:"modeSupported"`
+	LockStatus               string    `json:"lockStatus"`
+	ClockID                  string    `json:"clockId"`
+	Type                     string    `json:"type"`
+	Temp                     float64   `json:"temp,omitempty"`
+	LockStatusError          string    `json:"lockStatusError,omitempty"`
+	ClockQualityLevel        string    `json:"clockQualityLevel,omitempty"`
+	PhaseOffsetMonitor       string    `json:"phaseOffsetMonitor,omitempty"`
+	PhaseOffsetAverageFactor uint32    `json:"phaseOffsetAverageFactor,omitempty"`
 }
 
 // GetDpllStatusHR returns human-readable DPLL status
@@ -205,15 +269,19 @@ func GetDpllStatusHR(reply *DoDeviceGetReply, timestamp time.Time) ([]byte, erro
 		modes = append(modes, GetMode(md))
 	}
 	hr := DpllStatusHR{
-		Timestamp:     timestamp,
-		ID:            reply.ID,
-		ModuleName:    reply.ModuleName,
-		Mode:          GetMode(reply.Mode),
-		ModeSupported: fmt.Sprint(strings.Join(modes[:], ",")),
-		LockStatus:    GetLockStatus(reply.LockStatus),
-		ClockID:       fmt.Sprintf("0x%x", reply.ClockID),
-		Type:          GetDpllType(reply.Type),
-		Temp:          float64(reply.Temp) / DpllTemperatureDivider,
+		Timestamp:                timestamp,
+		ID:                       reply.ID,
+		ModuleName:               reply.ModuleName,
+		Mode:                     GetMode(reply.Mode),
+		ModeSupported:            fmt.Sprint(strings.Join(modes[:], ",")),
+		LockStatus:               GetLockStatus(reply.LockStatus),
+		ClockID:                  fmt.Sprintf("0x%x", reply.ClockID),
+		Type:                     GetDpllType(reply.Type),
+		Temp:                     float64(reply.Temp) / DpllTemperatureDivider,
+		LockStatusError:          GetLockStatusError(reply.LockStatusError),
+		ClockQualityLevel:        GetClockQualityLevels(reply.ClockQualityLevel),
+		PhaseOffsetMonitor:       GetPhaseOffsetMonitor(reply.PhaseOffsetMonitor),
+		PhaseOffsetAverageFactor: reply.PhaseOffsetAverageFactor,
 	}
 	return json.Marshal(hr)
 }
@@ -222,29 +290,31 @@ func GetDpllStatusHR(reply *DoDeviceGetReply, timestamp time.Time) ([]byte, erro
 type PinInfoHR struct {
 	Timestamp                 time.Time           `json:"timestamp"`
 	ID                        uint32              `json:"id"`
-	ModuleName                string              `json:"moduleName"`
+	ModuleName                string              `json:"moduleName,omitempty"`
 	ClockID                   string              `json:"clockId"`
-	BoardLabel                string              `json:"boardLabel"`
-	PanelLabel                string              `json:"panelLabel"`
-	PackageLabel              string              `json:"packageLabel"`
-	Type                      string              `json:"type"`
-	Frequency                 uint64              `json:"frequency"`
-	FrequencySupported        []FrequencyRange    `json:"frequencySupported"`
-	Capabilities              string              `json:"capabilities"`
-	ParentDevice              []PinParentDeviceHR `json:"pinParentDevice"`
-	ParentPin                 []PinParentPinHR    `json:"pinParentPin"`
-	PhaseAdjustMin            int32               `json:"phaseAdjustMin"`
-	PhaseAdjustMax            int32               `json:"phaseAdjustMax"`
+	BoardLabel                string              `json:"boardLabel,omitempty"`
+	PanelLabel                string              `json:"panelLabel,omitempty"`
+	PackageLabel              string              `json:"packageLabel,omitempty"`
+	Type                      string              `json:"type,omitempty"`
+	Frequency                 uint64              `json:"frequency,omitempty"`
+	FrequencySupported        []FrequencyRange    `json:"frequencySupported,omitempty"`
+	Capabilities              string              `json:"capabilities,omitempty"`
+	ParentDevice              []PinParentDeviceHR `json:"pinParentDevice,omitempty"`
+	ParentPin                 []PinParentPinHR    `json:"pinParentPin,omitempty"`
+	PhaseAdjustMin            int32               `json:"phaseAdjustMin,omitempty"`
+	PhaseAdjustMax            int32               `json:"phaseAdjustMax,omitempty"`
 	PhaseAdjust               int32               `json:"phaseAdjust"`
-	FractionalFrequencyOffset int                 `json:"fractionalFrequencyOffset"`
-	EsyncFrequency            int64               `json:"esyncFrequency"`
-	EsyncFrequencySupported   []FrequencyRange    `json:"esyncFrequencySupported"`
-	EsyncPulse                int64               `json:"esyncPulse"`
+	FractionalFrequencyOffset int                 `json:"fractionalFrequencyOffset,omitempty"`
+	EsyncFrequency            int64               `json:"esyncFrequency,omitempty"`
+	EsyncFrequencySupported   []FrequencyRange    `json:"esyncFrequencySupported,omitempty"`
+	EsyncPulse                int64               `json:"esyncPulse,omitempty"`
+	ReferenceSync             []ReferenceSync     `json:"referenceSync,omitempty"`
+	PhaseAdjustGran           uint32              `json:"phaseAdjustGran,omitempty"`
 }
 
 // PinParentDeviceHR contains nested netlink attributes.
 type PinParentDeviceHR struct {
-	ParentID      uint32  `json:"parentId"`
+	ParentID      uint32  `json:"parentID"`
 	Direction     string  `json:"direction"`
 	Prio          uint32  `json:"prio"`
 	State         string  `json:"state"`
@@ -253,7 +323,7 @@ type PinParentDeviceHR struct {
 
 // PinParentPin contains nested netlink attributes.
 type PinParentPinHR struct {
-	ParentID uint32 `json:"parentId"`
+	ParentID uint32 `json:"parentID"`
 	State    string `json:"parentState"`
 }
 
@@ -355,6 +425,8 @@ func GetPinInfoHR(reply *PinInfo, timestamp time.Time) ([]byte, error) {
 		EsyncFrequency:            reply.EsyncFrequency,
 		EsyncFrequencySupported:   make([]FrequencyRange, 0),
 		EsyncPulse:                int64(reply.EsyncPulse),
+		ReferenceSync:             make([]ReferenceSync, 0),
+		PhaseAdjustGran:           reply.PhaseAdjustGran,
 	}
 	for i := 0; i < len(reply.ParentDevice); i++ {
 		hr.ParentDevice = append(hr.ParentDevice, PinParentDeviceHR{
@@ -382,6 +454,12 @@ func GetPinInfoHR(reply *PinInfo, timestamp time.Time) ([]byte, error) {
 		hr.EsyncFrequencySupported = append(hr.EsyncFrequencySupported, FrequencyRange{
 			FrequencyMin: reply.EsyncFrequencySupported[i].FrequencyMin,
 			FrequencyMax: reply.EsyncFrequencySupported[i].FrequencyMax,
+		})
+	}
+	for i := 0; i < len(reply.ReferenceSync); i++ {
+		hr.ReferenceSync = append(hr.ReferenceSync, ReferenceSync{
+			ID:    reply.ReferenceSync[i].ID,
+			State: reply.ReferenceSync[i].State,
 		})
 	}
 	return json.Marshal(hr)
