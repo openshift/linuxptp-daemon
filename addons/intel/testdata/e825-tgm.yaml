@@ -6,10 +6,13 @@ ptpSchedulingPriority: 10
 ptpSettings:
 logReduce: "true"
 plugins:
+  e830:
+    devices:
+      - enp108s0f0
   e825:
     enableDefaultConfig: false
-    pins:
-      eno5: {}
+    devices:
+      - eno5
     settings:
       LocalMaxHoldoverOffSet: 1500
       LocalHoldoverTimeout: 14400
