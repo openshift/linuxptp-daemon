@@ -2,9 +2,8 @@ package intel
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"reflect"
 	"strconv"
 	"strings"
 
@@ -18,15 +17,21 @@ var pluginNameE830 = "e830"
 
 // E830Opts is the options for e830 plugin
 type E830Opts struct {
-	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
-	DevicePins          map[string]map[string]string `json:"pins"`
-	DpllSettings        map[string]uint64            `json:"settings"`
-	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
-	PhaseInputs         []PhaseInputs                `json:"interconnections"`
+	Devices          []string                     `json:"devices"`
+	DevicePins       map[string]pinSet            `json:"pins"`
+	DeviceFreqencies map[string]frqSet            `json:"frequencies"`
+	DpllSettings     map[string]uint64            `json:"settings"`
+	PhaseOffsetPins  map[string]map[string]string `json:"phaseOffsetPins"`
 }
 
-// GetPhaseInputs implements PhaseInputsProvider
-func (o E830Opts) GetPhaseInputs() []PhaseInputs { return o.PhaseInputs }
+// allDevices enumerates all defined devices (Devices/DevicePins/DeviceFrequencies/PhaseOffsets)
+func (opts *E830Opts) allDevices() []string {
+	allDevices := opts.Devices
+	allDevices = extendWithKeys(allDevices, opts.DevicePins)
+	allDevices = extendWithKeys(allDevices, opts.DeviceFreqencies)
+	allDevices = extendWithKeys(allDevices, opts.PhaseOffsetPins)
+	return allDevices
+}
 
 // E830PluginData is the plugin data for e830 plugin
 type E830PluginData struct {
@@ -35,64 +40,65 @@ type E830PluginData struct {
 
 // OnPTPConfigChangeE830 is called on PTP config change for e830 plugin
 func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error {
-	glog.Info("calling onPTPConfigChange for e830 plugin")
+	glog.Infof("calling onPTPConfigChange for e830 plugin (%s)", *nodeProfile.Name)
 	var opts E830Opts
 	var err error
 	var optsByteArray []byte
+
+	if (*nodeProfile).PtpSettings == nil {
+		(*nodeProfile).PtpSettings = make(map[string]string)
+	}
+
 	for name, raw := range (*nodeProfile).Plugins {
 		if name == pluginNameE830 {
+			// Parse user-specified config
 			optsByteArray, _ = json.Marshal(raw)
 			err = json.Unmarshal(optsByteArray, &opts)
 			if err != nil {
 				glog.Error("e830 failed to unmarshal opts: " + err.Error())
 			}
-			if (*nodeProfile).PtpSettings == nil {
-				(*nodeProfile).PtpSettings = make(map[string]string)
-			}
+
+			allDevices := opts.allDevices()
+			glog.Infof("Initializing e830 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
+
+			// Setup clockID (prefer ice modue clock ID for e830)
 			iceClockID, iceErr := getClockIDByModule("ice")
 			if iceErr != nil {
 				glog.Errorf("e830: failed to resolve ICE DPLL clock ID via netlink: %v", iceErr)
 			}
-			for device, pins := range opts.DevicePins {
+			for _, device := range allDevices {
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				if iceErr == nil {
 					(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(iceClockID, 10)
-				}
-				for pin, value := range pins {
-					deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
-					phcs, pErr := os.ReadDir(deviceDir)
-					if pErr != nil {
-						glog.Error("e830 failed to read " + deviceDir + ": " + pErr.Error())
-						continue
-					}
-					for _, phc := range phcs {
-						pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
-						glog.Infof("echo %s > %s", value, pinPath)
-						err = os.WriteFile(pinPath, []byte(value), 0666)
-						if err != nil {
-							glog.Error("e830 failed to write " + value + " to " + pinPath + ": " + err.Error())
-						}
-					}
+					glog.Infof("Detected %s=%d (%x)", dpllClockIDStr, iceClockID, iceClockID)
+				} else {
+					glog.Errorf("No clockID detected for %s", device)
 				}
 			}
+
+			// Initialize all user-specified PGT pins and frequencies
+			for device, pins := range opts.DevicePins {
+				err = pinConfig.applyPinSet(device, pins)
+				if err != nil {
+					glog.Errorf("e830 failed to set Pin configuration for %s: %s", device, err)
+				}
+			}
+			for device, frequencies := range opts.DeviceFreqencies {
+				err = pinConfig.applyPinFrq(device, frequencies)
+				if err != nil {
+					glog.Errorf("e830 failed to set PHC frequencies for %s: %s", device, err)
+				}
+			}
+
+			// Copy DPLL Settings from plugin config to PtpSettings
 			for k, v := range opts.DpllSettings {
 				if _, ok := (*nodeProfile).PtpSettings[k]; !ok {
 					(*nodeProfile).PtpSettings[k] = strconv.FormatUint(v, 10)
 				}
 			}
+
+			// Copy PhaseOffsetPins settings from plugin config to PtpSettings
 			for iface, properties := range opts.PhaseOffsetPins {
-				ifaceFound := false
-				for dev := range opts.DevicePins {
-					if strings.Compare(iface, dev) == 0 {
-						ifaceFound = true
-						break
-					}
-				}
-				if !ifaceFound {
-					glog.Errorf("e830 phase offset pin filter initialization failed: interface %s not found among  %v",
-						iface, reflect.ValueOf(opts.DevicePins).MapKeys())
-					break
-				}
 				for pinProperty, value := range properties {
 					var clockIDUsed uint64
 					if iceErr == nil {
@@ -102,15 +108,27 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 					(*nodeProfile).PtpSettings[key] = value
 				}
 			}
-			if opts.PhaseInputs != nil {
-				chain, ierr := InitClockChain(opts, nodeProfile)
-				if ierr != nil {
-					return ierr
+
+			// Setup BC configuration
+			if tbcConfigured(nodeProfile) {
+				if _, ok := nodeProfile.PtpSettings["upstreamPort"]; !ok {
+					return errors.New("GNR-D T-BC must set upstreamPort")
 				}
-				(*nodeProfile).PtpSettings["leadingInterface"] = chain.LeadingNIC.Name
-				(*nodeProfile).PtpSettings["upstreamPort"] = chain.LeadingNIC.UpstreamPort
-			} else {
-				glog.Error("no clock chain set")
+				if _, ok := nodeProfile.PtpSettings["leadingInterface"]; !ok {
+					// TODO: We could actually figure this out based on upstreamPort... And the fact that there's only one NAC per GNR-D
+					return errors.New("GNR-D T-BC must set leadingInterface")
+				}
+				// e830 DPLL is inaccessible to software, so ensure the daemon ignores all e830 DPLLs for now:
+				for _, device := range allDevices {
+					// Note: Only set to "true" if it's unset; This allows overriding this by explicitly setting dpll.$iface.ignore = "false" in the PtpConfig section
+					key := dpll.PtpSettingsDpllIgnoreKey(device)
+					if value, ok := nodeProfile.PtpSettings[key]; ok {
+						glog.Infof("Not setting %s (already \"%s\")", key, value)
+					} else {
+						nodeProfile.PtpSettings[key] = "true"
+						glog.Infof("Setting %s = \"true\"", key)
+					}
+				}
 			}
 		}
 	}
@@ -132,7 +150,8 @@ func E830(name string) (*plugin.Plugin, *interface{}) {
 	glog.Infof("registering e830 plugin")
 	hwplugins := []string{}
 	pluginData := E830PluginData{hwplugins: &hwplugins}
-	_plugin := plugin.Plugin{Name: pluginNameE830,
+	_plugin := plugin.Plugin{
+		Name:               pluginNameE830,
 		OnPTPConfigChange:  OnPTPConfigChangeE830,
 		AfterRunPTPCommand: AfterRunPTPCommandE830,
 		PopulateHwConfig:   PopulateHwConfigE830,

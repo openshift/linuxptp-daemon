@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -46,6 +46,7 @@ var bcDpllPeriods = frqSet{
 // E825Opts is the options structure for e825 plugin
 type E825Opts struct {
 	UblxCmds         UblxCmdList                  `json:"ublxCmds"`
+	Devices          []string                     `json:"devices"`
 	DevicePins       map[string]pinSet            `json:"pins"`
 	DeviceFreqencies map[string]frqSet            `json:"frequencies"`
 	DpllSettings     map[string]uint64            `json:"settings"`
@@ -58,6 +59,16 @@ type GnssOptions struct {
 	Disabled bool `json:"disabled"`
 }
 
+// allDevices enumerates all defined devices (Devices/DevicePins/DeviceFrequencies/PhaseOffsets)
+func (opts *E825Opts) allDevices() []string {
+	// Enumerate all defined devices (Devices/DevicePins/DeviceFrequencies)
+	allDevices := opts.Devices
+	allDevices = extendWithKeys(allDevices, opts.DevicePins)
+	allDevices = extendWithKeys(allDevices, opts.DeviceFreqencies)
+	allDevices = extendWithKeys(allDevices, opts.PhaseOffsetPins)
+	return allDevices
+}
+
 // E825PluginData is the data structure for e825 plugin
 type E825PluginData struct {
 	hwplugins *[]string
@@ -66,6 +77,15 @@ type E825PluginData struct {
 
 func tbcConfigured(nodeProfile *ptpv1.PtpProfile) bool {
 	return nodeProfile.PtpSettings["clockType"] == "T-BC"
+}
+
+func extendWithKeys[T any](s []string, m map[string]T) []string {
+	for key := range m {
+		if !slices.Contains(s, key) {
+			s = append(s, key)
+		}
+	}
+	return s
 }
 
 // OnPTPConfigChangeE825 performs actions on PTP config change for e825 plugin
@@ -94,18 +114,22 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				glog.Error("e825 failed to unmarshal opts: " + err.Error())
 			}
 
+			allDevices := e825Opts.allDevices()
+			glog.Infof("Initializing e825 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
+
 			// Setup clockID (prefer ZL3073x module clock ID for e825)
 			zlClockID, zlErr := getClockIDByModule("zl3073x")
 			if zlErr != nil {
 				glog.Errorf("e825: failed to resolve ZL3073x DPLL clock ID via netlink: %v", zlErr)
 			}
-			for device := range e825Opts.DevicePins {
+			for _, device := range allDevices {
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				if zlErr == nil {
-					(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(zlClockID, 10)
-				} else {
-					(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(getClockIDE825(device), 10)
+				clkID := zlClockID
+				if zlErr != nil {
+					clkID = getClockIDE825(device)
 				}
+				(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(clkID, 10)
+				glog.Infof("Detected %s=%d (%x)", dpllClockIDStr, clkID, clkID)
 			}
 
 			// Initialize all user-specified phc pins and frequencies
@@ -129,20 +153,8 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				}
 			}
 
-			// Copy PhoseOffsetPins settings from plugin config to PtpSettings
+			// Copy PhaseOffsetPins settings from plugin config to PtpSettings
 			for iface, properties := range e825Opts.PhaseOffsetPins {
-				ifaceFound := false
-				for dev := range e825Opts.DevicePins {
-					if strings.Compare(iface, dev) == 0 {
-						ifaceFound = true
-						break
-					}
-				}
-				if !ifaceFound {
-					glog.Errorf("e825 phase offset pin filter initialization failed: interface %s not found among  %v",
-						iface, reflect.ValueOf(e825Opts.DevicePins).MapKeys())
-					break
-				}
 				for pinProperty, value := range properties {
 					var clockIDUsed uint64
 					if zlErr == nil {

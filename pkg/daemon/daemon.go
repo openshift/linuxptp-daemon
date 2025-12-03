@@ -849,6 +849,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				var eventSource []event.EventSource
 				if iface.Source == event.GNSS || iface.Source == event.PPS ||
 					(iface.Source == event.PTP4l && profileClockType == TBC) {
+					if nodeProfile.PtpSettings[dpll.PtpSettingsDpllIgnoreKey(iface.Name)] == "true" {
+						glog.Info("Init dpll: Skipping dpll for %s", iface.Name)
+						continue
+					}
 					glog.Info("Init dpll: ptp settings ", (*nodeProfile).PtpSettings)
 					for k, v := range (*nodeProfile).PtpSettings {
 						glog.Info("Init dpll: ptp kv ", k, " ", v)

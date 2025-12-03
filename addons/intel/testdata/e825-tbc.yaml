@@ -128,12 +128,15 @@ ptpSettings:
   upstreamPort: eno4
 plugins:
   e825:
-    pins:
-      eno5: {}
+    devices:
+      - eno5
     settings:
       LocalMaxHoldoverOffSet: 1500
       LocalHoldoverTimeout: 14400
       MaxInSpecOffset: 100
+  e830:
+    devices:
+      - enp108s0f0
 ts2phcConf: |
   [global]
   use_syslog  0
