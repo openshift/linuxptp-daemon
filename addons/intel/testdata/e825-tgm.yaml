@@ -4,13 +4,12 @@ phc2sysOpts: -r -u 0 -m -w -N 8 -R 16 -s eno5 -n 24
 ptpSchedulingPolicy: SCHED_FIFO
 ptpSchedulingPriority: 10
 ptpSettings:
-#leadingInterface: eno5
 logReduce: "true"
 plugins:
   e825:
     enableDefaultConfig: false
     pins:
-      "eno5": {}
+      eno5: {}
     settings:
       LocalMaxHoldoverOffSet: 1500
       LocalHoldoverTimeout: 14400

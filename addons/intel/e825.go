@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"reflect"
 	"strconv"
 	"strings"
@@ -20,15 +19,38 @@ import (
 
 var pluginNameE825 = "e825"
 
+// Hard-coded pin configuration to enforce when T-BC is initializing or loses sync
+var bcDpllPinReset = pinSet{
+	// Disable SDP0
+	"SDP0": "0 0",
+	// Disable SDP2
+	"SDP2": "0 0",
+}
+
+// Hard-coded pin configuration to setup PHY-to-DPLL sync when T-BC upstreamPort is synchronized
+var bcDpllPinSetup = pinSet{
+	// SDP0 TX on channel 1
+	"SDP0": "2 1",
+	// SDP2 TX on channel 2
+	"SDP2": "2 2",
+}
+
+// Hard-coded pin frequencies to setup PHY-to-DPLL sync when T-BC upstreamPort is synchronized
+var bcDpllPeriods = frqSet{
+	// channel 1 (SDP0) configure 1PPS
+	"1 0 0 1 0",
+	// channel 2 (SDP2) configure 1kHz
+	"2 0 0 0 1000000",
+}
+
 // E825Opts is the options structure for e825 plugin
 type E825Opts struct {
-	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
-	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
-	DevicePins          map[string]map[string]string `json:"pins"`
-	DeviceFreqencies    map[string][]string          `json:"frequencies"`
-	DpllSettings        map[string]uint64            `json:"settings"`
-	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
-	Gnss                GnssOptions                  `json:"gnss"`
+	UblxCmds         UblxCmdList                  `json:"ublxCmds"`
+	DevicePins       map[string]pinSet            `json:"pins"`
+	DeviceFreqencies map[string]frqSet            `json:"frequencies"`
+	DpllSettings     map[string]uint64            `json:"settings"`
+	PhaseOffsetPins  map[string]map[string]string `json:"phaseOffsetPins"`
+	Gnss             GnssOptions                  `json:"gnss"`
 }
 
 // GnssOptions defines GNSS-specific options for the e825
@@ -42,90 +64,72 @@ type E825PluginData struct {
 	dpllPins  []*dpll_netlink.PinInfo
 }
 
-// EnableE825PTPConfig is the script to enable default e825 PTP configuration
-var EnableE825PTPConfig = `
-#!/bin/bash
-set -eu
-
-echo "No E825 specific configuration is needed"
-`
+func tbcConfigured(nodeProfile *ptpv1.PtpProfile) bool {
+	return nodeProfile.PtpSettings["clockType"] == "T-BC"
+}
 
 // OnPTPConfigChangeE825 performs actions on PTP config change for e825 plugin
 func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	pluginData := (*data).(*E825PluginData)
-	glog.Info("calling onPTPConfigChange for e825 plugin")
+	glog.Infof("calling onPTPConfigChange for e825 plugin (%s)", *nodeProfile.Name)
 	var e825Opts E825Opts
 	var err error
 	var optsByteArray []byte
+
+	if (*nodeProfile).PtpSettings == nil {
+		(*nodeProfile).PtpSettings = make(map[string]string)
+	}
+
+	if tbcConfigured(nodeProfile) {
+		// For T-BC, default to GNSS=disabled, but allow manual override in the user-speciifed config
+		e825Opts.Gnss.Disabled = true
+	}
+
 	for name, opts := range (*nodeProfile).Plugins {
-		if name == pluginNameE825 { // "e825"
+		if name == pluginNameE825 {
+			// Parse user-specified config
 			optsByteArray, _ = json.Marshal(opts)
 			err = json.Unmarshal(optsByteArray, &e825Opts)
 			if err != nil {
 				glog.Error("e825 failed to unmarshal opts: " + err.Error())
 			}
-			// for unit testing only, PtpSettings may include "unitTest" key. The value is
-			// the path where resulting configuration files will be written, instead of /var/run
-			_, unitTest = (*nodeProfile).PtpSettings["unitTest"]
-			if unitTest {
-				MockPins()
-			}
 
-			if e825Opts.EnableDefaultConfig {
-				stdout, _ := exec.Command("/usr/bin/bash", "-c", EnableE825PTPConfig).Output()
-				glog.Infof(string(stdout))
-			}
-			if (*nodeProfile).PtpSettings == nil {
-				(*nodeProfile).PtpSettings = make(map[string]string)
-			}
-
-			// Prefer ZL3073x module for e825
+			// Setup clockID (prefer ZL3073x module clock ID for e825)
 			zlClockID, zlErr := getClockIDByModule("zl3073x")
 			if zlErr != nil {
 				glog.Errorf("e825: failed to resolve ZL3073x DPLL clock ID via netlink: %v", zlErr)
 			}
-			for device, pins := range e825Opts.DevicePins {
+			for device := range e825Opts.DevicePins {
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				if !unitTest {
-					if zlErr == nil {
-						(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(zlClockID, 10)
-					} else {
-						(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(getClockIDE825(device), 10)
-					}
-					deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
-					phcs, perr := os.ReadDir(deviceDir)
-					if perr != nil {
-						glog.Errorf("e825 failed to read %s: %s", deviceDir, perr)
-						continue
-					}
-					for _, phc := range phcs {
-						for pin, value := range pins {
-							pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
-							glog.Infof("Setting \"%s\" > %s", value, pinPath)
-							err = os.WriteFile(pinPath, []byte(value), 0o666)
-							if err != nil {
-								glog.Errorf("e825 pin write failure: %s", err)
-							}
-						}
-						if periods, hasPeriodConfig := e825Opts.DeviceFreqencies[device]; hasPeriodConfig {
-							periodPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/period", device, phc.Name())
-							for _, value := range periods {
-								glog.Infof("Setting \"%s\" > %s", value, periodPath)
-								err = os.WriteFile(periodPath, []byte(value), 0o666)
-								if err != nil {
-									glog.Errorf("e825 period write failure: %s", err)
-								}
-							}
-						}
-					}
+				if zlErr == nil {
+					(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(zlClockID, 10)
+				} else {
+					(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(getClockIDE825(device), 10)
 				}
 			}
 
+			// Initialize all user-specified phc pins and frequencies
+			for device, pins := range e825Opts.DevicePins {
+				err = pinConfig.applyPinSet(device, pins)
+				if err != nil {
+					glog.Errorf("e825 failed to set Pin configuration for %s: %s", device, err)
+				}
+			}
+			for device, frequencies := range e825Opts.DeviceFreqencies {
+				err = pinConfig.applyPinFrq(device, frequencies)
+				if err != nil {
+					glog.Errorf("e825 failed to set PHC frequencies for %s: %s", device, err)
+				}
+			}
+
+			// Copy DPLL Settings from plugin config to PtpSettings
 			for k, v := range e825Opts.DpllSettings {
 				if _, ok := (*nodeProfile).PtpSettings[k]; !ok {
 					(*nodeProfile).PtpSettings[k] = strconv.FormatUint(v, 10)
 				}
 			}
+
+			// Copy PhoseOffsetPins settings from plugin config to PtpSettings
 			for iface, properties := range e825Opts.PhaseOffsetPins {
 				ifaceFound := false
 				for dev := range e825Opts.DevicePins {
@@ -150,17 +154,23 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					(*nodeProfile).PtpSettings[key] = value
 				}
 			}
+
 			// Always enforce GNSS setting (default = enabled)
 			pluginData.setupGnss(e825Opts.Gnss)
-			// Configure leadingInterface when in BC mode
-			if nodeProfile.PtpSettings["clockType"] == "T-BC" {
-				if len(e825Opts.DevicePins) > 1 {
-					glog.Errorf("e825 configuration expects exactly one device, but %d were configured", len(e825Opts.DevicePins))
+
+			// BC sanity check and pin setup
+			if tbcConfigured(nodeProfile) {
+				if _, ok := nodeProfile.PtpSettings["upstreamPort"]; !ok {
+					return errors.New("GNR-D T-BC must set upstreamPort")
 				}
-				for device := range e825Opts.DevicePins {
-					glog.Infof("Configuring leading device %s pins for BC configuration", device)
-					(*nodeProfile).PtpSettings["leadingInterface"] = device
-					(*nodeProfile).PtpSettings["upstreamPort"] = ""
+				if _, ok := nodeProfile.PtpSettings["leadingInterface"]; !ok {
+					// TODO: We could actually figure this out based on upstreamPort... And the fact that there's only one NAC per GNR-D
+					return errors.New("GNR-D T-BC must set leadingInterface")
+				}
+				device := nodeProfile.PtpSettings["leadingInterface"]
+				err = pinConfig.applyPinSet(device, bcDpllPinReset)
+				if err != nil {
+					glog.Errorf("Could not apply BC pin reset to %s: %s", device, err)
 				}
 			}
 		}
@@ -168,6 +178,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	return nil
 }
 
+// populateDpllPins creates a list of all known DPLL pins
 func (d *E825PluginData) populateDpllPins() error {
 	if unitTest {
 		return nil
@@ -187,6 +198,7 @@ func (d *E825PluginData) populateDpllPins() error {
 // Setup mockable pin setting function
 var e825DoPinSet = BatchPinSet
 
+// pinCmdSetState sets the state of an individual DPLL pin
 func pinCmdSetState(pin *dpll_netlink.PinInfo, connectable bool) dpll_netlink.PinParentDeviceCtl {
 	newState := uint32(dpll_netlink.PinStateSelectable)
 	if !connectable {
@@ -205,6 +217,7 @@ func pinCmdSetState(pin *dpll_netlink.PinInfo, connectable bool) dpll_netlink.Pi
 	return command
 }
 
+// setupGnss configures the GNSS-to-DPLL binding
 func (d *E825PluginData) setupGnss(gnss GnssOptions) error {
 	if len(d.dpllPins) == 0 {
 		err := d.populateDpllPins()
@@ -238,27 +251,52 @@ func (d *E825PluginData) setupGnss(gnss GnssOptions) error {
 // AfterRunPTPCommandE825 performs actions after certain PTP commands for e825 plugin
 func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, command string) error {
 	pluginData := (*data).(*E825PluginData)
-	glog.Info("calling AfterRunPTPCommandE825 for e825 plugin")
+	glog.Infof("calling AfterRunPTPCommandE825 for e825 plugin (%s): %s", *nodeProfile.Name, command)
 	var e825Opts E825Opts
 	var err error
 	var optsByteArray []byte
 
-	e825Opts.EnableDefaultConfig = false
-
 	for name, opts := range (*nodeProfile).Plugins {
-		if name == "e825" {
+		if name == pluginNameE825 {
 			optsByteArray, _ = json.Marshal(opts)
 			err = json.Unmarshal(optsByteArray, &e825Opts)
 			if err != nil {
 				glog.Error("e825 failed to unmarshal opts: " + err.Error())
 			}
 			switch command {
+			// "gpspipe" is called once the gpspipe process is running (and we can send ublx commands)
 			case "gpspipe":
-				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
+				glog.Infof("AfterRunPTPCommandE825 doing ublx config for command: %s", command)
 				// Execute user-supplied UblxCmds first:
 				*pluginData.hwplugins = append(*pluginData.hwplugins, e825Opts.UblxCmds.runAll()...)
 				// Finish with the default commands:
 				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
+			// "tbc-ho-exit" is called when ptp4l sync is achieved on the T-BC upstreamPort
+			case "tbc-ho-exit":
+				if tbcConfigured(nodeProfile) {
+					if device, devOk := nodeProfile.PtpSettings["leadingInterface"]; devOk {
+						glog.Infof("Configuring NAC-to-DPLL pins for %s", device)
+						err = pinConfig.applyPinSet(device, bcDpllPinSetup)
+						if err != nil {
+							glog.Errorf("Could not apply BC pin reset to %s: %s", device, err)
+						}
+						err = pinConfig.applyPinFrq(device, bcDpllPeriods)
+						if err != nil {
+							glog.Errorf("Could not apply BC pin periods to %s: %s", device, err)
+						}
+					}
+				}
+			// "tbc-ho-entry" is called when ptp4l sync is lost on the T-BC upstreamPort
+			case "tbc-ho-entry":
+				if tbcConfigured(nodeProfile) {
+					if device, devOk := nodeProfile.PtpSettings["leadingInterface"]; devOk {
+						glog.Infof("Resetting DPLL pins for %s", device)
+						err = pinConfig.applyPinSet(device, bcDpllPinReset)
+						if err != nil {
+							glog.Errorf("Could not apply BC pin reset to %s: %s", device, err)
+						}
+					}
+				}
 			default:
 				glog.Infof("AfterRunPTPCommandE825 doing nothing for command: %s", command)
 			}
@@ -269,9 +307,6 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 
 // PopulateHwConfigE825 populates hwconfig for e825 plugin
 func PopulateHwConfigE825(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error {
-	//hwConfig := ptpv1.HwConfig{}
-	//hwConfig.DeviceID = "e825"
-	//*hwconfigs = append(*hwconfigs, hwConfig)
 	if data != nil {
 		_data := *data
 		pluginData := _data.(*E825PluginData)
