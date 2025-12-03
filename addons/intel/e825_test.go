@@ -1,6 +1,7 @@
 package intel
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -8,6 +9,28 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
 )
+
+type mockPinConfig struct {
+	actualPinSetCount int
+	actualPinFrqCount int
+}
+
+func (m *mockPinConfig) applyPinSet(_ string, pins pinSet) error {
+	m.actualPinSetCount += len(pins)
+	return nil
+}
+
+func (m *mockPinConfig) applyPinFrq(_ string, frq frqSet) error {
+	m.actualPinFrqCount += len(frq)
+	return nil
+}
+
+func setupMockPinConfig() (*mockPinConfig, func()) {
+	mockPins := mockPinConfig{}
+	origPinConfig := pinConfig
+	pinConfig = &mockPins
+	return &mockPins, func() { pinConfig = origPinConfig }
+}
 
 func Test_E825(t *testing.T) {
 	p, d := E825("e825")
@@ -57,6 +80,54 @@ func Test_AfterRunPTPCommandE825(t *testing.T) {
 	assert.Equal(t, requiredUblxCmds, found)
 	// And expect 3 of them to have produced output (as specified in the profile)
 	assert.Equal(t, 3, len(*data.hwplugins))
+}
+
+func Test_AfterRunPTPCommandE825_TBC(t *testing.T) {
+	tcs := []struct {
+		name            string
+		command         string
+		profile         string
+		expectedPinSets int
+		expectedPinFrqs int
+	}{
+		{
+			command:         "tbc-ho-exit",
+			profile:         "./testdata/e825-tbc.yaml",
+			expectedPinSets: 2,
+			expectedPinFrqs: 2,
+		},
+		{
+			command:         "tbc-ho-entry",
+			profile:         "./testdata/e825-tbc.yaml",
+			expectedPinSets: 2,
+			expectedPinFrqs: 0,
+		},
+		{
+			command:         "tbc-ho-exit",
+			profile:         "./testdata/e825-tgm.yaml",
+			expectedPinSets: 0,
+			expectedPinFrqs: 0,
+		},
+		{
+			command:         "tbc-ho-entry",
+			profile:         "./testdata/e825-tgm.yaml",
+			expectedPinSets: 0,
+			expectedPinFrqs: 0,
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(fmt.Sprintf("%s::%s", tc.command, tc.profile), func(tt *testing.T) {
+			mockPins, restorePins := setupMockPinConfig()
+			defer restorePins()
+			profile, err := loadProfile(tc.profile)
+			assert.NoError(tt, err)
+			p, d := E825("e825")
+			err = p.AfterRunPTPCommand(d, profile, tc.command)
+			assert.NoError(tt, err)
+			assert.Equal(tt, tc.expectedPinSets, mockPins.actualPinSetCount)
+			assert.Equal(tt, tc.expectedPinFrqs, mockPins.actualPinFrqCount)
+		})
+	}
 }
 
 func Test_PopulateHwConfdigE825(t *testing.T) {
@@ -214,6 +285,64 @@ func Test_setupGnss(t *testing.T) {
 						assert.Equal(tt, expectedState, *ctrl.State)
 					}
 				}
+			}
+		})
+	}
+}
+
+func Test_OnPTPConfigChangeE825(t *testing.T) {
+	tcs := []struct {
+		name            string
+		profile         string
+		editProfile     func(*ptpv1.PtpProfile)
+		expectError     bool
+		expectedPinSets int
+		expectedPinFrqs int
+	}{
+		{
+			name:    "TGM Profile",
+			profile: "./testdata/e825-tgm.yaml",
+		},
+		{
+			name:            "TBC Profile",
+			profile:         "./testdata/e825-tbc.yaml",
+			expectedPinSets: 2,
+		},
+		{
+			name:    "TBC with no leadingInterface",
+			profile: "./testdata/e825-tbc.yaml",
+			editProfile: func(p *ptpv1.PtpProfile) {
+				delete(p.PtpSettings, "leadingInterface")
+			},
+			expectError: true,
+		},
+		{
+			name:    "TBC with no upstreamPort",
+			profile: "./testdata/e825-tbc.yaml",
+			editProfile: func(p *ptpv1.PtpProfile) {
+				delete(p.PtpSettings, "upstreamPort")
+			},
+			expectError: true,
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(tt *testing.T) {
+			unitTest = true
+			mockPins, restorePins := setupMockPinConfig()
+			defer restorePins()
+			profile, err := loadProfile(tc.profile)
+			if tc.editProfile != nil {
+				tc.editProfile(profile)
+			}
+			assert.NoError(tt, err)
+			p, d := E825("e825")
+			err = p.OnPTPConfigChange(d, profile)
+			if tc.expectError {
+				assert.Error(tt, err)
+			} else {
+				assert.NoError(tt, err)
+				assert.Equal(tt, tc.expectedPinSets, mockPins.actualPinSetCount)
+				assert.Equal(tt, tc.expectedPinFrqs, mockPins.actualPinFrqCount)
 			}
 		})
 	}
