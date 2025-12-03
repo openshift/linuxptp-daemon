@@ -2,6 +2,7 @@ package intel
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -105,6 +106,28 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 					}
 					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(clockIDUsed, 10), pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
+				}
+			}
+
+			// Setup BC configuration
+			if tbcConfigured(nodeProfile) {
+				if _, ok := nodeProfile.PtpSettings["upstreamPort"]; !ok {
+					return errors.New("GNR-D T-BC must set upstreamPort")
+				}
+				if _, ok := nodeProfile.PtpSettings["leadingInterface"]; !ok {
+					// TODO: We could actually figure this out based on upstreamPort... And the fact that there's only one NAC per GNR-D
+					return errors.New("GNR-D T-BC must set leadingInterface")
+				}
+				// e830 DPLL is inaccessible to software, so ensure the daemon ignores all e830 DPLLs for now:
+				for _, device := range allDevices {
+					// Note: Only set to "true" if it's unset; This allows overriding this by explicitly setting dpll.$iface.ignore = "false" in the PtpConfig section
+					key := dpll.PtpSettingsDpllIgnoreKey(device)
+					if value, ok := nodeProfile.PtpSettings[key]; ok {
+						glog.Infof("Not setting %s (already \"%s\")", key, value)
+					} else {
+						nodeProfile.PtpSettings[key] = "true"
+						glog.Infof("Setting %s = \"true\"", key)
+					}
 				}
 			}
 		}
