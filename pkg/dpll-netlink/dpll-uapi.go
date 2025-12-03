@@ -348,14 +348,23 @@ func GetPinState(s uint32) string {
 	return ""
 }
 
+// Defines possible pin types
+const (
+	PinTypeMUX   = 1
+	PinTypeEXT   = 2
+	PinTypeSYNCE = 3
+	PinTypeINT   = 4
+	PinTypeGNSS  = 5
+)
+
 // GetPinType returns DPLL pin type as a string
 func GetPinType(tp uint32) string {
 	typeMap := map[int]string{
-		1: "mux",
-		2: "ext",
-		3: "synce-eth-port",
-		4: "int-oscillator",
-		5: "gnss",
+		PinTypeMUX:   "mux",
+		PinTypeEXT:   "ext",
+		PinTypeSYNCE: "synce-eth-port",
+		PinTypeINT:   "int-oscillator",
+		PinTypeGNSS:  "gnss",
 	}
 	typ, found := typeMap[int(tp)]
 	if found {
@@ -383,23 +392,27 @@ func GetPinDirection(d uint32) string {
 	return ""
 }
 
+// Defines pin capabilities
+const (
+	PinCapNone  = 0
+	PinCapDir   = (1 << 0)
+	PinCapPrio  = (1 << 1)
+	PinCapState = (1 << 2)
+)
+
 // GetPinCapabilities returns DPLL pin capabilities as a csv
 func GetPinCapabilities(c uint32) string {
-	cMap := map[int]string{
-		0: "",
-		1: "direction-can-change",
-		2: "priority-can-change",
-		3: "direction-can-change,priority-can-change",
-		4: "state-can-change",
-		5: "state-can-change,direction-can-change",
-		6: "state-can-change,priority-can-change",
-		7: "state-can-change,direction-can-change,priority-can-change",
+	capList := []string{}
+	if c&PinCapState != 0 {
+		capList = append(capList, "state-can-change")
 	}
-	cap, found := cMap[int(c)]
-	if found {
-		return cap
+	if c&PinCapDir != 0 {
+		capList = append(capList, "direction-can-change")
 	}
-	return ""
+	if c&PinCapPrio != 0 {
+		capList = append(capList, "priority-can-change")
+	}
+	return strings.Join(capList, ",")
 }
 
 // GetPinInfoHR returns human-readable pin status
@@ -436,7 +449,6 @@ func GetPinInfoHR(reply *PinInfo, timestamp time.Time) ([]byte, error) {
 			State:         GetPinState(reply.ParentDevice[i].State),
 			PhaseOffsetPs: float64(reply.ParentDevice[i].PhaseOffset) / DpllPhaseOffsetDivider,
 		})
-
 	}
 	for i := 0; i < len(reply.ParentPin); i++ {
 		hr.ParentPin = append(hr.ParentPin, PinParentPinHR{
