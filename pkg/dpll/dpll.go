@@ -1016,3 +1016,8 @@ func CalculateTimer(nodeProfile *ptpv1.PtpProfile) (int64, int64, int64, int64, 
 	inSpecTimer := int64(math.Round(float64(maxInSpecOffset) / slope))
 	return int64(maxInSpecOffset), int64(localMaxHoldoverOffSet), int64(localHoldoverTimeout), inSpecTimer, false
 }
+
+// PtpSettingsDpllIgnoreKey returns the PtpSettings key to ignore DPLL for the given interface name:
+func PtpSettingsDpllIgnoreKey(iface string) string {
+	return fmt.Sprintf("dpll.%s.ignore", iface)
+}
