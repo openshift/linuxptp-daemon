@@ -52,6 +52,12 @@ type CardInfo struct {
 	Pins         map[string]dpll.PinInfo `json:"pins"`
 }
 
+// PhaseInputsProvider abstracts access to PhaseInputs so InitClockChain can
+// accept different option structs (e.g., E810Opts, E825Opts)
+type PhaseInputsProvider interface {
+	GetPhaseInputs() []PhaseInputs
+}
+
 const (
 	ClockTypeUnset ClockChainType = iota
 	ClockTypeTGM
@@ -114,10 +120,10 @@ func (c *ClockChain) getLiveDpllPinsInfo() error {
 	return nil
 }
 
-func (c *ClockChain) resolveInterconnections(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*[]delayCompensation, error) {
+func (c *ClockChain) resolveInterconnections(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*[]delayCompensation, error) {
 	compensations := []delayCompensation{}
 	var clockID *string
-	for _, card := range e810Opts.PhaseInputs {
+	for _, card := range opts.GetPhaseInputs() {
 		delays, err := InitInternalDelays(card.Part)
 		if err != nil {
 			return nil, err
@@ -198,7 +204,8 @@ func (c *ClockChain) resolveInterconnections(e810Opts E810Opts, nodeProfile *ptp
 	return &compensations, nil
 }
 
-func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockChain, error) {
+// InitClockChain initializes the ClockChain struct based on live DPLL pin info
+func InitClockChain(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*ClockChain, error) {
 	var chain = &ClockChain{
 		LeadingNIC: CardInfo{
 			Pins: make(map[string]dpll.PinInfo, 0),
@@ -211,7 +218,7 @@ func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockCha
 		return chain, err
 	}
 
-	comps, err := chain.resolveInterconnections(e810Opts, nodeProfile)
+	comps, err := chain.resolveInterconnections(opts, nodeProfile)
 	if err != nil {
 		glog.Errorf("fail to get delay compensations, %s", err)
 	}

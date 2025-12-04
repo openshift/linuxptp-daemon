@@ -90,6 +90,13 @@ func (m MockDirEntry) IsDir() bool                { return m.isDir }
 func (m MockDirEntry) Type() os.FileMode          { return 0 }
 func (m MockDirEntry) Info() (os.FileInfo, error) { return nil, nil }
 
+func setupMockFS() (*MockFileSystem, func()) {
+	mockFs := MockFileSystem{}
+	originalFs := filesystem
+	filesystem = &mockFs
+	return &mockFs, func() { filesystem = originalFs }
+}
+
 func loadProfile(path string) (*ptpv1.PtpProfile, error) {
 	profileData, err := os.ReadFile(path)
 	if err != nil {
