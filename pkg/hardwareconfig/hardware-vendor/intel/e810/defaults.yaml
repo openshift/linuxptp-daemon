@@ -1,0 +1,134 @@
+# Clock ID transformation method for this hardware
+# "direct" - use serial number bytes directly (keeps ff-ff in middle)
+# "eui64" - remove bytes 3-4 (ff-ff) and insert ff-fe (EUI-64 format)
+clockIdTransformation:
+  method: direct
+
+pinDefaults:
+  GNSS-1PPS:
+    eec:
+      priority: 0
+    pps:
+      priority: 0
+  CVL-SDP20:
+    eec:
+      priority: 255
+    pps:
+      priority: 4
+  CVL-SDP22:
+    eec:
+      priority: 255
+    pps:
+      priority: 5
+  CVL-SDP21:
+    pps:
+      state: disconnected
+    eec:
+      state: disconnected
+  CVL-SDP23:
+    pps:
+      state: connected
+    eec:
+      state: connected
+  C827_0-RCLKA:
+    eec:
+      priority: 8
+    pps:
+      priority: 8
+  C827_0-RCLKB:
+    eec:
+      priority: 9
+    pps:
+      priority: 9
+
+connectorCommands:
+  outputs:
+    SMA1:
+      commands:
+      - type: FSWrite
+        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA1
+        value: "2 1"
+    SMA2:
+      commands:
+      - type: FSWrite
+        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2
+        value: "2 2"
+        description: Enable SMA2 output
+  inputs:
+    SMA1:
+      commands:
+      - type: FSWrite
+        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA1
+        value: "1 1"
+    SMA2:
+      commands:
+      - type: FSWrite
+        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2
+        value: "1 2"
+        description: Enable SMA2 input
+  disable:
+    SMA1:
+      commands:
+      - type: FSWrite
+        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA1
+        value: "0 1"
+    SMA2:
+      commands:
+      - type: FSWrite
+        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2
+        value: "0 2"
+
+
+internalDelays:
+  partType: E810-XXVDA4T
+  externalInputs:
+    - connector: SMA1
+      pin: SMA1
+      delayPs: 7658
+    - connector: SMA2
+      pin: SMA2/U.FL2
+      delayPs: 7385
+    - connector: u.FL2
+      pin: SMA2/U.FL2
+      delayPs: 9795
+  externalOutputs:
+    - pin: REF-SMA1
+      connector: u.FL1
+      delayPs: 1274
+    - pin: REF-SMA1
+      connector: SMA1
+      delayPs: 1376
+    - pin: REF-SMA2/U.FL2
+      connector: SMA2
+      delayPs: 2908
+  gnssInput:
+    connector: GNSS
+    pin: GNSS-1PPS
+    delayPs: 6999
+
+pinEsyncCommands:
+  outputs:
+    - description: set frequency
+      type: DPLLWrite
+      arguments:
+        - frequency
+    - description: set eSync frequency
+      type: DPLLWrite
+      arguments:
+        - eSyncFrequency
+    - description: re-enable output
+      type: DPLLWrite
+      pinParentDevices:
+        - parentDevice: EEC
+          state: connected
+        - parentDevice: PPS
+          state: connected
+  inputs:
+    - description: set frequency
+      type: DPLLWrite
+      arguments:
+        - frequency
+    - description: set eSync frequency
+      type: DPLLWrite
+      arguments:
+        - eSyncFrequency

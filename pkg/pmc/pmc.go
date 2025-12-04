@@ -179,7 +179,7 @@ func RunPMCExpGetExternalGMPropertiesNP(configFileName string) (egp protocol.Ext
 // RunPMCExpSetExternalGMPropertiesNP ... set EXTERNAL_GRANDMASTER_PROPERTIES_NP
 func RunPMCExpSetExternalGMPropertiesNP(configFileName string, egp protocol.ExternalGrandmasterProperties) (err error) {
 	cmdStr := cmdSetExternalGMPropertiesNP
-	cmdStr += strings.Replace(egp.String(), "\n", " ", -1)
+	cmdStr += strings.ReplaceAll(egp.String(), "\n", " ")
 	pmcCmd := pmcCmdConstPart + configFileName
 	glog.Infof("Sending %s %s", pmcCmd, cmdStr)
 
