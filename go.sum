@@ -94,8 +94,8 @@ github.com/josharian/native v1.1.0 h1:uuaP0hAbW7Y4l0ZRQ6C9zfb7Mg1mbFKry/xzDAfmtL
 github.com/josharian/native v1.1.0/go.mod h1:7X/raswPFr05uY3HiLlYeyQntB6OO7E/d2Cu7qoaN2w=
 github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
-github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20250908225703-a4a978cd60ee h1:m5f2tyynXPwJx1R4fr3gPAyBL/zU37klPm19Je39Ih0=
-github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20250908225703-a4a978cd60ee/go.mod h1:sZdvVrCIjLF8TF7D1Jd1C+Awv+qZ8oY1W9/lliM1p78=
+github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20251105200506-7495c02a5a34 h1:wgQR7ZC6EcPjUNGkmAwoT89Hff1PbitpPe8KDjl+lVM=
+github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20251105200506-7495c02a5a34/go.mod h1:sZdvVrCIjLF8TF7D1Jd1C+Awv+qZ8oY1W9/lliM1p78=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/kr/pretty v0.2.1/go.mod h1:ipq/a2n7PKx3OHsz4KJII5eveXtPO4qwEXGdVfWzfnI=

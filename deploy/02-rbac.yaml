@@ -25,4 +25,38 @@ roleRef:
   kind: Role
   name: linuxptp-daemon-role
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: linuxptp-daemon-cluster-role
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ptp.openshift.io"]
+    resources: ["ptpconfigs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ptp.openshift.io"]
+    resources: ["ptpconfigs/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["ptp.openshift.io"]
+    resources: ["hardwareconfigs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ptp.openshift.io"]
+    resources: ["hardwareconfigs/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: linuxptp-daemon-cluster-rolebinding
+subjects:
+  - kind: ServiceAccount
+    name: linuxptp-daemon
+    namespace: openshift-ptp
+roleRef:
+  kind: ClusterRole
+  name: linuxptp-daemon-cluster-role
+  apiGroup: rbac.authorization.k8s.io
 

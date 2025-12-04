@@ -37,6 +37,44 @@ type LinuxPTPConfUpdate struct {
 	defaultPTP4lConfig     []byte
 }
 
+// TriggerRestartForHardwareChange implements HardwareConfigRestartTrigger interface
+// This triggers the same restart mechanism used for PtpConfig changes
+func (l *LinuxPTPConfUpdate) TriggerRestartForHardwareChange() error {
+	glog.Info("Triggering PTP restart due to hardware configuration change")
+
+	// Send the same signal that PtpConfig changes use
+	select {
+	case l.UpdateCh <- true:
+		glog.Info("Successfully sent restart signal for hardware configuration change")
+		return nil
+	default:
+		// Channel might be full, this shouldn't normally happen but handle gracefully
+		glog.Warning("UpdateCh channel is full, restart signal may be delayed")
+		go func() {
+			l.UpdateCh <- true
+		}()
+		return nil
+	}
+}
+
+// GetCurrentPTPProfiles implements HardwareConfigRestartTrigger interface
+// Returns the names of currently active PTP profiles
+func (l *LinuxPTPConfUpdate) GetCurrentPTPProfiles() []string {
+	if l.NodeProfiles == nil {
+		return []string{}
+	}
+
+	profileNames := make([]string, 0, len(l.NodeProfiles))
+	for _, profile := range l.NodeProfiles {
+		if profile.Name != nil {
+			profileNames = append(profileNames, *profile.Name)
+		}
+	}
+
+	glog.Infof("Current active PTP profiles: %v", profileNames)
+	return profileNames
+}
+
 type ptp4lConfOption struct {
 	key   string
 	value string
@@ -127,13 +165,16 @@ func NewLinuxPTPConfUpdate() (*LinuxPTPConfUpdate, error) {
 
 func (l *LinuxPTPConfUpdate) UpdateConfig(nodeProfilesJson []byte) error {
 	if bytes.Equal(l.appliedNodeProfileJson, nodeProfilesJson) {
+		glog.Info("UpdateConfig: config unchanged, skipping update")
 		return nil
 	}
 	if nodeProfiles, ok := tryToLoadConfig(nodeProfilesJson); ok {
-		glog.Info("load profiles")
+		glog.Infof("load profiles: %d profiles loaded", len(nodeProfiles))
 		l.appliedNodeProfileJson = nodeProfilesJson
 		l.NodeProfiles = nodeProfiles
+		glog.Info("Sending update signal to daemon via UpdateCh")
 		l.UpdateCh <- true
+		glog.Info("Update signal sent successfully")
 
 		return nil
 	}
@@ -188,7 +229,8 @@ func (conf *Ptp4lConf) PopulatePtp4lConf(config *string) error {
 	if config != nil {
 		for _, line := range strings.Split(*config, "\n") {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "#") {
+			// Skip empty lines and comments
+			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			} else if strings.HasPrefix(line, "[") {
 				currentLine := strings.Split(line, "]")

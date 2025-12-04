@@ -568,7 +568,7 @@ func EncodePinControl(req PinParentDeviceCtl) ([]byte, error) {
 		ae.Int32(DpllPinPhaseAdjust, *req.PhaseAdjust)
 	}
 	if req.EsyncFrequency != nil {
-		ae.Uint64(DpllPinPhaseAdjust, *req.EsyncFrequency)
+		ae.Uint64(DpllPinEsyncFrequency, *req.EsyncFrequency)
 	}
 	if req.Frequency != nil {
 		ae.Uint64(DpllPinFrequency, *req.Frequency)

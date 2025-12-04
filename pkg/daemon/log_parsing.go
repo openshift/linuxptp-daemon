@@ -65,7 +65,11 @@ func processWithParser(process *ptpProcess, output string) {
 		glog.Errorf("Failed to extract metrics from %s output: %v", process.name, err)
 		return
 	}
-
+	if process.name == ts2phcProcessName {
+		glog.Infof("processWithParser: %s", output)
+		glog.Infof("metrics: %+v", metrics)
+		glog.Infof("ptpEvent: %+v", ptpEvent)
+	}
 	process.hasCollectedMetrics = true
 
 	// Process metrics if available
