@@ -87,26 +87,44 @@ func RunPMCExpGetGMSettings(configFileName string) (g protocol.GrandmasterSettin
 }
 
 // RunPMCExpSetGMSettings ... set GRANDMASTER_SETTINGS_NP
-func RunPMCExpSetGMSettings(configFileName string, g protocol.GrandmasterSettings) (err error) {
-	cmdStr := cmdSetGMSettings
-	cmdStr += strings.Replace(g.String(), "\n", " ", -1)
-	pmcCmd := pmcCmdConstPart + configFileName
-	glog.Infof("%s \"%s\"", pmcCmd, cmdStr)
-	e, r, err := expect.Spawn(pmcCmd, -1)
-	if err != nil {
-		return err
-	}
-	defer utils.CloseExpect(e, r)
-
-	if err = e.Send(cmdStr + "\n"); err == nil {
-		result, _, err1 := e.Expect(grandmasterSettingsNPRegExp, cmdTimeout)
-		if err1 != nil {
-			glog.Errorf("pmc result match error %v", err1)
-			return err1
+func RunPMCExpSetGMSettings(configFileName string, g protocol.GrandmasterSettings) error {
+	var exp *expect.GExpect
+	var r <-chan error
+	var err error
+	for i := 0; i < numRetry; i++ {
+		if exp != nil {
+			utils.CloseExpect(exp, r)
+			time.Sleep(10 * time.Millisecond)
 		}
-		glog.Infof("pmc result: %s", result)
+
+		glog.Infof("RunPMCExpSetGMSettings: configFileName=%s, ClockClass=%d, ClockAccuracy=%v",
+			configFileName, g.ClockQuality.ClockClass, g.ClockQuality.ClockAccuracy)
+		cmdStr := cmdSetGMSettings
+		cmdStr += strings.ReplaceAll(g.String(), "\n", " ")
+		pmcCmd := pmcCmdConstPart + configFileName
+		glog.Infof("RunPMCExpSetGMSettings: pmcCmd=%s, cmdStr=%s", pmcCmd, cmdStr)
+		exp, r, err = expect.Spawn(pmcCmd, -1)
+		if err != nil {
+			glog.Errorf("RunPMCExpSetGMSettings: failed to spawn pmc: %v", err)
+			continue
+		}
+		defer utils.CloseExpect(exp, r)
+
+		if err = exp.Send(cmdStr + "\n"); err != nil {
+			glog.Errorf("RunPMCExpSetGMSettings: failed to send command: %v", err)
+			continue
+		}
+
+		var result string
+		result, _, err = exp.Expect(grandmasterSettingsNPRegExp, cmdTimeout)
+		if err != nil {
+			glog.Errorf("RunPMCExpSetGMSettings: pmc result match error %v", err)
+			continue
+		}
+		glog.Infof("RunPMCExpSetGMSettings: pmc result: %s", result)
+		return nil
 	}
-	return
+	return err
 }
 
 // RunPMCExpGetParentDS ... GET
