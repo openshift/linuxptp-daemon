@@ -173,6 +173,7 @@ func (pmc *PMCProcess) Poll() {
 
 	parentDS, err := pmcPkg.RunPMCExpGetParentDS(pmc.configFileName, false)
 	if err != nil {
+		glog.Error("pmc poll failure ", err)
 		return
 	}
 
@@ -258,7 +259,7 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 		return
 	}
 
-	glog.Info(parentDS)
+	glog.Info(parentDS.String())
 	oldParentDS := pmc.parentDS
 	pmc.parentDS = &parentDS
 
@@ -274,6 +275,7 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
 			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockClass),
 			pmc.configFileName, pmc.c,
+			event.ClockType(pmc.clockType),
 		)
 	}
 }
