@@ -50,6 +50,7 @@ const (
 	HAInDomainIndicator             = "as domain source clock"
 	HAOutOfDomainIndicator          = "as out-of-domain source"
 	MessageTagSuffixSeperator       = ":"
+	ChronydSocketPath               = "/tmp/chrony/chronyd.sock"
 )
 
 var (
@@ -566,6 +567,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		if pProcess != chronydProcessName {
 			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
 		} else {
+			output.setPtp4lConfOption("", "bindcmdaddress", ChronydSocketPath, true)
 			output.profile_name = *nodeProfile.Name
 		}
 
@@ -1107,10 +1109,10 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 	switch p.name {
 	case "chronyd":
 		if enabled {
-			exec.Command("chronyc", "online").Output()
+			exec.Command("chronyc", "-h", ChronydSocketPath, "online").Output()
 			processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
 		} else {
-			exec.Command("chronyc", "offline").Output()
+			exec.Command("chronyc", "-h", ChronydSocketPath, "offline").Output()
 			processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
 		}
 	case "phc2sys":
