@@ -24,7 +24,9 @@ var (
 	cmdTimeout                   = 2 * time.Second
 	pollTimeout                  = 3 * time.Second
 	montiorStartTimeout          = time.Minute
+	monitorExpectTimeout         = 10 * time.Minute
 	numRetry                     = 6
+	monitorRetryInterval         = 10 * time.Millisecond
 	pmcCmdConstPart              = "pmc -u -b 0 -f /var/run/"
 	grandmasterSettingsNPRegExp  = regexp.MustCompile((&protocol.GrandmasterSettings{}).RegEx())
 	parentDataSetRegExp          = regexp.MustCompile((&protocol.ParentDataSet{}).RegEx())
@@ -464,11 +466,11 @@ func GetPMCMontior(configFileName string) (*expect.GExpect, <-chan error, error)
 	for {
 		if exp != nil {
 			utils.CloseExpect(exp, r)
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(monitorRetryInterval)
 		}
 		cmd := pmcCmdConstPart + configFileName
 		glog.Errorf("Spawning process '%s' for monitoring pmc", cmd)
-		exp, r, err = expect.Spawn(cmd, -1)
+		exp, r, err = expect.Spawn(cmd, monitorExpectTimeout)
 		if err != nil {
 			glog.Errorf("Failed to spawn moniotring pmc process")
 			continue
