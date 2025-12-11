@@ -31,6 +31,7 @@ const (
 	phc2sysProcessName = "phc2sys"
 	ts2phcProcessName  = "ts2phc"
 	syncEProcessName   = "synce4l"
+	chronydProcessName = "chronyd"
 	clockRealTime      = "CLOCK_REALTIME"
 	master             = "master"
 	pmcSocketName      = "pmc"
