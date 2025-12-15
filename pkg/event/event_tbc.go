@@ -233,24 +233,11 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 	return rclockSyncState
 }
 
-// UpdateUpstreamData updates the upstream time properties, parent data set, and current data set
+// UpdateUpstreamParentDataSet updates the upstream time properties, parent data set, and current data set
 // for the leading clock and triggers downstream data updates when changes are detected.
-func (e *EventHandler) UpdateUpstreamData(cfgName string, c net.Conn, data pmc.ParentTimeCurrentDS) {
-	updateDownstream := false
-	if *e.LeadingClockData.upstreamTimeProperties != data.TimePropertiesDS {
-		e.LeadingClockData.upstreamTimeProperties = &data.TimePropertiesDS
-		updateDownstream = true
-	}
-	if *e.LeadingClockData.upstreamParentDataSet != data.ParentDataSet {
-		e.LeadingClockData.upstreamParentDataSet = &data.ParentDataSet
-		updateDownstream = true
-	}
-	if e.LeadingClockData.upstreamCurrentDSStepsRemoved != data.CurrentDS.StepsRemoved {
-		e.LeadingClockData.upstreamCurrentDSStepsRemoved = data.CurrentDS.StepsRemoved
-		updateDownstream = true
-	}
-	if _, ok := e.clkSyncState[cfgName]; ok && updateDownstream {
-		e.updateDownstreamData(cfgName, c)
+func (e *EventHandler) UpdateUpstreamParentDataSet(parentDS protocol.ParentDataSet) {
+	if !parentDS.Equal(e.LeadingClockData.upstreamParentDataSet) {
+		e.LeadingClockData.upstreamParentDataSet = &parentDS
 	}
 }
 
@@ -258,12 +245,7 @@ func (e *EventHandler) updateDownstreamData(cfgName string, c net.Conn) {
 	if data, ok := e.clkSyncState[cfgName]; !ok {
 		return
 	} else if data.state == PTP_LOCKED {
-		go e.downstreamAnnounceIWF(
-			cfgName, c,
-			*e.LeadingClockData.upstreamParentDataSet,
-			*e.LeadingClockData.upstreamTimeProperties,
-			e.LeadingClockData.upstreamCurrentDSStepsRemoved,
-		)
+		go e.downstreamAnnounceIWF(cfgName, c)
 	} else {
 		go e.announceLocalData(cfgName, c)
 	}
@@ -337,25 +319,39 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 			glog.Errorf("Failed to set GM settings: %v", err)
 		}
 	}()
+	go func() {
+		if err := pmc.RunPMCExpSetGMSettings(cfgName, gs); err != nil {
+			glog.Errorf("Failed to set GM settings: %v", err)
+		}
+	}()
 }
 
 // this function runs in a goroutine should only be called when locked
-func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn, upstreamParentDataSet protocol.ParentDataSet, upstreamTimeProperties protocol.TimePropertiesDS, stepsRemoved uint16) {
+func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
 	ptpCfgName := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
 	glog.Infof("downstreamAnnounceIWF: %s", ptpCfgName)
 
+	upsteamData, err := pmc.RunPMCExpGetParentTimeAndCurrentDataSets(cfgName)
+	if err != nil {
+		glog.Error("Failed to fetch upstream data, downstream data can not be updated.")
+	}
+
+	e.LeadingClockData.upstreamParentDataSet = &upsteamData.ParentDataSet
+	e.LeadingClockData.upstreamTimeProperties = &upsteamData.TimePropertiesDS
+	e.LeadingClockData.upstreamCurrentDSStepsRemoved = upsteamData.CurrentDS.StepsRemoved
+
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
-			ClockClass:              fbprotocol.ClockClass(upstreamParentDataSet.GrandmasterClockClass),
-			ClockAccuracy:           fbprotocol.ClockAccuracy(upstreamParentDataSet.GrandmasterClockAccuracy),
-			OffsetScaledLogVariance: upstreamParentDataSet.GrandmasterOffsetScaledLogVariance,
+			ClockClass:              fbprotocol.ClockClass(upsteamData.ParentDataSet.GrandmasterClockClass),
+			ClockAccuracy:           fbprotocol.ClockAccuracy(upsteamData.ParentDataSet.GrandmasterClockAccuracy),
+			OffsetScaledLogVariance: upsteamData.ParentDataSet.GrandmasterOffsetScaledLogVariance,
 		},
-		TimePropertiesDS: upstreamTimeProperties,
+		TimePropertiesDS: upsteamData.TimePropertiesDS,
 	}
 	es := protocol.ExternalGrandmasterProperties{
-		GrandmasterIdentity: upstreamParentDataSet.GrandmasterIdentity,
+		GrandmasterIdentity: upsteamData.ParentDataSet.GrandmasterIdentity,
 		// stepsRemoved at this point is already incremented, representing the current clock position
-		StepsRemoved: stepsRemoved,
+		StepsRemoved: upsteamData.CurrentDS.StepsRemoved,
 	}
 	glog.Infof("%++v", es)
 	e.announceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName, c)
@@ -368,9 +364,8 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn, upstrea
 	glog.Infof("%++v", es)
 
 	// As we gave updated the downstream lets set the datasets
-	e.LeadingClockData.downstreamParentDataSet = &upstreamParentDataSet
-	e.LeadingClockData.downstreamTimeProperties = &upstreamTimeProperties
-	e.LeadingClockData.upstreamCurrentDSStepsRemoved = stepsRemoved
+	e.LeadingClockData.downstreamParentDataSet = &upsteamData.ParentDataSet
+	e.LeadingClockData.downstreamTimeProperties = &upsteamData.TimePropertiesDS
 }
 
 func (e *EventHandler) inSyncCondition(cfgName string) bool {
