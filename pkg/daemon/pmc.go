@@ -264,12 +264,7 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 	pmc.parentDS = &parentDS
 
 	if pmc.clockType == TBC {
-		data, pmcErr := pmcPkg.RunPMCExpGetTimeAndCurrentDataSets(pmc.configFileName)
-		if pmcErr != nil {
-			glog.Warningf("Failed to fetch TIME_PROPERTIES_DATA_SET and CURRENT_DATA_SET")
-		}
-		data.ParentDataSet = parentDS
-		pmc.eventHandler.UpdateUpstreamData(pmc.configFileName, pmc.c, data)
+		pmc.eventHandler.UpdateUpstreamParentDataSet(parentDS)
 	} else if oldParentDS == nil || oldParentDS.GrandmasterClockClass != parentDS.GrandmasterClockClass {
 		pmc.eventHandler.AnnounceClockClass(
 			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
