@@ -27,6 +27,9 @@ const (
 	UnicastSectionName = "[unicast_master_table]"
 )
 
+// cliArgsSlaveFlagsRegex matches --slaveOnly or --clientOnly with value 1 in command-line arguments
+var cliArgsSlaveFlagsRegex = regexp.MustCompile(`--(slaveOnly|clientOnly)(\s+1|=1)(\s|$)`)
+
 // LinuxPTPUpdate controls whether to update linuxPTP conf
 // and contains linuxPTP conf to be updated. It's rendered
 // and passed to linuxptp instance by daemon.
@@ -221,10 +224,25 @@ func tryToLoadOldConfig(nodeProfilesJson []byte) ([]ptpv1.PtpProfile, bool) {
 }
 
 // PopulatePtp4lConf takes as input a PtpProfile.Ptp4lConf string and outputs as ptp4lConf struct
-func (conf *Ptp4lConf) PopulatePtp4lConf(config *string) error {
+func (conf *Ptp4lConf) PopulatePtp4lConf(config *string, cliArgs *string) error {
 	var currentSectionName string
 	conf.sections = make([]ptp4lConfSection, 0)
 	hasSlaveConfigDefined := false
+	if cliArgs != nil {
+		args := *cliArgs
+		// Check for -s flag (short form for slave mode)
+		// Split by spaces and check for exact -s flag to avoid matching substrings like in --slaveOnly
+		for _, arg := range strings.Fields(args) {
+			if arg == "-s" {
+				hasSlaveConfigDefined = true
+				break
+			}
+		}
+		// Check for --slaveOnly or --clientOnly with value 1
+		if cliArgsSlaveFlagsRegex.MatchString(args) {
+			hasSlaveConfigDefined = true
+		}
+	}
 	ifaceCount := 0
 	if config != nil {
 		for _, line := range strings.Split(*config, "\n") {

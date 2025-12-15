@@ -10,7 +10,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
-	"github.com/prometheus/client_golang/prometheus"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
@@ -159,6 +158,10 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 				e.LeadingClockData.downstreamParentDataSet = e.LeadingClockData.upstreamParentDataSet
 				updateDownstreamData = true
 			}
+			if e.clkSyncState[cfgName].clockClass != fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass) {
+				e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass)
+				e.clkSyncState[cfgName].clockAccuracy = fbprotocol.ClockAccuracy(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockAccuracy)
+			}
 		}
 	case PTP_HOLDOVER:
 		if e.inSyncCondition(cfgName) && !e.isSourceLostBC(cfgName) {
@@ -271,19 +274,7 @@ func (e *EventHandler) EmitClockClass(cfgName string, c net.Conn) {
 	if _, ok := e.clkSyncState[cfgName]; !ok {
 		return
 	}
-	e.AnnounceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
-}
-
-// AnnounceClockClass announces clock class changes to the event handler and writes to the connection.
-func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn) {
-	e.clockClass = clockClass
-	e.clockAccuracy = clockAcc
-
-	utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
-	if !e.stdoutToSocket && e.clockClassMetric != nil {
-		e.clockClassMetric.With(prometheus.Labels{
-			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
-	}
+	e.announceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
 }
 
 // Implements Rec. ITU-T G.8275 (2024) Amd. 1 (08/2024)
@@ -300,7 +291,7 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 			glog.Errorf("Failed to set external GM properties: %v", err)
 		}
 	}()
-	e.AnnounceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
+	e.announceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
 			ClockClass:              e.clkSyncState[cfgName].clockClass,
@@ -367,7 +358,7 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn, upstrea
 		StepsRemoved: stepsRemoved,
 	}
 	glog.Infof("%++v", es)
-	e.AnnounceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName, c)
+	e.announceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName, c)
 	if err := pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, es); err != nil {
 		glog.Error(err)
 	}
