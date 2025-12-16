@@ -343,7 +343,7 @@ func (d *DpllConfig) Timer() int64 {
 
 func (d *DpllConfig) PhaseOffsetPin(pin *nl.PinInfo) bool {
 
-	if pin.ClockID == d.clockId && pin.ParentDevice[PPS_PIN_INDEX].PhaseOffset != math.MaxInt64 {
+	if pin.ClockID == d.clockId && len(pin.ParentDevice) > PPS_PIN_INDEX && pin.ParentDevice[PPS_PIN_INDEX].PhaseOffset != math.MaxInt64 {
 		for k, v := range d.phaseOffsetPinFilter[strconv.FormatUint(d.clockId, 10)] {
 			switch k {
 			case "boardLabel":
