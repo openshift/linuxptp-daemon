@@ -161,15 +161,6 @@ func Test_PopulateHwConfdigE825(t *testing.T) {
 		output)
 }
 
-type mockBatchPinSet struct {
-	commands *[]dpll.PinParentDeviceCtl
-}
-
-func (m *mockBatchPinSet) mock(commands *[]dpll.PinParentDeviceCtl) error {
-	m.commands = commands
-	return nil
-}
-
 func Test_setupGnss(t *testing.T) {
 	unitTest = true
 	tcs := []struct {
@@ -265,8 +256,8 @@ func Test_setupGnss(t *testing.T) {
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(tt *testing.T) {
-			mockPinSet := mockBatchPinSet{}
-			e825DoPinSet = mockPinSet.mock
+			mockPinSet, restorePinSet := setupBatchPinSetMock()
+			defer restorePinSet()
 			data := E825PluginData{
 				dpllPins: tc.dpll,
 			}
