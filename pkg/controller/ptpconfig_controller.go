@@ -82,8 +82,11 @@ func (r *PtpConfigReconciler) reconcileAllConfigs(ctx context.Context) (ctrl.Res
 
 		glog.Infof("Updating daemon configuration with %d profiles for node %s", len(matchingProfiles), r.NodeName)
 
+		// Check if security files changed (set by fsnotify in daemon.go)
+		ptpAuthUpdated := daemon.GetAndResetSecurityFilesChanged()
+
 		// Send configuration update to daemon
-		err = r.ConfigUpdate.UpdateConfig(nodeProfilesJSON)
+		err = r.ConfigUpdate.UpdateConfig(nodeProfilesJSON, ptpAuthUpdated)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update daemon configuration: %w", err)
 		}
@@ -93,7 +96,7 @@ func (r *PtpConfigReconciler) reconcileAllConfigs(ctx context.Context) (ctrl.Res
 		glog.Infof("No matching profiles found for node %s", r.NodeName)
 
 		// Send empty configuration to clear any existing config
-		err = r.ConfigUpdate.UpdateConfig([]byte("[]"))
+		err = r.ConfigUpdate.UpdateConfig([]byte("[]"), false)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to clear daemon configuration: %w", err)
 		}
