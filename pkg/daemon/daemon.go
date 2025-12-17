@@ -59,6 +59,7 @@ const (
 	TBC                             = "T-BC"
 	TGM                             = "T-GM"
 	PtpSecretMountDir               = "/etc/ptp-secret-mount/"
+	ChronydSocketPath               = "/tmp/chrony/chronyd.sock"
 )
 
 var (
@@ -868,6 +869,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		if pProcess != chronydProcessName {
 			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
 		} else {
+			output.setPtp4lConfOption("", "bindcmdaddress", ChronydSocketPath, true)
 			output.profile_name = *nodeProfile.Name
 		}
 
@@ -1470,10 +1472,10 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 	switch p.name {
 	case "chronyd":
 		if enabled {
-			_, _ = exec.Command("chronyc", "online").Output()
+			_, _ = exec.Command("chronyc", "-h", ChronydSocketPath, "online").Output()
 			processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
 		} else {
-			_, _ = exec.Command("chronyc", "offline").Output()
+			_, _ = exec.Command("chronyc", "-h", ChronydSocketPath, "offline").Output()
 			processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
 		}
 	case "phc2sys":
