@@ -207,9 +207,6 @@ func (d *E825PluginData) populateDpllPins() error {
 	return nil
 }
 
-// Setup mockable pin setting function
-var e825DoPinSet = BatchPinSet
-
 // pinCmdSetState sets the state of an individual DPLL pin
 func pinCmdSetState(pin *dpll_netlink.PinInfo, connectable bool) dpll_netlink.PinParentDeviceCtl {
 	newState := uint32(dpll_netlink.PinStateSelectable)
@@ -257,7 +254,7 @@ func (d *E825PluginData) setupGnss(gnss GnssOptions) error {
 		return errors.New("no GNSS pins found")
 	}
 	glog.Infof("Will %s %d GNSS pins: %v", action, len(commands), affectedPins)
-	return e825DoPinSet(&commands)
+	return BatchPinSet(&commands)
 }
 
 // AfterRunPTPCommandE825 performs actions after certain PTP commands for e825 plugin

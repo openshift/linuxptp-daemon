@@ -154,7 +154,12 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				(*nodeProfile).PtpSettings["leadingInterface"] = clockChain.LeadingNIC.Name
 				(*nodeProfile).PtpSettings["upstreamPort"] = clockChain.LeadingNIC.UpstreamPort
 			} else {
-				glog.Error("no clock chain set")
+				glog.Infof("No clock chain set: Restoring any previous pin state changes")
+				err = clockChain.SetPinDefaults()
+				if err != nil {
+					glog.Errorf("Could not restore clockChain pin defaults: %s", err)
+				}
+				clockChain = &ClockChain{}
 			}
 		}
 	}
@@ -185,19 +190,19 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 				// Finish with the default commands:
 				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
 			case "tbc-ho-exit":
-				_, err = clockChain.EnterNormalTBC()
+				err = clockChain.EnterNormalTBC()
 				if err != nil {
 					return fmt.Errorf("e810: failed to enter T-BC normal mode")
 				}
 				glog.Info("e810: enter T-BC normal mode")
 			case "tbc-ho-entry":
-				_, err = clockChain.EnterHoldoverTBC()
+				err = clockChain.EnterHoldoverTBC()
 				if err != nil {
 					return fmt.Errorf("e810: failed to enter T-BC holdover")
 				}
 				glog.Info("e810: enter T-BC holdover")
 			case "reset-to-default":
-				_, err = clockChain.SetPinDefaults()
+				err = clockChain.SetPinDefaults()
 				if err != nil {
 					return fmt.Errorf("e810: failed to reset pins to default")
 				}
