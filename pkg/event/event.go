@@ -565,6 +565,28 @@ func (e *EventHandler) hasMetric(name string) (*prometheus.GaugeVec, bool) {
 	return nil, false
 }
 
+// AnnounceClockClass announces clock class changes to the event handler and writes to the connection.
+func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn, clockType ClockType) {
+	e.announceClockClass(clockClass, clockAcc, cfgName, c)
+	clockClassRequestCh <- ClockClassRequest{
+		cfgName:       cfgName,
+		clockClass:    clockClass,
+		clockType:     clockType,
+		clockAccuracy: clockAcc,
+	}
+}
+
+func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn) {
+	e.clockClass = clockClass
+	e.clockAccuracy = clockAcc
+
+	utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+	if !e.stdoutToSocket && e.clockClassMetric != nil {
+		e.clockClassMetric.With(prometheus.Labels{
+			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
+	}
+}
+
 // ProcessEvents ... process events to generate new events
 func (e *EventHandler) ProcessEvents() {
 	var c net.Conn
@@ -611,13 +633,36 @@ connect:
 			for {
 				select {
 				case clk := <-clockClassRequestCh:
-					e.UpdateClockClass(c, clk)
 					cfgName = clk.cfgName
+					if clk.clockType != BC { // This is because this produces the wrong value for BC at the moment this needs looking into.
+						e.UpdateClockClass(c, clk)
+					} else {
+						e.clockClass = clk.clockClass
+						e.clockAccuracy = clk.clockAccuracy
+					}
+
 				case <-e.closeCh:
 					return
 				case <-classTicker.C: // send clock class event 60 secs interval
 					if cfgName != "" {
+						parts := strings.SplitN(cfgName, ".", 2)
+						if len(parts) >= 2 {
+							cfgName = "ptp4l." + strings.Join(parts[1:], ".")
+						}
 						utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+					}
+
+					for cfgName, data := range e.clkSyncState {
+						clockClass := data.clockClass
+						parts := strings.SplitN(cfgName, ".", 2)
+						if len(parts) >= 2 {
+							cfgName = "ptp4l." + strings.Join(parts[1:], ".")
+						}
+						if clockClass == 0 {
+							parentDS, _ := pmc.RunPMCExpGetParentDS(cfgName, true)
+							clockClass = fbprotocol.ClockClass(parentDS.GrandmasterClockClass)
+						}
+						utils.EmitClockClass(c, PTP4lProcessName, cfgName, clockClass)
 					}
 				}
 			}

@@ -400,6 +400,50 @@ const (
 	PinCapState = (1 << 2)
 )
 
+// ParsePinType converts string pin type to numeric value
+func ParsePinType(typeStr string) uint32 {
+	switch typeStr {
+	case "mux":
+		return 1
+	case "ext":
+		return 2
+	case "synce-eth-port":
+		return 3
+	case "int-oscillator":
+		return 4
+	case "gnss":
+		return 5
+	default:
+		return 0
+	}
+}
+
+// ParsePinDirection converts string direction to numeric value
+func ParsePinDirection(dirStr string) uint32 {
+	switch dirStr {
+	case "input":
+		return PinDirectionInput
+	case "output":
+		return PinDirectionOutput
+	default:
+		return 0
+	}
+}
+
+// ParsePinState converts string state to numeric value
+func ParsePinState(stateStr string) uint32 {
+	switch stateStr {
+	case "connected":
+		return PinStateConnected
+	case "disconnected":
+		return PinStateDisconnected
+	case "selectable":
+		return PinStateSelectable
+	default:
+		return 0
+	}
+}
+
 // GetPinCapabilities returns DPLL pin capabilities as a csv
 func GetPinCapabilities(c uint32) string {
 	capList := []string{}
