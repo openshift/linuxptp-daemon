@@ -158,7 +158,9 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 				e.LeadingClockData.downstreamParentDataSet = e.LeadingClockData.upstreamParentDataSet
 				updateDownstreamData = true
 			}
-			if e.clkSyncState[cfgName].clockClass != fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass) {
+			if e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass == uint8(protocol.ClockClassFreerun) {
+				updateDownstreamData = false // Don't propagate uptream free run and instead let future call move to holdover/freerun
+			} else if e.clkSyncState[cfgName].clockClass != fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass) {
 				e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass)
 				e.clkSyncState[cfgName].clockAccuracy = fbprotocol.ClockAccuracy(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockAccuracy)
 			}
