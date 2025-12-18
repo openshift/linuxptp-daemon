@@ -1,6 +1,6 @@
-# Building and using T-BC / T-TSC Holdover technical preview
+# Using T-BC / T-TSC Holdover
 
-This repository contains a technical preview of T-BC / T-TSC holdover feature on Intel E810-XXV-4T NIC. The feature requires a special `ts2phc` build that is not yet publicly available, but [included in this repository](../extra/linuxptp-4.2-2.el9_4.4.test_extgm.x86_64.rpm) for testing purposes only. Use at your own risk!
+This repository contains a T-BC / T-TSC holdover feature on Intel E810-XXV-4T NIC.
 
 ## How it works
 
@@ -12,43 +12,6 @@ The diagram of the normal T-BC operation is shown below:
 The `ts2phc` will monitor the `ptp4l` instance bound to the TR port. If the TR port stops operating as the time receiver (for example, if the upstream T-GM deteriorates in quality or the link disconnects), the system will enter holdover and dynamically reconfigure as shown below:
 
 <img src="holdover.png" alt="Holdover" width="500">
-
-
-## Build
-### Create a Dockerfile
-
-To include the custom `ts2phc` build in the container image, the `Dockerfile` must be modified. For example:
-
-```bash
-FROM golang:1.24.0 AS builder
-WORKDIR /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon
-COPY . .
-RUN make clean && make
-
-FROM quay.io/centos/centos:stream9
-
-COPY extra/linuxptp-4.2-2.el9_4.4.test_extgm.x86_64.rpm /
-RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install /linuxptp-4.2-2.el9_4.4.test_extgm.x86_64.rpm ethtool hwdata synce4l gpsd-minimal gpsd-minimal-clients && yum clean all && \
-	rm /linuxptp-4.2-2.el9_4.4.test_extgm.x86_64.rpm
-
-
-RUN ln -s /usr/bin/gpspipe /usr/local/bin/gpspipe && ln -s /usr/sbin/gpsd /usr/local/sbin/gpsd && ln -s /usr/bin/ubxtool /usr/local/bin/ubxtool
-
-
-COPY --from=builder /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon/bin/ptp /usr/local/bin/
-
-CMD ["/usr/local/bin/ptp"]
-```
-
-### Build and push the image
-
-```bash
-podman build --arch=x86_64 --no-cache -t <your pull spec> -f Dockerfile.tbc . && podman push <your pull spec>
-```
-
-### Replace the stock image
-
-Replace the `linuxptp-daemon` stock image by your custom image (the exact method depends on the environment used)
 
 ## Configure
 
@@ -403,7 +366,7 @@ The profile above is for a triple-NIC chain of clocks operating as a single boun
             U.FL2: 0 2
 ```
 Please note that the time receiver NIC (`id: ens4f0`) and the specific TR port (`upstreamPort: ens4f1`) have to be configured in both T-BC and T-TSC configurations
-The pins API has to be set as well. In the single-NIC case, disable all the pins, or enable outputs if using for 1PPS measurements. 
+The pins API has to be set as well. In the single-NIC case, disable all the pins, or enable outputs if using for 1PPS measurements.
 
 ### Configuring ts2phc
 
@@ -439,7 +402,7 @@ To compensate for internal and external delays, use `ts2phc.extts_correction` se
 
 ### Configuring ptp4l
 
-Customizing ptp4l ports is done through the interface sections in the `ptp4lConf`. Only the TR port has `masterOnly 0`. All the TT ports must have `masterOnly 1`. 
+Customizing ptp4l ports is done through the interface sections in the `ptp4lConf`. Only the TR port has `masterOnly 0`. All the TT ports must have `masterOnly 1`.
 
 ### Configuring for T-TSC
 To render this configuration for T-TSC operation, remove the `00-tbc-tt` profile and adjust the `ts2phcConf` section to list only the TR NIC.
@@ -450,4 +413,4 @@ Entering and exiting the holdover can be tested by disabling the TR port on DUT,
 
 ```bash
 sudo podman run --privileged --network=host --rm quay.io/vgrinber/tools:dpll dpll-cli monitor |jq -r '"\(.boardLabel)\t\(.pinParentDevice[1].phaseOffsetPs)"'
-``` 
+```
