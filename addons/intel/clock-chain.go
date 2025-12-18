@@ -238,19 +238,19 @@ func InitClockChain(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*C
 		return chain, err
 	}
 	glog.Info("about to set DPLL pin priorities to defaults")
-	_, err = chain.SetPinDefaults()
+	err = chain.SetPinDefaults()
 	if err != nil {
 		return chain, err
 	}
 	if chain.Type == ClockTypeTBC {
 		(*nodeProfile).PtpSettings["clockType"] = "T-BC"
 		glog.Info("about to init TBC pins")
-		_, err = chain.InitPinsTBC()
+		err = chain.InitPinsTBC()
 		if err != nil {
 			return chain, fmt.Errorf("failed to initialize pins for T-BC operation: %s", err.Error())
 		}
 		glog.Info("about to enter TBC Normal mode")
-		_, err = chain.EnterNormalTBC()
+		err = chain.EnterNormalTBC()
 		if err != nil {
 			return chain, fmt.Errorf("failed to enter T-BC normal mode: %s", err.Error())
 		}
@@ -415,7 +415,7 @@ func (c *ClockChain) EnableE810Outputs() error {
 }
 
 // InitPinsTBC initializes the leading card E810 and DPLL pins for T-BC operation
-func (c *ClockChain) InitPinsTBC() (*[]dpll.PinParentDeviceCtl, error) {
+func (c *ClockChain) InitPinsTBC() error {
 	// Enable 1PPS output on SDP22
 	// (To synchronize the DPLL1 to the E810 PHC synced by ptp4l):
 	err := c.EnableE810Outputs()
@@ -470,11 +470,11 @@ func (c *ClockChain) InitPinsTBC() (*[]dpll.PinParentDeviceCtl, error) {
 		glog.Error("failed to set pins control: ", err)
 	}
 	*commands = append(*commands, *commandsGnss...)
-	return commands, BatchPinSet(commands)
+	return BatchPinSet(commands)
 }
 
 // EnterHoldoverTBC configures the leading card DPLL pins for T-BC holdover
-func (c *ClockChain) EnterHoldoverTBC() (*[]dpll.PinParentDeviceCtl, error) {
+func (c *ClockChain) EnterHoldoverTBC() error {
 	// Disable DPLL inputs from e810 (SDP22)
 	// Enable DPLL Outputs to e810 (SDP21, SDP23)
 	commands, err := c.SetPinsControl([]PinControl{
@@ -494,13 +494,13 @@ func (c *ClockChain) EnterHoldoverTBC() (*[]dpll.PinParentDeviceCtl, error) {
 		},
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return commands, BatchPinSet(commands)
+	return BatchPinSet(commands)
 }
 
 // EnterNormalTBC configures the leading card DPLL pins for regular T-BC operation
-func (c *ClockChain) EnterNormalTBC() (*[]dpll.PinParentDeviceCtl, error) {
+func (c *ClockChain) EnterNormalTBC() error {
 	// Disable DPLL Outputs to e810 (SDP23, SDP21)
 	// Enable DPLL inputs from e810 (SDP22)
 	commands, err := c.SetPinsControl([]PinControl{
@@ -520,13 +520,13 @@ func (c *ClockChain) EnterNormalTBC() (*[]dpll.PinParentDeviceCtl, error) {
 		},
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return commands, BatchPinSet(commands)
+	return BatchPinSet(commands)
 }
 
 // SetPinDefaults initializes DPLL pins to default recommended values
-func (c *ClockChain) SetPinDefaults() (*[]dpll.PinParentDeviceCtl, error) {
+func (c *ClockChain) SetPinDefaults() error {
 	// DPLL Priority List:
 	//
 	//	Recommended | Pin Index | EEC-DPLL0                    | PPS-DPLL1
@@ -610,15 +610,15 @@ func (c *ClockChain) SetPinDefaults() (*[]dpll.PinParentDeviceCtl, error) {
 		},
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return commands, BatchPinSet(commands)
+	return BatchPinSet(commands)
 }
 
-func BatchPinSet(commands *[]dpll.PinParentDeviceCtl) error {
-	if unitTest {
-		return nil
-	}
+// BatchPinSet function pointer allows mocking of BatchPinSet
+var BatchPinSet = batchPinSet
+
+func batchPinSet(commands *[]dpll.PinParentDeviceCtl) error {
 	conn, err := dpll.Dial(nil)
 	if err != nil {
 		return fmt.Errorf("failed to dial DPLL: %v", err)

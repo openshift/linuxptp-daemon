@@ -36,7 +36,7 @@ var cliArgsSlaveFlagsRegex = regexp.MustCompile(`--(slaveOnly|clientOnly)(\s+1|=
 type LinuxPTPConfUpdate struct {
 	UpdateCh               chan bool
 	NodeProfiles           []ptpv1.PtpProfile
-	appliedNodeProfileJson []byte
+	appliedNodeProfileJSON []byte
 	defaultPTP4lConfig     []byte
 }
 
@@ -166,14 +166,24 @@ func NewLinuxPTPConfUpdate() (*LinuxPTPConfUpdate, error) {
 	return &LinuxPTPConfUpdate{UpdateCh: make(chan bool), defaultPTP4lConfig: defaultPTP4lConfig}, nil
 }
 
-func (l *LinuxPTPConfUpdate) UpdateConfig(nodeProfilesJson []byte) error {
-	if bytes.Equal(l.appliedNodeProfileJson, nodeProfilesJson) {
+// UpdateConfig updates the PTP configuration from the provided JSON.
+// If ptpAuthUpdated is true, the configuration will be reapplied even if the JSON hasn't changed.
+// This is used when security files (sa_file) have been updated and PTP processes need to restart.
+func (l *LinuxPTPConfUpdate) UpdateConfig(nodeProfilesJSON []byte, ptpAuthUpdated bool) error {
+	jsonChanged := !bytes.Equal(l.appliedNodeProfileJSON, nodeProfilesJSON)
+
+	if !jsonChanged && !ptpAuthUpdated {
 		glog.Info("UpdateConfig: config unchanged, skipping update")
 		return nil
 	}
-	if nodeProfiles, ok := tryToLoadConfig(nodeProfilesJson); ok {
+
+	if ptpAuthUpdated {
+		glog.Info("UpdateConfig: security files changed, forcing update")
+	}
+
+	if nodeProfiles, ok := tryToLoadConfig(nodeProfilesJSON); ok {
 		glog.Infof("load profiles: %d profiles loaded", len(nodeProfiles))
-		l.appliedNodeProfileJson = nodeProfilesJson
+		l.appliedNodeProfileJSON = nodeProfilesJSON
 		l.NodeProfiles = nodeProfiles
 		glog.Info("Sending update signal to daemon via UpdateCh")
 		l.UpdateCh <- true
@@ -182,7 +192,7 @@ func (l *LinuxPTPConfUpdate) UpdateConfig(nodeProfilesJson []byte) error {
 		return nil
 	}
 
-	if nodeProfiles, ok := tryToLoadOldConfig(nodeProfilesJson); ok {
+	if nodeProfiles, ok := tryToLoadOldConfig(nodeProfilesJSON); ok {
 		// Support empty old config
 		// '{"name":null,"interface":null}'
 		if nodeProfiles[0].Name == nil || nodeProfiles[0].Interface == nil {
@@ -191,7 +201,7 @@ func (l *LinuxPTPConfUpdate) UpdateConfig(nodeProfilesJson []byte) error {
 		}
 
 		glog.Info("load profiles using old method")
-		l.appliedNodeProfileJson = nodeProfilesJson
+		l.appliedNodeProfileJSON = nodeProfilesJSON
 		l.NodeProfiles = nodeProfiles
 		l.UpdateCh <- true
 
@@ -202,9 +212,9 @@ func (l *LinuxPTPConfUpdate) UpdateConfig(nodeProfilesJson []byte) error {
 }
 
 // Try to load the multiple policy config
-func tryToLoadConfig(nodeProfilesJson []byte) ([]ptpv1.PtpProfile, bool) {
+func tryToLoadConfig(nodeProfilesJSON []byte) ([]ptpv1.PtpProfile, bool) {
 	ptpConfig := []ptpv1.PtpProfile{}
-	err := json.Unmarshal(nodeProfilesJson, &ptpConfig)
+	err := json.Unmarshal(nodeProfilesJSON, &ptpConfig)
 	if err != nil {
 		return nil, false
 	}
@@ -213,9 +223,9 @@ func tryToLoadConfig(nodeProfilesJson []byte) ([]ptpv1.PtpProfile, bool) {
 }
 
 // For backward compatibility we also try to load the one policy scenario
-func tryToLoadOldConfig(nodeProfilesJson []byte) ([]ptpv1.PtpProfile, bool) {
+func tryToLoadOldConfig(nodeProfilesJSON []byte) ([]ptpv1.PtpProfile, bool) {
 	ptpConfig := &ptpv1.PtpProfile{}
-	err := json.Unmarshal(nodeProfilesJson, ptpConfig)
+	err := json.Unmarshal(nodeProfilesJSON, ptpConfig)
 	if err != nil {
 		return nil, false
 	}

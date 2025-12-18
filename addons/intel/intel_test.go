@@ -5,10 +5,31 @@ import (
 	"os"
 	"testing"
 
+	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/yaml"
 )
+
+type mockBatchPinSet struct {
+	commands *[]dpll.PinParentDeviceCtl
+}
+
+func (m *mockBatchPinSet) mock(commands *[]dpll.PinParentDeviceCtl) error {
+	m.commands = commands
+	return nil
+}
+
+func (m *mockBatchPinSet) reset() {
+	m.commands = nil
+}
+
+func setupBatchPinSetMock() (*mockBatchPinSet, func()) {
+	originalBatchPinset := BatchPinSet
+	mock := &mockBatchPinSet{}
+	BatchPinSet = mock.mock
+	return mock, func() { BatchPinSet = originalBatchPinset }
+}
 
 // MockFileSystem is a simple mock implementation of FileSystemInterface
 type MockFileSystem struct {
@@ -122,6 +143,7 @@ func Test_initInternalDelays_BadPart(t *testing.T) {
 	_, err := InitInternalDelays("Dummy")
 	assert.Error(t, err)
 }
+
 func Test_ParseVpd(t *testing.T) {
 	b, err := os.ReadFile("./testdata/vpd.bin")
 	assert.NoError(t, err)
@@ -134,21 +156,30 @@ func Test_ParseVpd(t *testing.T) {
 
 func Test_ProcessProfileTGMNew(t *testing.T) {
 	unitTest = true
+	mockPinSet, restorePinSet := setupBatchPinSetMock()
+	defer restorePinSet()
 	profile, err := loadProfile("./testdata/profile-tgm.yaml")
 	assert.NoError(t, err)
 	err = OnPTPConfigChangeE810(nil, profile)
 	assert.NoError(t, err)
+	assert.NotNil(t, mockPinSet.commands, "Ensure clockChain.SetPinDefaults was called")
 }
 
 // Test that the profile with no phase inputs is processed correctly
 func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 	unitTest = true
+	mockPinSet, restorePinSet := setupBatchPinSetMock()
+	defer restorePinSet()
 	profile, err := loadProfile("./testdata/profile-tbc-no-input-delays.yaml")
 	assert.NoError(t, err)
 	err = OnPTPConfigChangeE810(nil, profile)
 	assert.NoError(t, err)
+	assert.NotNil(t, mockPinSet.commands, "Ensure clockChain.SetPinDefaults was called")
 }
+
 func Test_ProcessProfileTbc(t *testing.T) {
+	mockPinSet, restorePinSet := setupBatchPinSetMock()
+	defer restorePinSet()
 	// Setup filesystem mock for TBC profile (3 devices with pins)
 	mockFS := &MockFileSystem{}
 	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
@@ -190,17 +221,29 @@ func Test_ProcessProfileTbc(t *testing.T) {
 	assert.Equal(t, "ens4f1", clockChain.LeadingNIC.UpstreamPort, "wrong upstream port")
 
 	// Test holdover entry
-	commands, err := clockChain.EnterHoldoverTBC()
+	mockPinSet.reset()
+	err = clockChain.EnterHoldoverTBC()
 	assert.NoError(t, err)
-	assert.Equal(t, 2, len(*commands))
+	assert.Equal(t, 2, len(*mockPinSet.commands))
 
 	// Test holdover exit
-	commands, err = clockChain.EnterNormalTBC()
+	mockPinSet.reset()
+	err = clockChain.EnterNormalTBC()
 	assert.NoError(t, err)
-	assert.Equal(t, 2, len(*commands))
+	assert.Equal(t, 2, len(*mockPinSet.commands))
+
+	// Ensure switching back to TGM resets any pins
+	mockPinSet.reset()
+	tgmProfile, err := loadProfile("./testdata/profile-tgm.yaml")
+	assert.NoError(t, err)
+	err = OnPTPConfigChangeE810(nil, tgmProfile)
+	assert.NoError(t, err)
+	assert.NotNil(t, mockPinSet.commands, "Ensure clockChain.SetPinDefaults was called")
 }
 
 func Test_ProcessProfileTtsc(t *testing.T) {
+	mockPinSet, restorePinSet := setupBatchPinSetMock()
+	defer restorePinSet()
 	// Setup filesystem mock for T-TSC profile (1 device with pins)
 	mockFS := &MockFileSystem{}
 	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
@@ -237,28 +280,35 @@ func Test_ProcessProfileTtsc(t *testing.T) {
 	assert.Equal(t, "5799633565432596414", clockChain.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
 	assert.Equal(t, 9, len(clockChain.LeadingNIC.Pins), "wrong number of configurable pins")
 	assert.Equal(t, "ens4f1", clockChain.LeadingNIC.UpstreamPort, "wrong upstream port")
+	assert.NotNil(t, mockPinSet.commands, "Ensure some pins were set")
 
 	// Test holdover entry
-	commands, err := clockChain.EnterHoldoverTBC()
+	mockPinSet.reset()
+	err = clockChain.EnterHoldoverTBC()
 	assert.NoError(t, err)
-	assert.Equal(t, 2, len(*commands))
+	assert.Equal(t, 2, len(*mockPinSet.commands))
 
 	// Test holdover exit
-	commands, err = clockChain.EnterNormalTBC()
+	mockPinSet.reset()
+	err = clockChain.EnterNormalTBC()
 	assert.NoError(t, err)
-	assert.Equal(t, 2, len(*commands))
-
+	assert.Equal(t, 2, len(*mockPinSet.commands))
 }
 
 func Test_ProcessProfileTGMOld(t *testing.T) {
+	mockPinSet, restorePinSet := setupBatchPinSetMock()
+	defer restorePinSet()
 	unitTest = true
 	profile, err := loadProfile("./testdata/profile-tgm-old.yaml")
 	assert.NoError(t, err)
 	err = OnPTPConfigChangeE810(nil, profile)
 	assert.NoError(t, err)
+	assert.NotNil(t, mockPinSet.commands, "Ensure some pins were set")
 }
 
 func Test_SetPinDefaults_AllNICs(t *testing.T) {
+	mockPinSet, restorePinSet := setupBatchPinSetMock()
+	defer restorePinSet()
 	unitTest = true
 
 	// Load a profile with multiple NICs (leading + other NICs)
@@ -281,19 +331,19 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 	}
 
 	// Call SetPinDefaults and verify it works with all NICs
-	commands, err := clockChain.SetPinDefaults()
+	err = clockChain.SetPinDefaults()
 	assert.NoError(t, err)
-	assert.NotNil(t, commands)
+	assert.NotNil(t, mockPinSet.commands)
 
 	// SetPinDefaults configures 9 different pin types, and we have 3 NICs total
 	// Each pin type should have a command for each NIC that has that pin
-	assert.Equal(t, len(*commands), 27, "should have exactly 27 pin commands")
+	assert.Equal(t, len(*mockPinSet.commands), 27, "should have exactly 27 pin commands")
 
 	// Verify that commands include pins from multiple clock IDs
 	clockIDsSeen := make(map[uint64]bool)
 	pinLabelsSeen := make(map[string]bool)
 
-	for _, cmd := range *commands {
+	for _, cmd := range *mockPinSet.commands {
 		// Find which pin this command refers to by searching all pins
 		for _, pin := range clockChain.DpllPins {
 			if pin.ID == cmd.ID {
