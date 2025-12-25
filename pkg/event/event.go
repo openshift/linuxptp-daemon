@@ -659,8 +659,7 @@ connect:
 							cfgName = "ptp4l." + strings.Join(parts[1:], ".")
 						}
 						if clockClass == 0 {
-							parentDS, _ := pmc.RunPMCExpGetParentDS(cfgName, true)
-							clockClass = fbprotocol.ClockClass(parentDS.GrandmasterClockClass)
+							continue
 						}
 						utils.EmitClockClass(c, PTP4lProcessName, cfgName, clockClass)
 					}
