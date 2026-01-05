@@ -7,6 +7,7 @@ FROM quay.io/centos/centos:stream9
 
 RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y \
   install \
+  pciutils \
   linuxptp \
   ethtool \
   hwdata \

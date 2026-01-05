@@ -86,7 +86,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 	// information elements change
 	updateDownstreamData := false
 	if event.ProcessName == PTP4lProcessName {
-		glog.Info("PTP4l event: %++v", event)
+		glog.Infof("PTP4l event: %+v", event)
 	}
 	leadingInterface := e.getLeadingInterfaceBC()
 	if leadingInterface == LEADING_INTERFACE_UNKNOWN {

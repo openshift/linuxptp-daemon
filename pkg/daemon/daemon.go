@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"cmp"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -27,6 +28,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
+	dpllnl "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
@@ -60,6 +62,9 @@ const (
 	TGM                             = "T-GM"
 	PtpSecretMountDir               = "/etc/ptp-secret-mount/"
 	ChronydSocketPath               = "/tmp/chrony/chronyd.sock"
+	// Offset filter size is hardcoded to 64 for now. It covers 4 seconds with reporting rate 16x/second.
+	// TODO: consider making it configurable
+	offsetFilterSize = 64
 )
 
 var (
@@ -136,8 +141,9 @@ func NewProcessManager() *ProcessManager {
 func NewDaemonForTests(tracker *ReadyTracker, processManager *ProcessManager) *Daemon {
 	tracker.processManager = processManager
 	return &Daemon{
-		readyTracker:   tracker,
-		processManager: processManager,
+		readyTracker:          tracker,
+		processManager:        processManager,
+		hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(),
 	}
 }
 
@@ -238,9 +244,14 @@ func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
 }
 
 type tBCProcessAttributes struct {
-	controlledPortsConfigFile string
+	ttPortsConfigFile string
+	trPortsConfigFile string
 	// Time receiver interface name for T-BC clock monitoring
-	trIfaceName string
+	trIfaceName       string
+	lastReportedState event.PTPState
+	lastAppliedState  event.PTPState
+	offsetFilter      *utils.Window
+	offsetThreshold   float64
 }
 
 type ptpProcess struct {
@@ -259,7 +270,6 @@ type ptpProcess struct {
 	depProcess            []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
 	nodeProfile           ptpv1.PtpProfile
 	logParser             parser.MetricsExtractor
-	lastTransitionResult  event.PTPState
 	clockType             event.ClockType
 	ptpClockThreshold     *ptpv1.PtpClockThreshold
 	haProfile             map[string][]string // stores list of interface name for each profile
@@ -272,6 +282,7 @@ type ptpProcess struct {
 	dn                    *Daemon
 	cmdSetEnabledMutex    sync.Mutex
 	tbcStateDetector      *hardwareconfig.PTPStateDetector // Cached PTP state detector instance
+	offset                float64
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -336,19 +347,64 @@ type Daemon struct {
 // into the running daemon. The daemon forwards the update to its
 // HardwareConfigManager which resolves and caches DPLL/sysfs commands.
 func (dn *Daemon) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.HardwareConfig) error {
-	if dn.hardwareConfigManager == nil {
-		return fmt.Errorf("hardware config manager not initialized")
-	}
 	return dn.hardwareConfigManager.UpdateHardwareConfig(hwConfigs)
 }
 
 // getHoldoverParameters retrieves holdover parameters from HardwareConfig for a specific clock ID
 // Returns nil if no hardware config is available or no parameters are configured for the clock
 func (dn *Daemon) getHoldoverParameters(profileName string, clockID uint64) *ptpv2alpha1.HoldoverParameters {
-	if dn.hardwareConfigManager == nil {
-		return nil
-	}
 	return dn.hardwareConfigManager.GetHoldoverParameters(profileName, clockID)
+}
+
+// getInterfacesFromHardwareConfig derives interfaces from hardwareconfig structure for T-BC mode.
+// It extracts the first interface from structure[*]->dpll->networkInterface.
+// Returns an empty slice if no hardwareconfig is available or no interfaces are found.
+func (dn *Daemon) getInterfacesFromHardwareConfig(nodeProfile *ptpv1.PtpProfile) config.IFaces {
+	if nodeProfile == nil || nodeProfile.Name == nil {
+		return config.IFaces{}
+	}
+
+	// Get hardware configs for this profile
+	hwProfiles := dn.hardwareConfigManager.GetHardwareConfigsForProfile(nodeProfile)
+	if len(hwProfiles) == 0 {
+		glog.V(2).Infof("No hardware configs found for profile %s", *nodeProfile.Name)
+		return config.IFaces{}
+	}
+
+	var interfaces config.IFaces
+
+	// Iterate through hardware profiles and extract interfaces from structure
+	for _, hwProfile := range hwProfiles {
+		if hwProfile.ClockChain == nil || len(hwProfile.ClockChain.Structure) == 0 {
+			continue
+		}
+
+		// Get the first subsystem from structure and use GetSubsystemNetworkInterface
+		firstSubsystem := hwProfile.ClockChain.Structure[0]
+		networkInterface, err := hardwareconfig.GetSubsystemNetworkInterface(hwProfile.ClockChain, firstSubsystem.Name)
+		if err != nil {
+			glog.V(2).Infof("Failed to get network interface for first subsystem %s: %v", firstSubsystem.Name, err)
+			continue
+		}
+
+		if networkInterface != "" {
+			// Determine event source based on T-BC configuration
+			// For T-BC, the interface typically depends on PTP4l
+			eventSource := event.PTP4l
+
+			// Get PHC ID for the interface
+			phcID := ptpnetwork.GetPhcId(networkInterface)
+
+			interfaces = append(interfaces, config.Iface{
+				Name:     networkInterface,
+				Source:   eventSource,
+				PhcId:    phcID,
+				IsMaster: false,
+			})
+		}
+	}
+
+	return interfaces
 }
 
 // New LinuxPTP is called by daemon to generate new linuxptp instance
@@ -544,6 +600,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.readyTracker.setConfig(false)
 
 	glog.Infof("in applyNodePTPProfiles - starting to apply %d node profiles", len(dn.ptpUpdate.NodeProfiles))
+
 	dn.stopAllProcesses()
 	// All process should have been stopped,
 	// clear process in process manager.
@@ -579,6 +636,20 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	})
 
 	relations := reconcileRelatedProfiles(dn.ptpUpdate.NodeProfiles)
+
+	// Update PtpConfig in hardware config manager for clock chain resolution
+	// This is done after sorting and reconciliation to ensure we use the same
+	// processed profiles that will actually be applied. The NodeProfiles are already
+	// filtered to be relevant for this node by calculateNodeProfiles in the controller.
+	if len(dn.ptpUpdate.NodeProfiles) > 0 {
+		ptpConfig := &ptpv1.PtpConfig{
+			Spec: ptpv1.PtpConfigSpec{
+				Profile: dn.ptpUpdate.NodeProfiles,
+			},
+		}
+		dn.hardwareConfigManager.SetPtpConfig(ptpConfig)
+		glog.Infof("Updated PtpConfig in hardware config manager with %d profiles (after sorting and reconciliation)", len(dn.ptpUpdate.NodeProfiles))
+	}
 	// TODO: resolve clock IDs, clockType, leadingInterface and upstreamPort from hardware config
 	// (needed to keep code compatibility elsewhere and allow it to work both with hardware config and plugins)
 	for _, profile := range dn.ptpUpdate.NodeProfiles {
@@ -903,33 +974,43 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 		args := strings.Split(cmdLine, " ")
 		cmd = exec.Command(args[0], args[1:]...)
+
 		dprocess := ptpProcess{
-			name:                 pProcess,
-			ifaces:               ifaces,
-			processConfigPath:    configPath,
-			processSocketPath:    socketPath,
-			configName:           configFile,
-			messageTag:           messageTag,
-			exitCh:               make(chan bool),
-			stopped:              true,
-			logFilters:           logfilter.GetLogFilters(pProcess, messageTag, (*nodeProfile).PtpSettings),
-			cmd:                  cmd,
-			depProcess:           []process{},
-			nodeProfile:          *nodeProfile,
-			clockType:            clockType,
-			ptpClockThreshold:    getPTPThreshold(nodeProfile),
-			haProfile:            haProfile,
-			syncERelations:       relations,
-			logParser:            getParser(pProcess),
-			tBCAttributes:        tBCProcessAttributes{controlledPortsConfigFile: controlledConfigFile},
-			lastTransitionResult: event.PTP_NOTSET,
-			handler:              dn.processManager.ptpEventHandler,
-			dn:                   dn,
+			name:              pProcess,
+			ifaces:            ifaces,
+			processConfigPath: configPath,
+			processSocketPath: socketPath,
+			configName:        configFile,
+			messageTag:        messageTag,
+			exitCh:            make(chan bool),
+			stopped:           true,
+			logFilters:        logfilter.GetLogFilters(pProcess, messageTag, (*nodeProfile).PtpSettings),
+			cmd:               cmd,
+			depProcess:        []process{},
+			nodeProfile:       *nodeProfile,
+			clockType:         clockType,
+			ptpClockThreshold: getPTPThreshold(nodeProfile),
+			haProfile:         haProfile,
+			syncERelations:    relations,
+			logParser:         getParser(pProcess),
+			tBCAttributes: tBCProcessAttributes{ttPortsConfigFile: controlledConfigFile, trPortsConfigFile: configFile,
+				lastReportedState: event.PTP_NOTSET, lastAppliedState: event.PTP_NOTSET, offsetFilter: nil},
+			handler: dn.processManager.ptpEventHandler,
+			dn:      dn,
 		}
 
 		if pProcess == ptp4lProcessName {
 			if port, ok := (*nodeProfile).PtpSettings["upstreamPort"]; ok && clockType == event.BC {
 				dprocess.tBCAttributes.trIfaceName = port
+				sInSyncConditionTh, thresholdConfigured := (*nodeProfile).PtpSettings["inSyncConditionThreshold"]
+				if thresholdConfigured {
+					dprocess.tBCAttributes.offsetThreshold, err = strconv.ParseFloat(sInSyncConditionTh, 64)
+					if err != nil {
+						return fmt.Errorf("failed to parse inSyncConditionThreshold: %s", err)
+					}
+				} else {
+					dprocess.tBCAttributes.offsetThreshold = float64(getPTPThreshold(nodeProfile).MaxOffsetThreshold)
+				}
 				// Prepare cached resources for T-BC processing
 				dprocess.prepareTBCResources()
 			}
@@ -1015,7 +1096,23 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			}
 			var clockId uint64
 			phaseOffsetPinFilter := map[string]string{}
-			for _, iface := range dprocess.ifaces {
+
+			// For T-BC mode with hardwareconfig, derive interfaces from hardwareconfig structure
+			// instead of analyzing ts2phc configuration file
+			var interfacesToUse config.IFaces
+			if profileClockType == TBC && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
+				interfacesToUse = dn.getInterfacesFromHardwareConfig(nodeProfile)
+				if len(interfacesToUse) > 0 {
+					glog.Infof("Using interfaces from hardwareconfig for T-BC profile %s: %v", *nodeProfile.Name, interfacesToUse)
+				} else {
+					glog.Warningf("Failed to derive interfaces from hardwareconfig for T-BC profile %s, falling back to ts2phc config", *nodeProfile.Name)
+					interfacesToUse = dprocess.ifaces
+				}
+			} else {
+				interfacesToUse = dprocess.ifaces
+			}
+
+			for _, iface := range interfacesToUse {
 				var eventSource []event.EventSource
 				if iface.Source == event.GNSS || iface.Source == event.PPS ||
 					(iface.Source == event.PTP4l && profileClockType == TBC) {
@@ -1081,6 +1178,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 						// Used only in T-BC in-sync condition:
 						inSyncConditionTh, inSyncConditionTimes)
 					glog.Infof("depending on %s", dpllDaemon.DependsOn())
+					// Set hardwareconfig handler if hardwareconfig manager is available
+					dpllDaemon.SetHardwareConfigHandler(func(devices []*dpllnl.DoDeviceGetReply) error {
+						return dn.hardwareConfigManager.ProcessDPLLDeviceNotifications(devices)
+					})
 					dpllDaemon.CmdInit()
 					dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
 				}
@@ -1168,7 +1269,7 @@ func logProcessStatus(processName string, cfgName string, status int64, c net.Co
 // This method caches expensive operations that would otherwise be repeated 16x/second
 func (p *ptpProcess) prepareTBCResources() {
 	// Cache hardwareconfig availability (expensive lookup)
-	if p.dn != nil && p.dn.hardwareConfigManager != nil {
+	if p.dn != nil {
 		vTbcHasHardwareConfig = p.dn.hardwareConfigManager.HasHardwareConfigForProfile(&p.nodeProfile)
 	}
 
@@ -1184,61 +1285,96 @@ func (p *ptpProcess) tBCTransitionCheck(output string, pm *plugin.PluginManager)
 	// Use cached hardwareconfig availability (no expensive lookups)
 	if vTbcHasHardwareConfig && p.tbcStateDetector != nil {
 		// Hardwareconfig path: Use cached PTP state detector
-		p.processTBCTransitionHardwareConfig(output, pm)
+		p.processTBCTransitionHardwareConfig(output)
 	} else {
 		// Legacy path: Use optimized string matching
 		p.processTBCTransitionLegacy(output, pm)
 	}
 }
 
-// applyConditionOrFallback applies hardware config for a condition or falls back to plugin
-func (p *ptpProcess) applyConditionOrFallback(conditionType, pluginAction string, pm *plugin.PluginManager) {
-	if p.dn != nil && p.dn.hardwareConfigManager != nil {
-		if err := p.dn.hardwareConfigManager.ApplyConditionForProfile(&p.nodeProfile, conditionType); err != nil {
-			glog.Errorf("Failed to apply hardware config for '%s' condition: %v", conditionType, err)
-			// Fallback to plugin if hardware config fails
-			pm.AfterRunPTPCommand(&p.nodeProfile, pluginAction)
-		} else {
-			glog.Infof("Successfully applied hardware config for '%s' condition", conditionType)
+// checkOffsetFilterAndTransition checks if offset filter conditions are met and transitions to LOCKED state
+// This function is called for every log line when processing the TR ports config file.
+// It collects offset samples and only transitions when the filter is full and mean offset is below threshold.
+// The transitionAction callback is called when conditions are met to perform the actual transition.
+func (p *ptpProcess) checkOffsetFilterAndTransition(transitionAction func()) {
+	if p.configName != p.tBCAttributes.trPortsConfigFile || p.tBCAttributes.offsetFilter == nil {
+		return
+	}
+
+	p.tBCAttributes.offsetFilter.Insert(math.Abs(p.offset))
+	if p.tBCAttributes.lastReportedState == event.PTP_LOCKED &&
+		p.tBCAttributes.lastAppliedState != event.PTP_LOCKED {
+		// Require filter to be full before sending event to ensure meaningful filtering
+		if p.tBCAttributes.offsetFilter.IsFull() {
+			tempOffset := p.tBCAttributes.offsetFilter.Mean()
+			glog.Infof("Filtered Offset: %f, threshold %f", tempOffset, p.tBCAttributes.offsetThreshold)
+			if tempOffset < p.tBCAttributes.offsetThreshold {
+				glog.Infof("T-BC MOVE TO NORMAL STATE")
+				transitionAction()
+				p.tBCAttributes.lastAppliedState = event.PTP_LOCKED
+			}
 		}
-	} else {
-		// Fallback to plugin if no hardware config manager
-		pm.AfterRunPTPCommand(&p.nodeProfile, pluginAction)
 	}
 }
 
 // processTBCTransitionHardwareConfig handles T-BC transitions using hardwareconfig (optimized)
-func (p *ptpProcess) processTBCTransitionHardwareConfig(output string, pm *plugin.PluginManager) {
+func (p *ptpProcess) processTBCTransitionHardwareConfig(output string) {
 	// Use the new DetectStateChange function for optimal performance
 	conditionType := p.tbcStateDetector.DetectStateChange(output)
-
 	switch conditionType {
 	case hardwareconfig.ConditionTypeLocked:
-		p.applyConditionOrFallback(hardwareconfig.ConditionTypeLocked, "tbc-ho-exit", pm)
-		p.lastTransitionResult = event.PTP_LOCKED
-		p.sendPtp4lEvent()
+		// Defer transition until offset filter confirms stability
+		p.tBCAttributes.lastReportedState = event.PTP_LOCKED
+		glog.Infof("T-BC MOVE TO LOCKED (reported state)")
+		p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
 	case hardwareconfig.ConditionTypeLost:
-		p.applyConditionOrFallback(hardwareconfig.ConditionTypeLost, "tbc-ho-entry", pm)
-		p.lastTransitionResult = event.PTP_FREERUN
+		if err := p.dn.hardwareConfigManager.ApplyConditionForProfile(&p.nodeProfile, hardwareconfig.ConditionTypeLost); err != nil {
+			glog.Errorf("Failed to apply hardware config for '%s' condition: %v", hardwareconfig.ConditionTypeLost, err)
+		} else {
+			glog.Infof("Successfully applied hardware config for '%s' condition", hardwareconfig.ConditionTypeLost)
+		}
+
+		p.tBCAttributes.lastReportedState = event.PTP_FREERUN
+		glog.Info("T-BC MOVE TO HOLDOVER")
 		p.sendPtp4lEvent()
+		p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
+		p.tBCAttributes.offsetFilter = nil
 	}
+
+	// Check offset filter and transition if conditions are met
+	p.checkOffsetFilterAndTransition(func() {
+		if err := p.dn.hardwareConfigManager.ApplyConditionForProfile(&p.nodeProfile, hardwareconfig.ConditionTypeLocked); err != nil {
+			glog.Errorf("Failed to apply hardware config for '%s' condition: %v", hardwareconfig.ConditionTypeLocked, err)
+		} else {
+			glog.Infof("Successfully applied hardware config for '%s' condition", hardwareconfig.ConditionTypeLocked)
+		}
+		p.sendPtp4lEvent()
+	})
 }
 
 // processTBCTransitionLegacy is the original implementation as ultimate fallback
 func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.PluginManager) {
 	if strings.Contains(output, p.tBCAttributes.trIfaceName) {
 		if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
-			pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
-			p.lastTransitionResult = event.PTP_LOCKED
-			p.sendPtp4lEvent()
+			// Defer transition until offset filter confirms stability
+			p.tBCAttributes.lastReportedState = event.PTP_LOCKED
+			p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
 		} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
 			strings.Contains(output, "SLAVE to") {
 			pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
-			p.lastTransitionResult = event.PTP_FREERUN
+			p.tBCAttributes.lastReportedState = event.PTP_FREERUN
 			glog.Info("T-BC MOVE TO HOLDOVER")
 			p.sendPtp4lEvent()
+			p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
+			p.tBCAttributes.offsetFilter = nil
 		}
 	}
+
+	// Check offset filter and transition if conditions are met
+	p.checkOffsetFilterAndTransition(func() {
+		pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
+		p.sendPtp4lEvent()
+	})
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
@@ -1406,12 +1542,12 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 		if configName == "" {
 			return
 		}
-		configName = strings.Split(configName, MessageTagSuffixSeperator)[0] // remove any suffix added to the configName
 		logEntry := synce.ParseLog(output)
 		p.ProcessSynceEvents(logEntry)
 	} else {
 		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output, p.c == nil)
 		p.hasCollectedMetrics = true
+		p.offset = ptpOffset
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
 			var values map[event.ValueType]interface{}
 			ifaceName := masterOffsetIface.getByAlias(configName, iface).name
@@ -1976,16 +2112,16 @@ func (p *ptpProcess) sendPtp4lEvent() {
 	select {
 	case p.eventCh <- event.EventChannel{
 		ProcessName: event.PTP4l,
-		State:       p.lastTransitionResult,
+		State:       p.tBCAttributes.lastReportedState,
 		CfgName:     p.configName,
 		IFace:       p.tBCAttributes.trIfaceName,
 		ClockType:   p.clockType,
 		Time:        time.Now().UnixMilli(),
 		Reset:       false,
-		SourceLost:  p.lastTransitionResult != event.PTP_LOCKED,
+		SourceLost:  p.tBCAttributes.lastReportedState != event.PTP_LOCKED,
 		OutOfSpec:   false,
 		Values: map[event.ValueType]any{
-			event.ControlledPortsConfig: p.tBCAttributes.controlledPortsConfigFile,
+			event.ControlledPortsConfig: p.tBCAttributes.ttPortsConfigFile,
 			event.ClockIDKey:            clockID,
 		},
 	}:

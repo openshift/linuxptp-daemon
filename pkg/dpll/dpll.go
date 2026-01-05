@@ -127,6 +127,9 @@ type DpllConfig struct {
 	phaseOffsetPinFilter     map[string]map[string]string
 	inSyncConditionThreshold uint64
 	inSyncConditionTimes     uint64
+	// hardwareConfigHandler is called when device notifications are received
+	// All logic for processing device notifications is handled by the hardwareconfig layer
+	hardwareConfigHandler func(devices []*nl.DoDeviceGetReply) error
 }
 
 func (d *DpllConfig) InSpec() bool {
@@ -165,6 +168,12 @@ func (d *DpllConfig) SourceLost() bool {
 // SetSourceLost ... set source status
 func (d *DpllConfig) SetSourceLost(sourceLost bool) {
 	d.sourceLost = sourceLost
+}
+
+// SetHardwareConfigHandler sets the callback function to be invoked when device notifications are received.
+// The handler receives all device notifications and is responsible for all matching logic.
+func (d *DpllConfig) SetHardwareConfigHandler(handler func(devices []*nl.DoDeviceGetReply) error) {
+	d.hardwareConfigHandler = handler
 }
 
 // PhaseOffset ... get phase offset
@@ -427,6 +436,13 @@ func (d *DpllConfig) monitorNtf(c *genetlink.Conn) {
 			default:
 				glog.Info("unhandled dpll message", msg.Header.Command, msg.Data)
 
+			}
+		}
+		// Pass device notifications to hardwareconfig handler if present
+		// All logic (clock ID matching, lock status checking) happens in hardwareconfig layer
+		if len(devices) > 0 && d.hardwareConfigHandler != nil {
+			if err = d.hardwareConfigHandler(devices); err != nil {
+				glog.Errorf("hardwareconfig handler error: %v", err)
 			}
 		}
 		if d.nlUpdateState(devices, pins) {

@@ -149,10 +149,7 @@ func TestCalculateNodeHardwareConfigs(t *testing.T) {
 			}
 
 			// Call the method under test
-			result, err := reconciler.calculateNodeHardwareConfigs(context.TODO(), tc.hwConfigs)
-
-			// Verify no error occurred
-			assert.NoError(t, err)
+			result := reconciler.calculateNodeHardwareConfigs(context.TODO(), tc.hwConfigs)
 
 			// Verify the number of hardware configs
 			assert.Len(t, result, tc.expectedConfigsCount,
@@ -161,11 +158,7 @@ func TestCalculateNodeHardwareConfigs(t *testing.T) {
 			// Verify config names match expected (based on profile names within configs)
 			var actualConfigNames []string
 			for _, hwConfig := range result {
-				if hwConfig.Spec.Profile.Name != nil {
-					actualConfigNames = append(actualConfigNames, *hwConfig.Spec.Profile.Name)
-				} else {
-					actualConfigNames = append(actualConfigNames, "unnamed")
-				}
+				actualConfigNames = append(actualConfigNames, *hwConfig.Spec.Profile.Name)
 			}
 			assert.ElementsMatch(t, tc.expectedConfigNames, actualConfigNames,
 				"Expected config names %v, got %v", tc.expectedConfigNames, actualConfigNames)

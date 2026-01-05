@@ -17,6 +17,10 @@ import (
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 )
 
+const (
+	backoffTime = 15 * time.Second
+)
+
 // HardwareConfigUpdateHandler defines the interface implemented by the daemon (or a test double)
 // to receive effective hardware configuration updates computed by this controller.
 //
@@ -90,8 +94,7 @@ func (r *HardwareConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			glog.Infof("HardwareConfig deleted, recalculating hardware configurations name=%s", req.Name)
 			return r.reconcileAllConfigs(ctx)
 		}
-		glog.Errorf("Failed to get HardwareConfig: %v", err)
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("failed to get HardwareConfig: %w", err)
 	}
 
 	// Recalculate and apply hardware configuration for this node
@@ -147,15 +150,18 @@ func (r *HardwareConfigReconciler) reconcileAllConfigs(ctx context.Context) (ctr
 	// List all HardwareConfigs in the cluster
 	hwConfigList := &ptpv2alpha1.HardwareConfigList{}
 	if err := r.List(ctx, hwConfigList); err != nil {
-		glog.Errorf("Failed to list HardwareConfigs: %v", err)
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("failed to list HardwareConfigs: %w", err)
 	}
 
 	// Validate hardware config separation before proceeding
 	if err := r.validateHardwareConfigSeparation(hwConfigList.Items); err != nil {
 		glog.Errorf("Hardware config validation failed: %v", err)
 		// Don't return error to avoid controller crash, but log the issue
-		// In production, you might want to set a status condition instead
+		// TODO: Set a status condition instead
+		//  add a status condition to the HardwareConfig CRD to enable that
+		// type HardwareConfigStatus struct {
+		// 	MatchedNodes []MatchedNode      `json:"matchedNodes,omitempty" yaml:"matchedNodes,omitempty"`
+		// 	Conditions   []metav1.Condition `json:"conditions,omitempty"
 	}
 
 	// Check if any hardware configs are associated with currently active PTP profiles
@@ -163,11 +169,7 @@ func (r *HardwareConfigReconciler) reconcileAllConfigs(ctx context.Context) (ctr
 	needsPTPRestart := r.checkIfActiveProfilesAffected(ctx, hwConfigList.Items)
 
 	// Calculate the applicable hardware configurations for this node
-	applicableConfigs, err := r.calculateNodeHardwareConfigs(ctx, hwConfigList.Items)
-	if err != nil {
-		glog.Errorf("Failed to calculate node hardware configurations: %v", err)
-		return ctrl.Result{}, err
-	}
+	applicableConfigs := r.calculateNodeHardwareConfigs(ctx, hwConfigList.Items)
 
 	// Apply hardware configurations via the handler (the daemon instance in production)
 	if len(applicableConfigs) > 0 {
@@ -175,23 +177,24 @@ func (r *HardwareConfigReconciler) reconcileAllConfigs(ctx context.Context) (ctr
 
 		// Send hardware configuration update to daemon (HardwareConfigHandler)
 		if r.HardwareConfigHandler != nil {
-			err = r.HardwareConfigHandler.UpdateHardwareConfig(applicableConfigs)
+			err := r.HardwareConfigHandler.UpdateHardwareConfig(applicableConfigs)
 			if err != nil {
-				glog.Errorf("Failed to update daemon hardware configuration: %v", err)
-				return ctrl.Result{}, err
+				glog.Infof("could not update daemon hardware configuration: %v (will retry after backoff)", err)
+				// Requeue after a short delay to avoid immediate retry storms
+				return ctrl.Result{RequeueAfter: backoffTime}, nil
 			}
 		}
-
 		glog.Infof("Successfully updated daemon hardware configuration configs=%d", len(applicableConfigs))
 	} else {
 		glog.Infof("No applicable hardware configurations found for node %s", r.NodeName)
 
 		// Clear hardware configurations if needed
 		if r.HardwareConfigHandler != nil {
-			err = r.HardwareConfigHandler.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
+			err := r.HardwareConfigHandler.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
 			if err != nil {
-				glog.Errorf("Failed to clear daemon hardware configuration: %v", err)
-				return ctrl.Result{}, err
+				glog.Errorf("Failed to clear daemon hardware configuration: %v (will retry after backoff)", err)
+				// Requeue after a short delay to avoid immediate retry storms
+				return ctrl.Result{RequeueAfter: backoffTime}, nil
 			}
 		}
 	}
@@ -243,24 +246,21 @@ func (r *HardwareConfigReconciler) scheduleDeferredRestart(_ context.Context) {
 }
 
 // calculateNodeHardwareConfigs determines which hardware configurations should be applied to this node
-//
-//nolint:unparam // error return is kept for future node matching logic
-func (r *HardwareConfigReconciler) calculateNodeHardwareConfigs(_ context.Context, hwConfigs []ptpv2alpha1.HardwareConfig) ([]ptpv2alpha1.HardwareConfig, error) {
+func (r *HardwareConfigReconciler) calculateNodeHardwareConfigs(_ context.Context, hwConfigs []ptpv2alpha1.HardwareConfig) []ptpv2alpha1.HardwareConfig {
 	var applicableConfigs []ptpv2alpha1.HardwareConfig
 
 	// For now, we apply all hardware configurations to all nodes
 	// This can be enhanced later with node matching logic similar to PtpConfig
 	for _, hwConfig := range hwConfigs {
-		glog.Infof("Processing HardwareConfig name=%s profile=%s", hwConfig.Name, getProfileName(hwConfig.Spec.Profile))
+		glog.Infof("Processing HardwareConfig name=%s profile=%s", hwConfig.Name, hwConfig.Spec.Profile.Name)
 
 		// TODO: Add node-specific filtering logic here
 		// For now, we include all hardware configs
 		applicableConfigs = append(applicableConfigs, hwConfig)
-		glog.Infof("Added hardware config profileName=%s relatedPtpProfile=%s", getProfileName(hwConfig.Spec.Profile), hwConfig.Spec.RelatedPtpProfileName)
+		glog.Infof("Added hardware config profileName=%s relatedPtpProfile=%s", hwConfig.Spec.Profile.Name, hwConfig.Spec.RelatedPtpProfileName)
 	}
-
 	glog.Infof("Calculated hardware configurations for node node=%s totalConfigs=%d", r.NodeName, len(applicableConfigs))
-	return applicableConfigs, nil
+	return applicableConfigs
 }
 
 // checkIfActiveProfilesAffected determines if hardware config changes should trigger PTP restart
@@ -302,14 +302,6 @@ func (r *HardwareConfigReconciler) checkIfActiveProfilesAffected(_ context.Conte
 
 	glog.Infof("No hardware configs are associated with currently active PTP profiles")
 	return false
-}
-
-// getProfileName safely extracts the profile name from a HardwareProfile
-func getProfileName(profile ptpv2alpha1.HardwareProfile) string {
-	if profile.Name != nil {
-		return *profile.Name
-	}
-	return "unnamed"
 }
 
 // SetupWithManager sets up the controller with the Manager

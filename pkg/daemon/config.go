@@ -162,8 +162,7 @@ func NewLinuxPTPConfUpdate() (*LinuxPTPConfUpdate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read %s: %v", PTP4L_CONF_FILE_PATH, err)
 	}
-
-	return &LinuxPTPConfUpdate{UpdateCh: make(chan bool), defaultPTP4lConfig: defaultPTP4lConfig}, nil
+	return &LinuxPTPConfUpdate{UpdateCh: make(chan bool, 10), defaultPTP4lConfig: defaultPTP4lConfig}, nil
 }
 
 // UpdateConfig updates the PTP configuration from the provided JSON.
