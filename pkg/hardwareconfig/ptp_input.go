@@ -68,29 +68,23 @@ func (psd *PTPStateDetector) DetectStateChange(logLine string) string {
 	}
 }
 
-// extractPortName extracts the port name from a PTP4L log line using simple string parsing
+// extractPortName extracts the port name from a PTP4L log line using the parser
 func (psd *PTPStateDetector) extractPortName(logLine string) string {
-	// Find the port pattern "] port N (interface):"
-	portIndex := strings.Index(logLine, "] port ")
-	if portIndex == -1 {
-		return ""
-	}
+	return psd.ExtractPortName(logLine)
+}
 
-	// Find the interface name in parentheses after "port N"
-	parenStart := strings.Index(logLine[portIndex:], "(")
-	if parenStart == -1 {
-		return ""
-	}
-	parenStart += portIndex
+// ExtractPortName extracts the port name from a PTP4L log line using the parser package
+// This reuses the parser's extraction logic to ensure consistency
+func (psd *PTPStateDetector) ExtractPortName(logLine string) string {
+	return parser.ExtractPortName(logLine)
+}
 
-	parenEnd := strings.Index(logLine[parenStart:], ")")
-	if parenEnd == -1 {
-		return ""
+// GetSourcesForPort returns the source names that monitor the given port
+func (psd *PTPStateDetector) GetSourcesForPort(portName string) []string {
+	if sources, found := psd.portToSources[portName]; found {
+		return sources
 	}
-	parenEnd += parenStart
-
-	// Extract and return port name
-	return logLine[parenStart+1 : parenEnd]
+	return []string{}
 }
 
 // buildCaches builds performance caches and compiles regexes for fast lookups

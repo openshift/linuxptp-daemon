@@ -1,3 +1,4 @@
+// Package utils provides utility functions for the linuxptp daemon.
 package utils
 
 import (
@@ -16,14 +17,16 @@ func CloseExpect(exp *expect.GExpect, r <-chan error) {
 	if exp == nil {
 		return
 	}
-	defer exp.Close()
-	exp.SendSignal(syscall.SIGTERM)
+	defer func() {
+		_ = exp.Close()
+	}()
+	_ = exp.SendSignal(syscall.SIGTERM)
 	for timeout := time.After(sigTimeout); ; {
 		select {
 		case <-r:
 			return
 		case <-timeout:
-			exp.Send("\x03")
+			_ = exp.Send("\x03")
 			return
 		}
 	}

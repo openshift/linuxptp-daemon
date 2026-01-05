@@ -1,0 +1,225 @@
+# Clock ID transformation method for this hardware
+# "direct" - use serial number bytes directly (keeps ff-ff in middle)
+# "eui64" - remove bytes 3-4 (ff-ff) and insert ff-fe (EUI-64 format)
+# Note: Based on actual hardware data from PERLA2 board, e825 uses direct transformation
+clockIdTransformation:
+  method: direct
+
+pinDefaults:
+  # REF0P
+  GNR-D_SDP2:
+    eec:
+      state: disconnected
+    pps:
+      state: selectable
+  # REF0N
+  GNR-D_SDP0:
+    eec:
+      state: disconnected
+    pps:
+      state: selectable
+  # # REF1P
+  # RCLKA_IN:
+  #   eec:
+  #     state: disconnected
+  #     priority: 10
+  #   pps:
+  #     state: disconnected
+  #     priority: 10
+  # # REF1N
+  # RCLKB_IN:
+  #   pps:
+  #     state: disconnected
+  #     priority: 11
+  #   eec:
+  #     state: disconnected
+  #     priority: 11
+  # # REF2N
+  # GNSS_10M_IN:
+  #   pps:
+  #     state: disconnected
+  #     priority: 14
+  #   eec:
+  #     state: disconnected
+  #     priority: 14
+  # # REF3P
+  # SMA1_IN:
+  #   eec:
+  #     state: disconnected
+  #     priority: 3
+  #   pps:
+  #     state: disconnected
+  #     priority: 3
+  # # REF4P
+  # GNSS_1PPS_IN:
+  #   eec:
+  #     state: disconnected
+  #     priority: 14
+  #   pps:
+  #     state: disconnected
+  #     priority: 14
+  # # REF4N
+  # OCXO:
+  #   eec:
+  #     state: disconnected
+  #     priority: 14
+  #   pps:
+  #     state: disconnected
+  #     priority: 14
+  # # OUT3
+  # NAC0_CLK_REF_SYNCE:
+  #   eec:
+  #     state: connected
+  #     priority: 0
+  # # OUT4
+  # NAC0_TIME_REF:
+  #   eec:
+  #     state: connected
+  #     priority: 0
+  # # OUT1P
+  # SMA2_OUT:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+  # # OUT1N
+  # AIC_SCLK2:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+  # # OUT2
+  # OCP1_CLK:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+  # # OUT5
+  # OCP2_CLK:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+  # # OUT6P
+  # OOCX0_1PPS_IN:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+  # # OUT7P
+  # O1PPS_OUT7_SW_P:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+  # # OUT7N
+  # O1PPS_OUT7_SW_N:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+  # # OUT8P
+  # GNR_D_SDP3:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+  # # OUT8N
+  # GNR_D_SDP1:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+  # # OUT9
+  # SYNC_25M:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+  # # OUT10
+  # SYNC_25M:
+  #   pps:
+  #     state: connected
+  #     priority: 0
+
+# connectorCommands:
+#   outputs:
+#     SMA1:
+#       commands:
+#       - type: FSWrite
+#         path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA1
+#         value: "2 1"
+#     SMA2:
+#       commands:
+#       - type: FSWrite
+#         path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2
+#         value: "2 2"
+#         description: Enable SMA2 output
+#   inputs:
+#     SMA1:
+#       commands:
+#       - type: FSWrite
+#         path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA1
+#         value: "1 1"
+#     SMA2:
+#       commands:
+#       - type: FSWrite
+#         path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2
+#         value: "1 2"
+#         description: Enable SMA2 input
+#   disable:
+#     SMA1:
+#       commands:
+#       - type: FSWrite
+#         path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA1
+#         value: "0 1"
+#     SMA2:
+#       commands:
+#       - type: FSWrite
+#         path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2
+#         value: "0 2"
+
+
+# internalDelays:
+#   partType: E810-XXVDA4T
+#   externalInputs:
+#     - connector: SMA1
+#       pin: SMA1
+#       delayPs: 7658
+#     - connector: SMA2
+#       pin: SMA2/U.FL2
+#       delayPs: 7385
+#     - connector: u.FL2
+#       pin: SMA2/U.FL2
+#       delayPs: 9795
+#   externalOutputs:
+#     - pin: REF-SMA1
+#       connector: u.FL1
+#       delayPs: 1274
+#     - pin: REF-SMA1
+#       connector: SMA1
+#       delayPs: 1376
+#     - pin: REF-SMA2/U.FL2
+#       connector: SMA2
+#       delayPs: 2908
+#   gnssInput:
+#     connector: GNSS
+#     pin: GNSS-1PPS
+#     delayPs: 6999
+
+# pinEsyncCommands:
+#   outputs:
+#     - description: set frequency
+#       type: DPLLWrite
+#       arguments:
+#         - frequency
+#     - description: set eSync frequency
+#       type: DPLLWrite
+#       arguments:
+#         - eSyncFrequency
+#     - description: re-enable output
+#       type: DPLLWrite
+#       pinParentDevices:
+#         - parentDevice: EEC
+#           state: connected
+#         - parentDevice: PPS
+#           state: connected
+#   inputs:
+#     - description: set frequency
+#       type: DPLLWrite
+#       arguments:
+#         - frequency
+#     - description: set eSync frequency
+#       type: DPLLWrite
+#       arguments:
+#         - eSyncFrequency

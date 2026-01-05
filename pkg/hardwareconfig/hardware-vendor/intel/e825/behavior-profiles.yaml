@@ -1,0 +1,87 @@
+# Behavior profiles for Intel E825 hardware
+# These templates define default behavior configurations for different clock types
+# Template variables: {subsystem}, {ptpInputPin}, {interface}
+# Hardware-specific pins (SDP2, SDP0) are hardcoded in the template
+
+behaviorProfiles:
+  t-bc:
+    # Pin role mappings - defines which pins serve which roles
+    pinRoles:
+      gnssInputPin: GNSS_1PPS_IN  # DPLL pin used for GNSS input (that should be disabled for T-BC)
+      ptpInputPin: GNR-D_SDP0  # DPLL pin used for PTP input
+    
+    # Source template - will be instantiated with resolved variables
+    sources:
+      - name: PTP
+        sourceType: ptpTimeReceiver
+        subsystem: "{subsystem}"  # Will be resolved to subsystem name
+        boardLabel: "{ptpInputPin}"  # Will be resolved from pinRoles
+        # ptpTimeReceivers will be derived from ptpconfig
+    
+    # Condition templates - will be instantiated with resolved variables
+    conditions:
+      - name: "Initialize T-BC"
+        triggers:
+          - conditionType: init
+            sourceName: PTP
+        desiredStates:
+          - dpll:
+              subsystem: "{subsystem}"
+              boardLabel: "{gnssInputPin}"
+              eec:
+                state: disconnected
+              pps:
+                state: disconnected
+          # Hardware-specific pins are hardcoded (not templated)
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
+              value: "0 0"
+              sourceName: PTP
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP0
+              value: "0 0"
+              sourceName: PTP
+      
+      - name: "PTP Source Locked"
+        triggers:
+          - conditionType: locked
+            sourceName: PTP
+        desiredStates:
+          - dpll:
+              subsystem: "{subsystem}"
+              boardLabel: "{ptpInputPin}"
+              eec:
+                state: disconnected
+              pps:
+                state: selectable
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
+              value: "2 2"
+              sourceName: PTP
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP0
+              value: "2 1"
+              sourceName: PTP
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/period
+              value: "1 0 0 1 0"
+              sourceName: PTP
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/period
+              value: "2 0 0 0 1000000"
+              sourceName: PTP
+      
+      - name: "PTP Source Lost - Leader Holdover"
+        triggers:
+          - conditionType: lost
+            sourceName: PTP
+        desiredStates:
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP0
+              value: "0 0"
+              sourceName: PTP
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
+              value: "0 0"
+              sourceName: PTP
+

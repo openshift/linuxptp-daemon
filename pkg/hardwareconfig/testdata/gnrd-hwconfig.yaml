@@ -1,0 +1,123 @@
+apiVersion: ptp.openshift.io/v2alpha1
+kind: HardwareConfig
+metadata:
+  name: test
+  namespace: openshift-ptp
+spec:
+  profile:
+    clockChain:
+      behavior:
+        conditions:
+        - name: Initialize T-BC
+          triggers:
+          - conditionType: init
+            sourceName: PTP
+          desiredStates:
+          - dpll:
+              subsystem: leader
+              boardLabel: GNSS_1PPS_IN
+              eec:
+                state: disconnected
+              pps:
+                state: disconnected 
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
+              value: "0 0"
+              sourceName: PTP
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP0
+              value: "0 0"
+              sourceName: PTP
+        # - name: DPLL coarse locked
+        #   triggers:
+        #   - conditionType: locked
+        #     sourceName: DPLL-PhaseLocked
+        #   desiredStates: 
+        #   - sysfs:
+        #       path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
+        #       value: "2 2"
+        #       sourceName: DPLL-PhaseLocked
+        #   - sysfs:
+        #       path: /sys/class/net/{interface}/device/ptp/ptp*/period
+        #       value: "2 0 0 0 1000000"
+        #       sourceName: DPLL-PhaseLocked 
+        - name: PTP Source Locked
+          triggers:
+          - conditionType: locked
+            sourceName: PTP
+          desiredStates:
+          - dpll:              
+              subsystem: leader
+              boardLabel: GNR-D_SDP0
+              eec:
+                state: disconnected
+              pps:
+                state: selectable
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
+              value: "2 2"
+              sourceName: PTP
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP0
+              value: "2 1"
+              sourceName: PTP
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/period
+              value: "1 0 0 1 0"
+              sourceName: PTP 
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/period
+              value: "2 0 0 0 1000000"
+              sourceName: PTP 
+        - name: PTP Source Lost - Leader Holdover
+          triggers:
+          - conditionType: lost
+            sourceName: PTP
+          desiredStates:
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP0
+              value: "0 0"
+              sourceName: PTP
+          - sysfs:
+              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
+              value: "0 0"
+              sourceName: PTP
+        sources:
+        - boardLabel: GNR-D_SDP0
+          subsystem: leader
+          name: PTP
+          ptpTimeReceivers:
+          - eno2
+          sourceType: ptpTimeReceiver
+        # - name: DPLL-PhaseLocked
+        #   subsystem: leader
+        #   sourceType: dpllPhaseLocked
+        #   boardLabel: GNR-D_SDP2
+      # commonDefinitions:
+      #   eSyncDefinitions:
+      #   - name: esync-10-1
+      #     eSyncConfig:
+      #       transferFrequency: 10000000
+      #       embeddedSyncFrequency: 1
+      #       dutyCyclePct: 25
+      structure:
+      - name: leader
+        hardwareSpecificDefinitions: intel/e825
+        dpll:
+          networkInterface: eno5
+          holdoverParameters:
+            maxInSpecOffset: 20
+            localMaxHoldoverOffset: 30
+            localHoldoverTimeout: 288
+          phaseInputs:
+            GNR-D_SDP0:
+              description: PTP time receiver input
+              frequency: 1
+        ethernet:
+        - ports:
+          - eno5
+          - eno2
+          - eno3
+          - eno4
+    name: tbc
+  relatedPtpProfileName: 01-tbc-tr

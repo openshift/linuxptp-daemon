@@ -400,9 +400,10 @@ const (
 	PinCapState = (1 << 2)
 )
 
-// ParsePinType converts string pin type to numeric value
-func ParsePinType(typeStr string) uint32 {
-	switch typeStr {
+// ParsePinType parses a human-readable pin type into its numeric code.
+// Supported: mux, ext, synce-eth-port, int-oscillator, gnss.
+func ParsePinType(tp string) uint32 {
+	switch strings.ToLower(tp) {
 	case "mux":
 		return 1
 	case "ext":
@@ -418,9 +419,10 @@ func ParsePinType(typeStr string) uint32 {
 	}
 }
 
-// ParsePinDirection converts string direction to numeric value
-func ParsePinDirection(dirStr string) uint32 {
-	switch dirStr {
+// ParsePinDirection parses a human-readable pin direction into its numeric code.
+// Supported: input, output.
+func ParsePinDirection(d string) uint32 {
+	switch strings.ToLower(d) {
 	case "input":
 		return PinDirectionInput
 	case "output":
@@ -430,9 +432,10 @@ func ParsePinDirection(dirStr string) uint32 {
 	}
 }
 
-// ParsePinState converts string state to numeric value
-func ParsePinState(stateStr string) uint32 {
-	switch stateStr {
+// ParsePinState parses a human-readable pin state into its numeric code.
+// Supported: connected, disconnected, selectable.
+func ParsePinState(s string) uint32 {
+	switch strings.ToLower(s) {
 	case "connected":
 		return PinStateConnected
 	case "disconnected":

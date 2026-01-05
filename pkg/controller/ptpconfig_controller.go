@@ -203,6 +203,7 @@ func anyRuleMatchesNode(matchRules []ptpv1.MatchRule, nodeName string, nodeLabel
 			// TODO: Add support for "key=value" format matching
 		}
 	}
+
 	return false
 }
 
