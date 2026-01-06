@@ -1721,7 +1721,7 @@ func (dn *Daemon) ApplyHaProfiles(nodeProfile *ptpv1.PtpProfile, cmdLine string)
 		}
 	}
 	if len(updateHaProfileToSocketPath) > 0 {
-		cmdLine = fmt.Sprintf("%s%s", cmdLine, strings.Join(updateHaProfileToSocketPath, " "))
+		cmdLine = fmt.Sprintf("%s %s", cmdLine, strings.Join(updateHaProfileToSocketPath, " "))
 	}
 	glog.Infof(cmdLine)
 	return haProfiles, cmdLine
