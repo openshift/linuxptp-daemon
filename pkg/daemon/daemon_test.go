@@ -641,10 +641,9 @@ func TestDaemon_ApplyHaProfiles(t *testing.T) {
 	processManager.SetTestProfileProcess(*p2.Name, ifaces2, "socket2", "config1", p2)
 	processManager.SetTestProfileProcess(*p3.Name, nil, "", "config1", p3)
 	dd := daemon.NewDaemonForTests(&daemon.ReadyTracker{}, processManager)
-	haProfiles, cmdLine := dd.ApplyHaProfiles(&p3, "")
-	assert.NotEmpty(t, cmdLine, "cmdLine is not empty")
+	haProfiles, cmdLine := dd.ApplyHaProfiles(&p3, "phc2sys")
 	assert.Equal(t, len(haProfiles), 2, "ha has two profiles")
-	assert.Equal(t, cmdLine, "-z socket1 -z socket2", "CmdLine is empty")
+	assert.Equal(t, cmdLine, "phc2sys -z socket1 -z socket2", "CmdLine is empty")
 }
 
 var (
