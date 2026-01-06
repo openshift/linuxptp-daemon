@@ -1,3 +1,4 @@
+// Package constants provides constants used throughout the parser package.
 package constants
 
 // ClockState ...

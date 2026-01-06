@@ -61,8 +61,10 @@ func TestApplyHardwareConfigsForProfile(t *testing.T) {
 			// Set up mock command executor for GetClockIDFromInterface
 			mockCmd := NewMockCommandExecutor()
 			mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+			mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 			mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 			mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+			mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 			mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 			SetCommandExecutor(mockCmd)
 			defer ResetCommandExecutor()
@@ -120,8 +122,10 @@ func TestHardwareConfigManagerOperations(t *testing.T) {
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := NewMockCommandExecutor()
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 	SetCommandExecutor(mockCmd)
 	defer ResetCommandExecutor()
@@ -256,8 +260,10 @@ func TestPTPStateDetector(t *testing.T) {
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := NewMockCommandExecutor()
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 	SetCommandExecutor(mockCmd)
 	defer ResetCommandExecutor()
@@ -300,8 +306,10 @@ func TestDetectStateChange(t *testing.T) {
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := NewMockCommandExecutor()
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 	SetCommandExecutor(mockCmd)
 	defer ResetCommandExecutor()
@@ -446,11 +454,25 @@ func TestNewPTPStateDetector(t *testing.T) {
 //
 //nolint:gocyclo // test complexity is acceptable
 func TestApplyConditionDesiredStatesWithRealData(t *testing.T) {
+	// Set up mock PTP device resolver for testing
+	SetupMockPtpDeviceResolver()
+	defer TeardownMockPtpDeviceResolver()
+
+	// Set up mock DPLL pins for testing
+	mockErr := SetupMockDpllPinsForTests()
+	if mockErr != nil {
+		t.Logf("Warning: Failed to setup mock DPLL pins: %v", mockErr)
+		// Continue with test as DPLL pins are optional
+	}
+	defer TeardownMockDpllPinsForTests()
+
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := NewMockCommandExecutor()
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 	SetCommandExecutor(mockCmd)
 	defer ResetCommandExecutor()
@@ -461,11 +483,23 @@ func TestApplyConditionDesiredStatesWithRealData(t *testing.T) {
 		t.Fatalf("Failed to load hardware config: %v", err)
 	}
 
-	// Create a HardwareConfigManager
-	hcm := &HardwareConfigManager{
-		hardwareConfigs: []enrichedHardwareConfig{
-			{HardwareConfig: *hwConfig},
-		},
+	// Create a HardwareConfigManager using the proper constructor
+	hcm := NewHardwareConfigManager()
+	defer hcm.resetExecutors()
+
+	// Override executors to avoid actual hardware operations
+	hcm.overrideExecutors(func(_ []dpll.PinParentDeviceCtl) error {
+		// Mock DPLL executor - just return success without actually applying
+		return nil
+	}, func(_, _ string) error {
+		// Mock SysFS executor - just return success without actually writing
+		return nil
+	})
+
+	// Update hardware config to populate the manager
+	err = hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{*hwConfig})
+	if err != nil {
+		t.Fatalf("Failed to update hardware config: %v", err)
 	}
 
 	// Extract the clock chain from the loaded config
@@ -486,6 +520,12 @@ func TestApplyConditionDesiredStatesWithRealData(t *testing.T) {
 
 	// Test each condition from the real hardware config
 	for i, condition := range clockChain.Behavior.Conditions {
+		// Triggers are mandatory - skip conditions without triggers
+		if len(condition.Triggers) == 0 {
+			t.Logf("Skipping condition '%s' - no triggers (triggers are mandatory)", condition.Name)
+			continue
+		}
+
 		t.Run(fmt.Sprintf("condition_%d_%s", i, condition.Name), func(t *testing.T) {
 			t.Logf("Testing condition: %s", condition.Name)
 			t.Logf("  Triggers: %d", len(condition.Triggers))
@@ -526,24 +566,11 @@ func TestApplyConditionDesiredStatesWithRealData(t *testing.T) {
 				}
 			}
 
-			// Create a mock enriched hardware config for testing
-			mockEnrichedConfig := &enrichedHardwareConfig{
-				HardwareConfig:  *hwConfig,
-				sysFSCommands:   make(map[string][]SysFSCommand),
-				dpllPinCommands: make(map[string][]dpll.PinParentDeviceCtl),
-			}
-
 			// Determine the condition type for this condition
-			var conditionType string
-			if len(condition.Triggers) == 0 {
-				conditionType = ConditionTypeInit
-			} else {
-				conditionType = condition.Triggers[0].ConditionType
-			}
+			conditionType := condition.Triggers[0].ConditionType
 
-			// Apply the condition's desired states
-			applyErr := hcm.applyConditionDesiredStatesByType(condition, conditionType, profileName, mockEnrichedConfig)
-
+			// Apply the condition's desired states in the exact defined order
+			applyErr := hcm.applyDesiredStatesInOrder(condition, profileName, clockChain)
 			// All conditions should apply successfully since the YAML is well-formed
 			if applyErr != nil {
 				t.Errorf("Failed to apply condition '%s' (type: %s): %v", condition.Name, conditionType, applyErr)
@@ -616,8 +643,8 @@ func TestApplyConditionDesiredStatesWithRealData(t *testing.T) {
 			if source.Name != "PTP" {
 				t.Errorf("Expected source name 'PTP', got '%s'", source.Name)
 			}
-			if source.SourceType != "ptpTimeReceiver" {
-				t.Errorf("Expected source type 'ptpTimeReceiver', got '%s'", source.SourceType)
+			if source.SourceType != ptpTimeReceiverType {
+				t.Errorf("Expected source type '%s', got '%s'", ptpTimeReceiverType, source.SourceType)
 			}
 			if len(source.PTPTimeReceivers) != 1 || source.PTPTimeReceivers[0] != "ens4f1" {
 				t.Errorf("Expected PTP time receiver 'ens4f1', got %v", source.PTPTimeReceivers)
@@ -656,8 +683,10 @@ func TestApplyDefaultAndInitConditions(t *testing.T) {
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := NewMockCommandExecutor()
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 	SetCommandExecutor(mockCmd)
 	defer ResetCommandExecutor()
@@ -706,14 +735,29 @@ func TestApplyDefaultAndInitConditions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a mock enriched hardware config for testing
-			mockEnrichedConfig := &enrichedHardwareConfig{
-				HardwareConfig: ptpv2alpha1.HardwareConfig{},
-				sysFSCommands:  make(map[string][]SysFSCommand),
+			// Get the actual enriched config from the manager
+			hcm.mu.RLock()
+			var enrichedConfig *enrichedHardwareConfig
+			if len(hcm.hardwareConfigs) > 0 {
+				enrichedConfig = &hcm.hardwareConfigs[0]
+			} else {
+				// Fallback: create a minimal enriched config if none exists
+				enrichedConfig = &enrichedHardwareConfig{
+					HardwareConfig: *hwConfig,
+					sysFSCommands:  make(map[string][]SysFSCommand),
+				}
 			}
+			hcm.mu.RUnlock()
+
+			// Override executors to avoid actual hardware operations
+			hcm.overrideExecutors(func(_ []dpll.PinParentDeviceCtl) error {
+				return nil
+			}, func(_, _ string) error {
+				return nil
+			})
 
 			// Test the function
-			testErr := hcm.applyDefaultAndInitConditions(tt.clockChain, tt.profileName, mockEnrichedConfig)
+			testErr := hcm.applyDefaultAndInitConditions(tt.clockChain, tt.profileName, enrichedConfig)
 
 			// Verify error expectation
 			if tt.expectError {
@@ -722,10 +766,37 @@ func TestApplyDefaultAndInitConditions(t *testing.T) {
 				assert.NoError(t, testErr)
 			}
 
-			// If we have behavior section, verify condition extraction
+			// Note: For default/init conditions, we need to check all sources since sourceName is mandatory
 			if tt.clockChain.Behavior != nil {
-				defaultConditions := hcm.extractConditionsByType(tt.clockChain.Behavior.Conditions, "default")
-				initConditions := hcm.extractConditionsByType(tt.clockChain.Behavior.Conditions, "init")
+				// Extract default/init conditions by checking all sources
+				var defaultConditions []ptpv2alpha1.Condition
+				var initConditions []ptpv2alpha1.Condition
+				seenDefault := make(map[string]bool)
+				seenInit := make(map[string]bool)
+
+				// For each source, extract matching default/init conditions
+				for _, source := range tt.clockChain.Behavior.Sources {
+					for _, condition := range tt.clockChain.Behavior.Conditions {
+						// Triggers are mandatory - skip conditions without triggers
+						if len(condition.Triggers) == 0 {
+							continue
+						}
+						for _, trigger := range condition.Triggers {
+							if trigger.ConditionType == "default" && trigger.SourceName == source.Name {
+								if !seenDefault[condition.Name] {
+									defaultConditions = append(defaultConditions, condition)
+									seenDefault[condition.Name] = true
+								}
+							}
+							if trigger.ConditionType == "init" && trigger.SourceName == source.Name {
+								if !seenInit[condition.Name] {
+									initConditions = append(initConditions, condition)
+									seenInit[condition.Name] = true
+								}
+							}
+						}
+					}
+				}
 
 				assert.Equal(t, tt.expectedDefaultCount, len(defaultConditions), "Default conditions count mismatch")
 				assert.Equal(t, tt.expectedInitCount, len(initConditions), "Init conditions count mismatch")
@@ -737,7 +808,7 @@ func TestApplyDefaultAndInitConditions(t *testing.T) {
 	}
 }
 
-// TestExtractConditionsByType tests the extractConditionsByType function
+// TestExtractConditionsByType tests the extractConditionsByTypeAndSource function
 func TestExtractConditionsByType(t *testing.T) {
 	// Set up mock DPLL pins for testing
 	mockErr := SetupMockDpllPinsForTests()
@@ -758,8 +829,10 @@ func TestExtractConditionsByType(t *testing.T) {
 			},
 		},
 		{
-			Name:     "Init Condition (Empty Sources)",
-			Triggers: []ptpv2alpha1.SourceState{}, // Empty sources should be treated as init
+			Name: "Init Condition",
+			Triggers: []ptpv2alpha1.SourceState{
+				{SourceName: "TestSource", ConditionType: ConditionTypeInit},
+			},
 		},
 		{
 			Name: "Locked Condition",
@@ -791,7 +864,7 @@ func TestExtractConditionsByType(t *testing.T) {
 			name:          "extract init conditions",
 			conditionType: ConditionTypeInit,
 			expectedCount: 1,
-			expectedNames: []string{"Init Condition (Empty Sources)"},
+			expectedNames: []string{"Init Condition"},
 		},
 		{
 			name:          "extract locked conditions",
@@ -815,7 +888,11 @@ func TestExtractConditionsByType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := hcm.extractConditionsByType(conditions, tt.conditionType)
+			// sourceName is mandatory, so we need to pass a valid sourceName
+			// For tests, use "TestSource" which matches the test conditions
+			// sourceName is mandatory in triggers
+			sourceName := "TestSource"
+			result := hcm.extractConditionsByTypeAndSource(conditions, tt.conditionType, sourceName)
 
 			assert.Equal(t, tt.expectedCount, len(result), "Condition count mismatch")
 
@@ -997,8 +1074,10 @@ func TestSysFSCommandCaching(t *testing.T) {
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := NewMockCommandExecutor()
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 	SetCommandExecutor(mockCmd)
 	defer ResetCommandExecutor()
@@ -1043,8 +1122,10 @@ func TestESyncConfigurationFromYAML(t *testing.T) {
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := NewMockCommandExecutor()
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b5-80")
 	SetCommandExecutor(mockCmd)
 	defer ResetCommandExecutor()
@@ -1244,10 +1325,13 @@ func TestHoldoverParametersExtraction(t *testing.T) {
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := NewMockCommandExecutor()
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens12f0"}, "driver: ice\nbus-info: 0000:85:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:85:00.0"}, "85:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:85:00.0"}, "serial_number 50-7c-6f-ff-ff-ab-cd-ef")
 	SetCommandExecutor(mockCmd)
 	defer ResetCommandExecutor()

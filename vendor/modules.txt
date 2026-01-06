@@ -139,7 +139,7 @@ github.com/josharian/native
 # github.com/json-iterator/go v1.1.12
 ## explicit; go 1.12
 github.com/json-iterator/go
-# github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20251105200506-7495c02a5a34
+# github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20251204124210-1fe2e26893f5
 ## explicit; go 1.23.0
 github.com/k8snetworkplumbingwg/ptp-operator/api/v1
 github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1

@@ -1,3 +1,6 @@
+// Package utils provides utility functions for the linuxptp daemon.
+//
+//nolint:revive // utils is a common and acceptable package name
 package utils
 
 import (
@@ -131,6 +134,11 @@ func (w *Window) LastInserted() float64 {
 		lastIndex = w.size - 1
 	}
 	return w.data[lastIndex]
+}
+
+// IsFull returns true if the window has been filled to capacity
+func (w *Window) IsFull() bool {
+	return w.full
 }
 
 // SetWeights sets the weights for the window values.

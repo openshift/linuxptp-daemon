@@ -190,6 +190,25 @@ func extractEventPTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
 	}, nil
 }
 
+// ExtractPortName extracts the port name from a PTP4L event log line
+// Returns the port name if found, empty string otherwise
+func ExtractPortName(logLine string) string {
+	match := ptp4lEventRegex.FindStringSubmatch(logLine)
+	if match == nil {
+		return "" // Not a PTP4L event log line
+	}
+
+	// Find the port_name group index
+	groups := ptp4lEventRegex.SubexpNames()
+	for i, name := range groups {
+		if name == "port_name" && i < len(match) {
+			return match[i]
+		}
+	}
+
+	return "" // Port name not found
+}
+
 func extractSummaryPTP4l(parsed *ptp4lParsed) (*Metrics, error) {
 	iface := parsed.Interface
 	if iface == "" {

@@ -47,10 +47,10 @@ type PinCache struct {
 // ClockIDResolver resolves clock ID from network interface
 type ClockIDResolver func(string, string) (uint64, error)
 
-// getSubsystemNetworkInterface retrieves the network interface for a given subsystem.
+// GetSubsystemNetworkInterface retrieves the network interface for a given subsystem.
 // It first checks if the subsystem has a NetworkInterface explicitly set,
 // and falls back to the first Ethernet port if not specified.
-func getSubsystemNetworkInterface(clockChain *ptpv2alpha1.ClockChain, subsystemName string) (string, error) {
+func GetSubsystemNetworkInterface(clockChain *ptpv2alpha1.ClockChain, subsystemName string) (string, error) {
 	if clockChain == nil || len(clockChain.Structure) == 0 {
 		return "", fmt.Errorf("no structure defined in clock chain")
 	}
@@ -207,7 +207,40 @@ func getClockIDTransformer(hwDefPath string) ClockIDTransformer {
 
 // GetClockIDFromInterface resolves clock ID from network interface using ethtool and devlink.
 // The hardware definition path (when provided) determines how the serial number is transformed.
+// For PERLA hardware (E825 with zl3073x DPLL), uses a workaround to associate NIC with DPLL clock ID.
 func GetClockIDFromInterface(iface string, hwDefPath string) (uint64, error) {
+	return GetClockIDFromInterfaceWithCache(iface, hwDefPath, nil)
+}
+
+func getPERLAClockIDFromPinCache(cache *PinCache) (uint64, error) {
+	if cache == nil {
+		var cacheErr error
+		cache, cacheErr = GetDpllPins()
+		if cacheErr != nil {
+			glog.Warningf("PERLA workaround: failed to get pin cache: %v, falling back to serial number approach", cacheErr)
+			cache = nil
+		}
+	}
+
+	if cache != nil {
+		// Look for first pin with moduleName == "zl3073x"
+		for clockID, pins := range cache.Pins {
+			for _, pin := range pins {
+				if pin.ModuleName == "zl3073x" {
+					glog.Infof("PERLA workaround: Found zl3073x DPLL with clock ID %#x", clockID)
+					return clockID, nil
+				}
+			}
+		}
+		glog.Warningf("PERLA workaround: No zl3073x DPLL found in pin cache, falling back to serial number approach")
+	}
+
+	return 0, fmt.Errorf("no zl3073x DPLL found in pin cache")
+}
+
+// GetClockIDFromInterfaceWithCache resolves clock ID with an optional pre-loaded pin cache.
+// This avoids repeatedly fetching the pin cache for PERLA workaround.
+func GetClockIDFromInterfaceWithCache(iface string, hwDefPath string, pinCache *PinCache) (uint64, error) {
 	// Step 1: Get bus address using ethtool
 	ethtoolOutput, err := commandExecutor.Execute("ethtool", "-i", iface)
 	if err != nil {
@@ -224,8 +257,26 @@ func GetClockIDFromInterface(iface string, hwDefPath string) (uint64, error) {
 	if busAddr == "" {
 		return 0, fmt.Errorf("no bus-info found for interface %s", iface)
 	}
+	glog.V(4).Infof("ClockID: iface=%s bus=%s hwDef=%s", iface, busAddr, hwDefPath)
 
-	// Step 2: Get serial number using devlink
+	// Step 2: PERLA workaround - Check if this is an E825 device
+	// For E825 devices, there's no direct NIC-DPLL association, so we look for the zl3073x DPLL
+	lspciOutput, err := commandExecutor.Execute("lspci", "-s", busAddr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to run lspci -s %s, output: %s, err: %w", busAddr, lspciOutput, err)
+	}
+
+	if strings.Contains(lspciOutput, "E825") {
+		glog.Infof("Detected E825 device on %s (interface %s), using PERLA workaround", busAddr, iface)
+		var clockID uint64
+		clockID, err = getPERLAClockIDFromPinCache(pinCache)
+		if err != nil {
+			return 0, fmt.Errorf("PERLA workaround: failed to get clock ID from pin cache: %v, falling back to serial number approach", err)
+		}
+		return clockID, nil
+	}
+
+	// Step 3: Standard approach - Get serial number using devlink
 	devlinkOutput, err := commandExecutor.Execute("devlink", "dev", "info", fmt.Sprintf("pci/%s", busAddr))
 	if err != nil {
 		return 0, fmt.Errorf("failed to get devlink info for bus %s: %w", busAddr, err)
@@ -246,20 +297,22 @@ func GetClockIDFromInterface(iface string, hwDefPath string) (uint64, error) {
 	if serialNumber == "" {
 		return 0, fmt.Errorf("no serial_number found for interface %s (bus: %s)", iface, busAddr)
 	}
+	glog.V(4).Infof("ClockID: iface=%s bus=%s serial=%s hwDef=%s", iface, busAddr, serialNumber, hwDefPath)
 
-	// Step 3: Select hardware-specific transformer based on hardware defaults (when provided)
+	// Step 4: Select hardware-specific transformer based on hardware defaults (when provided)
 	if hwDefPath == "" {
 		glog.V(3).Infof("No hardware definition path provided for interface %s; using fallback transformer", iface)
 	}
 	transformer := getClockIDTransformer(hwDefPath)
 
-	// Step 4: Process serial number to get clock ID
+	// Step 5: Process serial number to get clock ID
 	clockID, err := transformer(serialNumber)
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse serial number %s for interface %s: %w", serialNumber, iface, err)
 	}
 
 	glog.Infof("Resolved clock ID %#x for interface %s (bus: %s, serial: %s)", clockID, iface, busAddr, serialNumber)
+	glog.V(4).Infof("ClockID detail: iface=%s bus=%s serial=%s hwDef=%s clockID=%#x", iface, busAddr, serialNumber, hwDefPath, clockID)
 	return clockID, nil
 }
 

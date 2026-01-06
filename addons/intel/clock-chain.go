@@ -249,11 +249,6 @@ func InitClockChain(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*C
 		if err != nil {
 			return chain, fmt.Errorf("failed to initialize pins for T-BC operation: %s", err.Error())
 		}
-		glog.Info("about to enter TBC Normal mode")
-		err = chain.EnterNormalTBC()
-		if err != nil {
-			return chain, fmt.Errorf("failed to enter T-BC normal mode: %s", err.Error())
-		}
 	}
 	return chain, err
 }
@@ -420,7 +415,7 @@ func (c *ClockChain) InitPinsTBC() error {
 	// (To synchronize the DPLL1 to the E810 PHC synced by ptp4l):
 	err := c.EnableE810Outputs()
 	if err != nil {
-		glog.Error("failed to enable E810 outputs: ", err)
+		return fmt.Errorf("failed to enable E810 outputs: %w", err)
 	}
 	// Disable GNSS-1PPS (all cards), SDP20 and SDP21
 	commandsGnss, err := c.SetPinsControlForAllNICs([]PinControl{
