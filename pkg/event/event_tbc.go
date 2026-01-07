@@ -259,9 +259,9 @@ func (e *EventHandler) announceClockClass(clockClass int, cfgName string, c net.
 		} else {
 			glog.Errorf("failed to write class change event, connection is nil")
 		}
-	} else {
+	} else if e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
-			"process": PTP4lProcessName, "node": e.nodeName}).Set(float64(clockClass))
+			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
 	}
 	glog.Infof("%s", message)
 }
