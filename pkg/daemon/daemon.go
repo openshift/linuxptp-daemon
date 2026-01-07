@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"cmp"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -54,6 +55,9 @@ const (
 	MessageTagSuffixSeperator       = ":"
 	TBC                             = "T-BC"
 	TGM                             = "T-GM"
+	// Offset filter size is hardcoded to 64 for now. It covers 4 seconds with reporting rate 16x/second.
+	// TODO: consider making it configurable
+	offsetFilterSize = 64
 )
 
 var (
@@ -220,38 +224,43 @@ func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
 }
 
 type tBCProcessAttributes struct {
-	controlledPortsConfigFile string
+	ttPortsConfigFile string
+	trPortsConfigFile string
 	// Time receiver interface name for T-BC clock monitoring
-	trIfaceName string
+	trIfaceName       string
+	lastReportedState event.PTPState
+	lastAppliedState  event.PTPState
+	offsetFilter      *utils.Window
+	offsetThreshold   float64
 }
 
 type ptpProcess struct {
-	name                 string
-	ifaces               config.IFaces
-	processSocketPath    string
-	processConfigPath    string
-	configName           string
-	messageTag           string
-	eventCh              chan event.EventChannel
-	exitCh               chan bool
-	execMutex            sync.Mutex
-	stopped              bool
-	logFilters           []*logfilter.LogFilter // List of filters to apply to logs
-	cmd                  *exec.Cmd
-	depProcess           []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
-	nodeProfile          ptpv1.PtpProfile
-	logParser            parser.MetricsExtractor
-	lastTransitionResult event.PTPState
-	clockType            event.ClockType
-	ptpClockThreshold    *ptpv1.PtpClockThreshold
-	haProfile            map[string][]string // stores list of interface name for each profile
-	syncERelations       *synce.Relations
-	c                    net.Conn
-	hasCollectedMetrics  bool
-	tBCAttributes        tBCProcessAttributes
-	handler              *event.EventHandler
-	dn                   *Daemon
-	cmdSetEnabledMutex   sync.Mutex
+	name                string
+	ifaces              config.IFaces
+	processSocketPath   string
+	processConfigPath   string
+	configName          string
+	messageTag          string
+	eventCh             chan event.EventChannel
+	exitCh              chan bool
+	execMutex           sync.Mutex
+	stopped             bool
+	logFilters          []*logfilter.LogFilter // List of filters to apply to logs
+	cmd                 *exec.Cmd
+	depProcess          []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
+	nodeProfile         ptpv1.PtpProfile
+	logParser           parser.MetricsExtractor
+	clockType           event.ClockType
+	ptpClockThreshold   *ptpv1.PtpClockThreshold
+	haProfile           map[string][]string // stores list of interface name for each profile
+	syncERelations      *synce.Relations
+	c                   net.Conn
+	hasCollectedMetrics bool
+	tBCAttributes       tBCProcessAttributes
+	handler             *event.EventHandler
+	dn                  *Daemon
+	cmdSetEnabledMutex  sync.Mutex
+	offset              float64
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -736,32 +745,41 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		args := strings.Split(cmdLine, " ")
 		cmd = exec.Command(args[0], args[1:]...)
 		dprocess := ptpProcess{
-			name:                 pProcess,
-			ifaces:               ifaces,
-			processConfigPath:    configPath,
-			processSocketPath:    socketPath,
-			configName:           configFile,
-			messageTag:           messageTag,
-			exitCh:               make(chan bool),
-			stopped:              true,
-			logFilters:           logfilter.GetLogFilters(pProcess, messageTag, (*nodeProfile).PtpSettings),
-			cmd:                  cmd,
-			depProcess:           []process{},
-			nodeProfile:          *nodeProfile,
-			clockType:            clockType,
-			ptpClockThreshold:    getPTPThreshold(nodeProfile),
-			haProfile:            haProfile,
-			syncERelations:       relations,
-			logParser:            getParser(pProcess),
-			tBCAttributes:        tBCProcessAttributes{controlledPortsConfigFile: controlledConfigFile},
-			lastTransitionResult: event.PTP_NOTSET,
-			handler:              dn.processManager.ptpEventHandler,
-			dn:                   dn,
+			name:              pProcess,
+			ifaces:            ifaces,
+			processConfigPath: configPath,
+			processSocketPath: socketPath,
+			configName:        configFile,
+			messageTag:        messageTag,
+			exitCh:            make(chan bool),
+			stopped:           true,
+			logFilters:        logfilter.GetLogFilters(pProcess, messageTag, (*nodeProfile).PtpSettings),
+			cmd:               cmd,
+			depProcess:        []process{},
+			nodeProfile:       *nodeProfile,
+			clockType:         clockType,
+			ptpClockThreshold: getPTPThreshold(nodeProfile),
+			haProfile:         haProfile,
+			syncERelations:    relations,
+			logParser:         getParser(pProcess),
+			tBCAttributes: tBCProcessAttributes{ttPortsConfigFile: controlledConfigFile, trPortsConfigFile: configFile,
+				lastReportedState: event.PTP_NOTSET, lastAppliedState: event.PTP_NOTSET, offsetFilter: nil},
+			handler: dn.processManager.ptpEventHandler,
+			dn:      dn,
 		}
 
 		if pProcess == ptp4lProcessName {
 			if port, ok := (*nodeProfile).PtpSettings["upstreamPort"]; ok && clockType == event.BC {
 				dprocess.tBCAttributes.trIfaceName = port
+				sInSyncConditionTh, thresholdConfigured := (*nodeProfile).PtpSettings["inSyncConditionThreshold"]
+				if thresholdConfigured {
+					dprocess.tBCAttributes.offsetThreshold, err = strconv.ParseFloat(sInSyncConditionTh, 64)
+					if err != nil {
+						return fmt.Errorf("failed to parse inSyncConditionThreshold: %s", err)
+					}
+				} else {
+					dprocess.tBCAttributes.offsetThreshold = float64(getPTPThreshold(nodeProfile).MaxOffsetThreshold)
+				}
 			}
 		}
 
@@ -850,7 +868,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				if iface.Source == event.GNSS || iface.Source == event.PPS ||
 					(iface.Source == event.PTP4l && profileClockType == TBC) {
 					if nodeProfile.PtpSettings[dpll.PtpSettingsDpllIgnoreKey(iface.Name)] == "true" {
-						glog.Info("Init dpll: Skipping dpll for %s", iface.Name)
+						glog.Infof("Init dpll: Skipping dpll for %s", iface.Name)
 						continue
 					}
 					glog.Info("Init dpll: ptp settings ", (*nodeProfile).PtpSettings)
@@ -904,8 +922,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		printNodeProfile(nodeProfile)
 		dn.processManager.process = append(dn.processManager.process, &dprocess)
 		dn.pluginManager.RegisterEnableCallback(dprocess.name, dprocess.cmdSetEnabled)
+		glog.Infof("Added %s process to process manager for profile %s", pProcess, *nodeProfile.Name)
 
 	}
+	glog.Infof("Completed applyNodePtpProfile for profile %s, total processes in manager: %d", *nodeProfile.Name, len(dn.processManager.process))
 	return nil
 }
 
@@ -974,16 +994,48 @@ func logProcessStatus(processName string, cfgName string, status int64, c net.Co
 func (p *ptpProcess) tBCTransitionCheck(output string, pm *plugin.PluginManager) {
 	if strings.Contains(output, p.tBCAttributes.trIfaceName) {
 		if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
-			glog.Info("T-BC MOVE TO NORMAL")
-			pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
-			p.lastTransitionResult = event.PTP_LOCKED
-			p.sendPtp4lEvent()
+			// Defer transition until offset filter confirms stability
+			p.tBCAttributes.lastReportedState = event.PTP_LOCKED
+			p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
 		} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
 			strings.Contains(output, "SLAVE to") {
-			glog.Info("T-BC MOVE TO HOLDOVER")
 			pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
-			p.lastTransitionResult = event.PTP_FREERUN
+			p.tBCAttributes.lastReportedState = event.PTP_FREERUN
+			glog.Info("T-BC MOVE TO HOLDOVER")
 			p.sendPtp4lEvent()
+			p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
+			p.tBCAttributes.offsetFilter = nil
+		}
+	}
+
+	// Check offset filter and transition if conditions are met
+	p.checkOffsetFilterAndTransition(func() {
+		pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
+		p.sendPtp4lEvent()
+	})
+}
+
+// checkOffsetFilterAndTransition checks if offset filter conditions are met and transitions to LOCKED state
+// This function is called for every log line when processing the TR ports config file.
+// It collects offset samples and only transitions when the filter is full and mean offset is below threshold.
+// The transitionAction callback is called when conditions are met to perform the actual transition.
+func (p *ptpProcess) checkOffsetFilterAndTransition(transitionAction func()) {
+	if p.configName != p.tBCAttributes.trPortsConfigFile || p.tBCAttributes.offsetFilter == nil {
+		return
+	}
+
+	p.tBCAttributes.offsetFilter.Insert(math.Abs(p.offset))
+	if p.tBCAttributes.lastReportedState == event.PTP_LOCKED &&
+		p.tBCAttributes.lastAppliedState != event.PTP_LOCKED {
+		// Require filter to be full before sending event to ensure meaningful filtering
+		if p.tBCAttributes.offsetFilter.IsFull() {
+			tempOffset := p.tBCAttributes.offsetFilter.Mean()
+			glog.Infof("Filtered Offset: %f, threshold %f", tempOffset, p.tBCAttributes.offsetThreshold)
+			if tempOffset < p.tBCAttributes.offsetThreshold {
+				glog.Infof("T-BC MOVE TO NORMAL STATE")
+				transitionAction()
+				p.tBCAttributes.lastAppliedState = event.PTP_LOCKED
+			}
 		}
 	}
 }
@@ -1151,12 +1203,12 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 		if configName == "" {
 			return
 		}
-		configName = strings.Split(configName, MessageTagSuffixSeperator)[0] // remove any suffix added to the configName
 		logEntry := synce.ParseLog(output)
 		p.ProcessSynceEvents(logEntry)
 	} else {
 		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output, p.c == nil)
 		p.hasCollectedMetrics = true
+		p.offset = ptpOffset
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
 			var values map[event.ValueType]interface{}
 			ifaceName := masterOffsetIface.getByAlias(configName, iface).name
@@ -1721,16 +1773,16 @@ func (p *ptpProcess) sendPtp4lEvent() {
 	select {
 	case p.eventCh <- event.EventChannel{
 		ProcessName: event.PTP4l,
-		State:       p.lastTransitionResult,
+		State:       p.tBCAttributes.lastReportedState,
 		CfgName:     p.configName,
 		IFace:       p.tBCAttributes.trIfaceName,
 		ClockType:   p.clockType,
 		Time:        time.Now().UnixMilli(),
 		Reset:       false,
-		SourceLost:  p.lastTransitionResult != event.PTP_LOCKED,
+		SourceLost:  p.tBCAttributes.lastReportedState != event.PTP_LOCKED,
 		OutOfSpec:   false,
 		Values: map[event.ValueType]any{
-			event.ControlledPortsConfig: p.tBCAttributes.controlledPortsConfigFile,
+			event.ControlledPortsConfig: p.tBCAttributes.ttPortsConfigFile,
 			event.ClockIDKey:            clockID,
 		},
 	}:

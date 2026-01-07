@@ -133,6 +133,11 @@ func (w *Window) LastInserted() float64 {
 	return w.data[lastIndex]
 }
 
+// IsFull returns true if the window has been filled to capacity
+func (w *Window) IsFull() bool {
+	return w.full
+}
+
 // SetWeights sets the weights for the window values.
 // Returns an error if the weights slice is larger than the window size.
 func (w *Window) SetWeights(weights []float64) error {
