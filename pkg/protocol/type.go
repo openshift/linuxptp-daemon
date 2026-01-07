@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,9 +27,13 @@ type DataSet interface {
 	String() string
 }
 
-func buildDataSetRegex(keys []string, valuePatterns map[string]string, capture bool) string {
+func buildDataSetRegex(keys []string, valuePatterns map[string]string, capture bool, optionalKeys []string) string {
 	regex := ""
 	for _, k := range keys {
+		isOptional := slices.Contains(optionalKeys, k)
+		if isOptional {
+			regex += "(?:"
+		}
 		regex += `[[:space:]]+` + k + `[[:space:]]+`
 
 		if capture {
@@ -37,6 +42,10 @@ func buildDataSetRegex(keys []string, valuePatterns map[string]string, capture b
 		regex += valuePatterns[k]
 		if capture {
 			regex += `)`
+		}
+
+		if isOptional {
+			regex += ")?"
 		}
 	}
 	return regex
@@ -131,12 +140,12 @@ func (g *GrandmasterSettings) ValueRegEx() map[string]string {
 }
 
 func (g *GrandmasterSettings) RegEx() string {
-	return buildDataSetRegex(g.Keys(), g.ValueRegEx(), true)
+	return buildDataSetRegex(g.Keys(), g.ValueRegEx(), true, []string{})
 }
 
 // MonitorRegEx generates the GrandmasterSettings regex without capture groups.
 func (g *GrandmasterSettings) MonitorRegEx() string {
-	return buildDataSetRegex(g.Keys(), g.ValueRegEx(), false)
+	return buildDataSetRegex(g.Keys(), g.ValueRegEx(), false, []string{})
 }
 
 func (g *GrandmasterSettings) Update(key string, value string) {
@@ -263,12 +272,12 @@ func (p *ParentDataSet) ValueRegEx() map[string]string {
 
 // RegEx generates the ParentDataSet command regex
 func (p *ParentDataSet) RegEx() string {
-	return buildDataSetRegex(p.Keys(), p.ValueRegEx(), true)
+	return buildDataSetRegex(p.Keys(), p.ValueRegEx(), true, []string{})
 }
 
 // MonitorRegEx generates the ParentDataSet regex without capture groups.
 func (p *ParentDataSet) MonitorRegEx() string {
-	return buildDataSetRegex(p.Keys(), p.ValueRegEx(), false)
+	return buildDataSetRegex(p.Keys(), p.ValueRegEx(), false, []string{})
 }
 
 // Keys provides the keys method for the ParentDS values
@@ -362,12 +371,12 @@ func (e *ExternalGrandmasterProperties) ValueRegEx() map[string]string {
 
 // RegEx generates the ExternalGrandmasterProperties command regex
 func (e *ExternalGrandmasterProperties) RegEx() string {
-	return buildDataSetRegex(e.Keys(), e.ValueRegEx(), true)
+	return buildDataSetRegex(e.Keys(), e.ValueRegEx(), true, []string{})
 }
 
 // MonitorRegEx generates the ExternalGrandmasterProperties regex without capture groups.
 func (e *ExternalGrandmasterProperties) MonitorRegEx() string {
-	return buildDataSetRegex(e.Keys(), e.ValueRegEx(), false)
+	return buildDataSetRegex(e.Keys(), e.ValueRegEx(), false, []string{})
 }
 
 // Keys provides the keys method for the ExternalGrandmasterProperties values
@@ -407,12 +416,12 @@ func (c *CurrentDS) ValueRegEx() map[string]string {
 
 // RegEx generates the CurrentDS command regex
 func (c *CurrentDS) RegEx() string {
-	return buildDataSetRegex(c.Keys(), c.ValueRegEx(), true)
+	return buildDataSetRegex(c.Keys(), c.ValueRegEx(), true, []string{})
 }
 
 // MonitorRegEx generates the CurrentDS regex without capture groups.
 func (c *CurrentDS) MonitorRegEx() string {
-	return buildDataSetRegex(c.Keys(), c.ValueRegEx(), false)
+	return buildDataSetRegex(c.Keys(), c.ValueRegEx(), false, []string{})
 }
 
 // Keys provides the keys method for the CurrentDS values
@@ -459,12 +468,12 @@ func (tp *TimePropertiesDS) ValueRegEx() map[string]string {
 
 // RegEx generates the TimePropertiesDS command regex
 func (tp *TimePropertiesDS) RegEx() string {
-	return buildDataSetRegex(tp.Keys(), tp.ValueRegEx(), true)
+	return buildDataSetRegex(tp.Keys(), tp.ValueRegEx(), true, []string{})
 }
 
 // MonitorRegEx generates the TimePropertiesDS regex without capture groups.
 func (tp *TimePropertiesDS) MonitorRegEx() string {
-	return buildDataSetRegex(tp.Keys(), tp.ValueRegEx(), false)
+	return buildDataSetRegex(tp.Keys(), tp.ValueRegEx(), false, []string{})
 }
 
 // Keys provides the keys method for the TimePropertiesDS values
@@ -533,12 +542,12 @@ func (se *SubscribedEvents) ValueRegEx() map[string]string {
 
 // RegEx generates the SubscribedEvents command regex
 func (se *SubscribedEvents) RegEx() string {
-	return buildDataSetRegex(se.Keys(), se.ValueRegEx(), true)
+	return buildDataSetRegex(se.Keys(), se.ValueRegEx(), true, []string{"NOTIFY_CMLDS"})
 }
 
 // MonitorRegEx generates the SubscribedEvents regex without capture groups.
 func (se *SubscribedEvents) MonitorRegEx() string {
-	return buildDataSetRegex(se.Keys(), se.ValueRegEx(), false)
+	return buildDataSetRegex(se.Keys(), se.ValueRegEx(), false, []string{"NOTIFY_CMLDS"})
 }
 
 // Keys provides the keys method for the SubscribedEvents values
