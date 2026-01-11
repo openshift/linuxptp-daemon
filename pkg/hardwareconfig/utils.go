@@ -51,10 +51,6 @@ type ClockIDResolver func(string, string) (uint64, error)
 // It first checks if the subsystem has a NetworkInterface explicitly set,
 // and falls back to the first Ethernet port if not specified.
 func GetSubsystemNetworkInterface(clockChain *ptpv2alpha1.ClockChain, subsystemName string) (string, error) {
-	if clockChain == nil || len(clockChain.Structure) == 0 {
-		return "", fmt.Errorf("no structure defined in clock chain")
-	}
-
 	for _, subsystem := range clockChain.Structure {
 		if subsystem.Name == subsystemName {
 			networkInterface := subsystem.DPLL.NetworkInterface
@@ -77,10 +73,6 @@ func GetSubsystemNetworkInterface(clockChain *ptpv2alpha1.ClockChain, subsystemN
 // getSubsystemHardwareDefinition retrieves the hardware-specific definition path for a given subsystem.
 // Returns the trimmed hardware definition path and a boolean indicating whether it was specified.
 func getSubsystemHardwareDefinition(clockChain *ptpv2alpha1.ClockChain, subsystemName string) (string, bool, error) {
-	if clockChain == nil || len(clockChain.Structure) == 0 {
-		return "", false, fmt.Errorf("no structure defined in clock chain")
-	}
-
 	for _, subsystem := range clockChain.Structure {
 		if subsystem.Name == subsystemName {
 			hwDefPath := strings.TrimSpace(subsystem.HardwareSpecificDefinitions)
@@ -490,7 +482,8 @@ func BatchPinSet(commands *[]dpll.PinParentDeviceCtl) error {
 		info, getErr := conn.DoPinGet(dpll.DoPinGetRequest{ID: command.ID})
 		if getErr != nil {
 			glog.Error("failed to get pin: ", getErr)
-			return getErr
+			//TODO: handle properly after RHEL-137801 is fixed
+			return nil
 		}
 		reply, replyErr := dpll.GetPinInfoHR(info, time.Now())
 		if replyErr != nil {

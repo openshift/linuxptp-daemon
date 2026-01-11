@@ -170,10 +170,6 @@ func ResolveClockChain(hwConfig *ptpv2alpha1.HardwareConfig, ptpConfig *ptpv1.Pt
 	}
 
 	clockType := *hwConfig.Spec.Profile.ClockType
-	if hwConfig.Spec.Profile.ClockChain == nil {
-		return nil, fmt.Errorf("clockChain is required when clockType is specified")
-	}
-
 	// Create a deep copy to avoid modifying the original
 	resolvedConfig := hwConfig.DeepCopy()
 
@@ -220,6 +216,12 @@ func ResolveClockChain(hwConfig *ptpv2alpha1.HardwareConfig, ptpConfig *ptpv1.Pt
 			if err := deriveSubsystemStructure(subsystem, ptpProfile, clockType); err != nil {
 				return nil, fmt.Errorf("failed to derive structure for subsystem %s: %w", subsystem.Name, err)
 			}
+		}
+
+		// Inject pins from delay compensation model into PhaseOutputs/PhaseInputs
+		if err := injectDelayCompensationPins(subsystem); err != nil {
+			glog.Warningf("Failed to inject delay compensation pins for subsystem %s: %v", subsystem.Name, err)
+			// Continue even if injection fails
 		}
 	}
 
@@ -323,6 +325,78 @@ func deriveSubsystemStructure(subsystem *ptpv2alpha1.Subsystem, ptpProfile *ptpv
 	return nil
 }
 
+// injectDelayCompensationPins injects pins from delay compensation model into PhaseOutputs/PhaseInputs
+// if they don't already exist. This ensures pins referenced in delays.yaml are available for phase adjustment population.
+func injectDelayCompensationPins(subsystem *ptpv2alpha1.Subsystem) error {
+	hwDefPath := strings.TrimSpace(subsystem.HardwareSpecificDefinitions)
+	if hwDefPath == "" {
+		return nil // No hardware definition, nothing to inject
+	}
+
+	// Load hardware defaults to get delay compensation model
+	hwDefaults, err := LoadHardwareDefaults(hwDefPath)
+	if err != nil {
+		return fmt.Errorf("failed to load hardware defaults for %s: %w", hwDefPath, err)
+	}
+	if hwDefaults == nil || hwDefaults.DelayCompensation == nil {
+		return nil // No delay compensation model, nothing to inject
+	}
+
+	model := hwDefaults.DelayCompensation
+	injectedCount := 0
+
+	// Iterate through components and inject pins with compensation points
+	for _, component := range model.Components {
+		if component.CompensationPoint == nil {
+			continue
+		}
+		if component.CompensationPoint.Type != "dpll" {
+			continue
+		}
+
+		pinLabel := component.CompensationPoint.Name
+		if pinLabel == "" {
+			continue
+		}
+
+		// Determine if this should be an input or output pin
+		// For now, assume outputs (OCP pins are outputs)
+		// TODO: resolve the direction by correlating with the pin cache. Do it when implementing phase adjustment granularity
+		isOutput := true
+		if strings.Contains(strings.ToLower(component.ID), "input") {
+			isOutput = false
+		}
+
+		if isOutput {
+			// Add to PhaseOutputs if not already present
+			if subsystem.DPLL.PhaseOutputs == nil {
+				subsystem.DPLL.PhaseOutputs = make(map[string]ptpv2alpha1.PinConfig)
+			}
+			if _, exists := subsystem.DPLL.PhaseOutputs[pinLabel]; !exists {
+				subsystem.DPLL.PhaseOutputs[pinLabel] = ptpv2alpha1.PinConfig{}
+				glog.Infof("Injected delay compensation pin %s into PhaseOutputs for subsystem %s", pinLabel, subsystem.Name)
+				injectedCount++
+			}
+		} else {
+			// Add to PhaseInputs if not already present
+			if subsystem.DPLL.PhaseInputs == nil {
+				subsystem.DPLL.PhaseInputs = make(map[string]ptpv2alpha1.PinConfig)
+			}
+			if _, exists := subsystem.DPLL.PhaseInputs[pinLabel]; !exists {
+				subsystem.DPLL.PhaseInputs[pinLabel] = ptpv2alpha1.PinConfig{}
+				glog.Infof("Injected delay compensation pin %s into PhaseInputs for subsystem %s", pinLabel, subsystem.Name)
+				injectedCount++
+			}
+		}
+	}
+
+	if injectedCount > 0 {
+		glog.Infof("Injected %d delay compensation pins for subsystem %s", injectedCount, subsystem.Name)
+	}
+
+	return nil
+}
+
 // templateVariables holds the values for template variable resolution
 type templateVariables struct {
 	subsystem     string // subsystem name (e.g., "leader")
@@ -389,10 +463,6 @@ func deepCopyAndResolveCondition(cond ptpv2alpha1.Condition, vars templateVariab
 
 // deriveBehavior derives behavior section from templates
 func deriveBehavior(hwConfig *ptpv2alpha1.HardwareConfig, clockType string) error {
-	if hwConfig.Spec.Profile.ClockChain == nil {
-		return fmt.Errorf("clockChain is nil")
-	}
-
 	clockChain := hwConfig.Spec.Profile.ClockChain
 
 	// If behavior is already provided, merge with templates (future enhancement)

@@ -317,6 +317,13 @@ func (hcm *HardwareConfigManager) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.H
 
 		glog.Infof("Resolving hardware config '%s' (%d/%d)", resolvedConfig.Name, i+1, len(hwConfigs))
 
+		// Populate phase adjustments from delay compensation model BEFORE resolving structure
+		// so that phase adjustment commands can be built during structure resolution
+		if populateErr := hcm.populatePhaseAdjustments(resolvedConfig); populateErr != nil {
+			glog.Warningf("Failed to populate phase adjustments for hardware config %s: %v", resolvedConfig.Name, populateErr)
+			// Continue even if phase adjustment population fails
+		}
+
 		dpllCommands, sysFSCommands, behaviorErr := hcm.resolveClockChainBehavior(*resolvedConfig)
 		if behaviorErr != nil {
 			return fmt.Errorf("failed to resolve clock chain behavior for hardware config %s: %w", resolvedConfig.Name, behaviorErr)
@@ -332,6 +339,9 @@ func (hcm *HardwareConfigManager) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.H
 		glog.Infof("  structure: %d DPLL commands, %d sysfs commands", len(structPins), len(structSysfs))
 		prepared[i].structurePinCommands = structPins
 		prepared[i].structureSysFSCommands = structSysfs
+
+		// Update stored config with populated phase adjustments
+		prepared[i].HardwareConfig = *resolvedConfig
 
 		// Extract holdover parameters from subsystems
 		holdoverParams := hcm.extractHoldoverParameters(*resolvedConfig)
@@ -515,12 +525,56 @@ func (hcm *HardwareConfigManager) populatePtpSettingsFromHardware(nodeProfile *p
 	}
 }
 
+// populatePhaseAdjustments populates PhaseAdjustment fields in HardwareConfig based on delay compensation model
+func (hcm *HardwareConfigManager) populatePhaseAdjustments(hwConfig *ptpv2alpha1.HardwareConfig) error {
+	cc := hwConfig.Spec.Profile.ClockChain
+	glog.Infof("Populating phase adjustments for %d subsystems", len(cc.Structure))
+
+	for _, subsystem := range cc.Structure {
+		hwDefPath := strings.TrimSpace(subsystem.HardwareSpecificDefinitions)
+		if hwDefPath == "" {
+			glog.V(2).Infof("Subsystem %s: no hardware definition path, skipping", subsystem.Name)
+			continue
+		}
+
+		glog.Infof("Processing subsystem %s with hardware definition %s", subsystem.Name, hwDefPath)
+
+		// Load hardware defaults (includes delay compensation model)
+		hwDefaults, err := hcm.getHardwareDefaults(hwDefPath)
+		if err != nil {
+			return fmt.Errorf("failed to load hardware defaults for %s: %w", hwDefPath, err)
+		}
+		if hwDefaults == nil {
+			glog.V(2).Infof("Subsystem %s: no hardware defaults loaded, skipping", subsystem.Name)
+			continue
+		}
+		if hwDefaults.DelayCompensation == nil {
+			glog.V(2).Infof("Subsystem %s: no delay compensation model in hardware defaults, skipping", subsystem.Name)
+			continue
+		}
+
+		// Get network interface for this subsystem
+		networkInterface := subsystem.DPLL.NetworkInterface
+		if networkInterface == "" && len(subsystem.Ethernet) > 0 && len(subsystem.Ethernet[0].Ports) > 0 {
+			networkInterface = subsystem.Ethernet[0].Ports[0]
+		}
+		if networkInterface == "" {
+			glog.Infof("Subsystem %s: no network interface found, skipping phase adjustment population", subsystem.Name)
+			continue
+		}
+
+		glog.Infof("Subsystem %s: calling PopulatePhaseAdjustmentsFromDelays with interface %s", subsystem.Name, networkInterface)
+		// Populate phase adjustments for this subsystem
+		if populateErr := PopulatePhaseAdjustmentsFromDelays(hwConfig, hwDefaults, networkInterface); populateErr != nil {
+			return fmt.Errorf("failed to populate phase adjustments for subsystem %s: %w", subsystem.Name, populateErr)
+		}
+	}
+
+	return nil
+}
+
 func (hcm *HardwareConfigManager) resolveClockChainBehavior(hwConfig ptpv2alpha1.HardwareConfig) (map[string][]dpll.PinParentDeviceCtl, map[string][]SysFSCommand, error) {
 	clockChain := hwConfig.Spec.Profile.ClockChain
-	if clockChain == nil {
-		glog.Infof("Hardware config %s has no clock chain", hwConfig.Name)
-		return make(map[string][]dpll.PinParentDeviceCtl), make(map[string][]SysFSCommand), nil
-	}
 	if clockChain.Behavior == nil || len(clockChain.Behavior.Conditions) == 0 {
 		glog.Infof("Hardware config %s has no behavior conditions", hwConfig.Name)
 		return make(map[string][]dpll.PinParentDeviceCtl), make(map[string][]SysFSCommand), nil
@@ -570,10 +624,6 @@ func (hcm *HardwareConfigManager) resolveClockChainBehavior(hwConfig ptpv2alpha1
 // where YAML definitions convert static declarations into concrete commands.
 func (hcm *HardwareConfigManager) resolveClockChainStructure(hwConfig ptpv2alpha1.HardwareConfig) ([]dpll.PinParentDeviceCtl, []SysFSCommand, error) {
 	cc := hwConfig.Spec.Profile.ClockChain
-	if cc == nil || len(cc.Structure) == 0 {
-		glog.Infof("Hardware config %s has no structure section", hwConfig.Name)
-		return nil, nil, nil
-	}
 
 	allPins := make([]dpll.PinParentDeviceCtl, 0)
 	allSysfs := make([]SysFSCommand, 0)
@@ -636,6 +686,13 @@ func (hcm *HardwareConfigManager) resolveSubsystemStructure(hwDefPath string, su
 		return nil, nil, fmt.Errorf("failed to build eSync pin commands: %w", err)
 	}
 	pins = append(pins, esyncPins...)
+
+	// Build phase adjustment commands for pins with PhaseAdjustment configured
+	phaseAdjustPins, err := hcm.buildPhaseAdjustmentCommands(subsystem, hwDefPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to build phase adjustment commands: %w", err)
+	}
+	pins = append(pins, phaseAdjustPins...)
 
 	// Translate connectorCommands to SysFS actions based on connectors referenced by pins
 	inputs, outputs := collectConnectorUsage(subsystem)
@@ -707,6 +764,98 @@ func (hcm *HardwareConfigManager) buildESyncPinCommands(subsystem ptpv2alpha1.Su
 		for boardLabel, pinCfg := range group.pins {
 			cmds := hcm.buildPinFrequencyCommands(clockID, boardLabel, pinCfg, clockChain, hwSpec, group.isInput)
 			commands = append(commands, cmds...)
+		}
+	}
+
+	return commands, nil
+}
+
+// buildPhaseAdjustmentCommands builds DPLL commands for phase adjustments from populated PhaseAdjustment fields
+func (hcm *HardwareConfigManager) buildPhaseAdjustmentCommands(subsystem ptpv2alpha1.Subsystem, hwDefPath string) ([]dpll.PinParentDeviceCtl, error) {
+	if hcm.pinCache == nil {
+		return nil, fmt.Errorf("pin cache not initialized for subsystem %s", subsystem.Name)
+	}
+
+	// Resolve clock ID from network interface
+	networkInterface := subsystem.DPLL.NetworkInterface
+	if networkInterface == "" && len(subsystem.Ethernet) > 0 && len(subsystem.Ethernet[0].Ports) > 0 {
+		networkInterface = subsystem.Ethernet[0].Ports[0]
+	}
+	if networkInterface == "" {
+		return nil, fmt.Errorf("no network interface found for subsystem %s", subsystem.Name)
+	}
+
+	clockID, err := hcm.getClockIDCached(networkInterface, hwDefPath)
+	if err != nil {
+		glog.Warningf("Failed to resolve clock ID for subsystem %s interface %s: %v", subsystem.Name, networkInterface, err)
+		return nil, nil
+	}
+
+	commands := make([]dpll.PinParentDeviceCtl, 0)
+
+	// Process PhaseInputs and PhaseOutputs
+	pinGroups := []struct {
+		pins map[string]ptpv2alpha1.PinConfig
+		name string
+	}{
+		{subsystem.DPLL.PhaseInputs, "phase inputs"},
+		{subsystem.DPLL.PhaseOutputs, "phase outputs"},
+	}
+
+	for _, group := range pinGroups {
+		for boardLabel, pinCfg := range group.pins {
+			if pinCfg.PhaseAdjustment == nil {
+				continue
+			}
+
+			// Get pin from cache
+			pin, found := hcm.pinCache.GetPin(clockID, boardLabel)
+			if !found {
+				glog.V(2).Infof("Pin %s not found for clock %#x (phase adjustment)", boardLabel, clockID)
+				continue
+			}
+
+			// PhaseAdjustment contains the total adjustment value:
+			// (internal_adjustment + user_adjustment)
+			// where:
+			// - internal_adjustment = -internal_delay (delay from delays.yaml is negated)
+			// - user_adjustment = user-provided value (already an adjustment, not negated)
+			// This total is sent directly to DPLL without further negation
+			totalAdjustment := *pinCfg.PhaseAdjustment
+
+			// Convert to int32 and validate against pin limits
+			adjustmentInt32 := int32(totalAdjustment)
+
+			// Clamp to pin's min/max range
+			if pin.PhaseAdjustMin != 0 && adjustmentInt32 < pin.PhaseAdjustMin {
+				glog.Warningf("Pin %s phase adjustment %d ps clamped to minimum %d ps", boardLabel, adjustmentInt32, pin.PhaseAdjustMin)
+				adjustmentInt32 = pin.PhaseAdjustMin
+			}
+			if pin.PhaseAdjustMax != 0 && adjustmentInt32 > pin.PhaseAdjustMax {
+				glog.Warningf("Pin %s phase adjustment %d ps clamped to maximum %d ps", boardLabel, adjustmentInt32, pin.PhaseAdjustMax)
+				adjustmentInt32 = pin.PhaseAdjustMax
+			}
+
+			// Round to granularity if specified
+			if pin.PhaseAdjustGran > 1 {
+				rounded := (adjustmentInt32 / int32(pin.PhaseAdjustGran)) * int32(pin.PhaseAdjustGran)
+				if adjustmentInt32 != rounded {
+					glog.V(3).Infof("Pin %s phase adjustment rounded from %d to %d ps (granularity: %d ps)",
+						boardLabel, adjustmentInt32, rounded, pin.PhaseAdjustGran)
+					adjustmentInt32 = rounded
+				}
+			}
+
+			// Build command
+			cmd := dpll.PinParentDeviceCtl{
+				ID:          pin.ID,
+				PhaseAdjust: &adjustmentInt32,
+			}
+
+			commands = append(commands, cmd)
+			glog.Infof("Phase adjustment command for pin %s (id=%d): %d ps (total adjustment)",
+				boardLabel, pin.ID, adjustmentInt32)
+			glog.Infof("  Phase adjustment command details: %s", formatDpllPinCommand(cmd))
 		}
 	}
 
@@ -843,7 +992,7 @@ func (hcm *HardwareConfigManager) buildPinFrequencyCommands(clockID uint64, boar
 func (hcm *HardwareConfigManager) resolvePinFrequency(pinCfg ptpv2alpha1.PinConfig, clockChain *ptpv2alpha1.ClockChain) (uint64, uint64, int64, bool) {
 	// If eSyncConfigName is set, resolve from commonDefinitions
 	if pinCfg.ESyncConfigName != "" {
-		if clockChain == nil || clockChain.CommonDefinitions == nil {
+		if clockChain.CommonDefinitions == nil {
 			glog.Warningf("eSync config '%s' referenced but no commonDefinitions", pinCfg.ESyncConfigName)
 			return 0, 0, 0, false
 		}
@@ -1228,10 +1377,6 @@ func (hcm *HardwareConfigManager) applyDesiredStatesInOrder(condition ptpv2alpha
 
 // applyStructureDefaults extracts and applies static, hardware-specific defaults for a given hardware config
 func (hcm *HardwareConfigManager) applyStructureDefaults(enrichedConfig *enrichedHardwareConfig, profileName string) error {
-	if enrichedConfig.Spec.Profile.ClockChain == nil {
-		return nil
-	}
-
 	if len(enrichedConfig.structureSysFSCommands) > 0 {
 		if err := hcm.applyCachedSysFSCommands("structure-defaults", profileName, enrichedConfig.structureSysFSCommands); err != nil {
 			return fmt.Errorf("failed to apply structure sysFS defaults: %w", err)
@@ -1253,9 +1398,6 @@ func (hcm *HardwareConfigManager) applyStructureDefaults(enrichedConfig *enriche
 }
 
 func (hcm *HardwareConfigManager) applyBehaviorConditions(enrichedConfig *enrichedHardwareConfig, profileName string) error {
-	if enrichedConfig.Spec.Profile.ClockChain == nil {
-		return nil
-	}
 	return hcm.applyDefaultAndInitConditions(enrichedConfig.Spec.Profile.ClockChain, profileName, enrichedConfig)
 }
 
@@ -1283,11 +1425,130 @@ func (hcm *HardwareConfigManager) applyDpllPinCommands(profileName, context stri
 		glog.Infof("    pin[%d]: %s", i+1, formatDpllPinCommand(c))
 	}
 
-	if err := hcm.pinApplier(commands); err != nil {
+	// Merge commands for the same pin ID to avoid overwriting fields
+	mergedCommands := mergePinCommandsByID(commands)
+	if len(mergedCommands) != len(commands) {
+		glog.Infof("  Merged %d commands into %d commands (by pin ID)", len(commands), len(mergedCommands))
+		for i, c := range mergedCommands {
+			glog.Infof("    merged[%d]: %s", i+1, formatDpllPinCommand(c))
+		}
+	}
+
+	if err := hcm.pinApplier(mergedCommands); err != nil {
 		return fmt.Errorf("dpll pin apply (%s): %w", context, err)
 	}
 
 	return nil
+}
+
+// mergePinCommandsByID merges multiple commands for the same pin ID into a single command
+// Fields from later commands take precedence, but all non-nil fields are preserved
+func mergePinCommandsByID(commands []dpll.PinParentDeviceCtl) []dpll.PinParentDeviceCtl {
+	if len(commands) == 0 {
+		return commands
+	}
+
+	// Map pin ID -> merged command
+	merged := make(map[uint32]*dpll.PinParentDeviceCtl)
+
+	for i := range commands {
+		cmd := &commands[i]
+		existing, exists := merged[cmd.ID]
+		if !exists {
+			// First command for this pin ID - create a copy
+			mergedCmd := *cmd
+			// Deep copy slices and pointers
+			if cmd.PinParentCtl != nil {
+				mergedCmd.PinParentCtl = make([]dpll.PinControl, len(cmd.PinParentCtl))
+				copy(mergedCmd.PinParentCtl, cmd.PinParentCtl)
+			}
+			if cmd.Frequency != nil {
+				freq := *cmd.Frequency
+				mergedCmd.Frequency = &freq
+			}
+			if cmd.PhaseAdjust != nil {
+				phase := *cmd.PhaseAdjust
+				mergedCmd.PhaseAdjust = &phase
+			}
+			if cmd.EsyncFrequency != nil {
+				esync := *cmd.EsyncFrequency
+				mergedCmd.EsyncFrequency = &esync
+			}
+			merged[cmd.ID] = &mergedCmd
+			continue
+		}
+
+		// Merge with existing command - later commands take precedence for individual fields
+		// but we merge PinParentCtl slices
+		if cmd.Frequency != nil {
+			freq := *cmd.Frequency
+			existing.Frequency = &freq
+		}
+		if cmd.PhaseAdjust != nil {
+			phase := *cmd.PhaseAdjust
+			existing.PhaseAdjust = &phase
+		}
+		if cmd.EsyncFrequency != nil {
+			esync := *cmd.EsyncFrequency
+			existing.EsyncFrequency = &esync
+		}
+
+		// Merge PinParentCtl - combine parent controls, with later ones taking precedence for same parent ID
+		if len(cmd.PinParentCtl) > 0 {
+			if existing.PinParentCtl == nil {
+				existing.PinParentCtl = make([]dpll.PinControl, 0, len(cmd.PinParentCtl))
+			}
+			// Create a map of existing parent controls by parent ID
+			parentMap := make(map[uint32]*dpll.PinControl)
+			for j := range existing.PinParentCtl {
+				parentMap[existing.PinParentCtl[j].PinParentID] = &existing.PinParentCtl[j]
+			}
+			// Add or update parent controls from new command
+			for j := range cmd.PinParentCtl {
+				pc := cmd.PinParentCtl[j]
+				if existingPC, found := parentMap[pc.PinParentID]; found {
+					// Update existing parent control
+					if pc.State != nil {
+						state := *pc.State
+						existingPC.State = &state
+					}
+					if pc.Prio != nil {
+						prio := *pc.Prio
+						existingPC.Prio = &prio
+					}
+					if pc.Direction != nil {
+						direction := *pc.Direction
+						existingPC.Direction = &direction
+					}
+				} else {
+					// Add new parent control
+					newPC := dpll.PinControl{PinParentID: pc.PinParentID}
+					if pc.State != nil {
+						state := *pc.State
+						newPC.State = &state
+					}
+					if pc.Prio != nil {
+						prio := *pc.Prio
+						newPC.Prio = &prio
+					}
+					if pc.Direction != nil {
+						direction := *pc.Direction
+						newPC.Direction = &direction
+					}
+					existing.PinParentCtl = append(existing.PinParentCtl, newPC)
+					parentMap[pc.PinParentID] = &existing.PinParentCtl[len(existing.PinParentCtl)-1]
+				}
+			}
+		}
+	}
+
+	// Convert map to slice
+	result := make([]dpll.PinParentDeviceCtl, 0, len(merged))
+	for _, cmd := range merged {
+		result = append(result, *cmd)
+	}
+
+	return result
 }
 
 // resolveSysFSPath resolves interface name templating in sysFS paths
@@ -1332,9 +1593,6 @@ func (hcm *HardwareConfigManager) resolveSysFSPtpDevice(interfacePath string) ([
 func (hcm *HardwareConfigManager) getInterfaceNameFromSources(sourceName string, clockChain *ptpv2alpha1.ClockChain) (*string, error) {
 	if clockChain.Behavior == nil {
 		return nil, fmt.Errorf("no behavior section found in clock chain")
-	}
-	if clockChain.Structure == nil {
-		return nil, fmt.Errorf("no structure section found in clock chain")
 	}
 
 	// Find the named source (or first PTP source if sourceName is empty)
@@ -1483,7 +1741,7 @@ func (hcm *HardwareConfigManager) ApplyConditionForProfile(nodeProfile *ptpv1.Pt
 
 		// Apply commands strictly in the order defined in DesiredStates for the given condition type
 		// Use cached commands when available (all conditions are cached during enrichment)
-		if enrichedConfig.Spec.Profile.ClockChain != nil && enrichedConfig.Spec.Profile.ClockChain.Behavior != nil {
+		if enrichedConfig.Spec.Profile.ClockChain.Behavior != nil {
 			conditions := hcm.extractConditionsByType(enrichedConfig.Spec.Profile.ClockChain.Behavior.Conditions, conditionType)
 			for _, condition := range conditions {
 				// Try to use cached commands first
@@ -1543,10 +1801,6 @@ func (hcm *HardwareConfigManager) ProcessDPLLDeviceNotifications(devices []*dpll
 
 		// Find matching hardwareconfigs by clock ID
 		for _, hwConfig := range hcm.hardwareConfigs {
-			if hwConfig.Spec.Profile.ClockChain == nil {
-				continue
-			}
-
 			// Check each subsystem to see if it matches this clock ID
 			for _, subsystem := range hwConfig.Spec.Profile.ClockChain.Structure {
 				// Resolve clock ID for this subsystem
@@ -1736,10 +1990,6 @@ func (hcm *HardwareConfigManager) applyVendorDefaultsForRemovedConfigs(removedCo
 	}
 
 	for _, removedConfig := range removedConfigs {
-		if removedConfig.Spec.Profile.ClockChain == nil {
-			continue
-		}
-
 		profileName := defaultProfileName
 		if removedConfig.Spec.Profile.Name != nil {
 			profileName = *removedConfig.Spec.Profile.Name
@@ -1788,10 +2038,6 @@ func (hcm *HardwareConfigManager) applyVendorDefaultsForRemovedConfigs(removedCo
 // extractHoldoverParameters extracts holdover parameters from all subsystems in the clock chain
 func (hcm *HardwareConfigManager) extractHoldoverParameters(hwConfig ptpv2alpha1.HardwareConfig) map[uint64]*ptpv2alpha1.HoldoverParameters {
 	params := make(map[uint64]*ptpv2alpha1.HoldoverParameters)
-
-	if hwConfig.Spec.Profile.ClockChain == nil || len(hwConfig.Spec.Profile.ClockChain.Structure) == 0 {
-		return params
-	}
 
 	for _, subsystem := range hwConfig.Spec.Profile.ClockChain.Structure {
 		if subsystem.DPLL.HoldoverParameters != nil {

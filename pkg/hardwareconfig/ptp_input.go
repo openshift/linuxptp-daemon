@@ -95,7 +95,7 @@ func (psd *PTPStateDetector) buildCaches() {
 
 	// Build caches from hardware configs
 	for _, hwConfig := range psd.hcm.hardwareConfigs {
-		if hwConfig.Spec.Profile.ClockChain != nil && hwConfig.Spec.Profile.ClockChain.Behavior != nil {
+		if hwConfig.Spec.Profile.ClockChain.Behavior != nil {
 			for _, source := range hwConfig.Spec.Profile.ClockChain.Behavior.Sources {
 				if source.SourceType == "ptpTimeReceiver" {
 					for _, portName := range source.PTPTimeReceivers {
@@ -126,7 +126,7 @@ func (psd *PTPStateDetector) GetBehaviorRules() []ptpv2alpha1.Condition {
 	var allConditions []ptpv2alpha1.Condition
 
 	for _, hwConfig := range psd.hcm.hardwareConfigs {
-		if hwConfig.Spec.Profile.ClockChain != nil && hwConfig.Spec.Profile.ClockChain.Behavior != nil {
+		if hwConfig.Spec.Profile.ClockChain.Behavior != nil {
 			allConditions = append(allConditions, hwConfig.Spec.Profile.ClockChain.Behavior.Conditions...)
 		}
 	}
