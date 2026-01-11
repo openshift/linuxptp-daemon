@@ -31,9 +31,11 @@ const (
 	CLEANUP = -12345678
 )
 
-var pm *daemon.ProcessManager
-var registry *prometheus.Registry
-var logTestCases []synceLogTestCase
+var (
+	pm           *daemon.ProcessManager
+	registry     *prometheus.Registry
+	logTestCases []synceLogTestCase
+)
 
 type TestCase struct {
 	MessageTag                  string
@@ -235,6 +237,7 @@ func TestMain(m *testing.M) {
 	teardown()
 	os.Exit(code)
 }
+
 func Test_ProcessPTPMetrics(t *testing.T) {
 	leap.MockLeapFile()
 	defer close(leap.LeapMgr.Close)
@@ -311,10 +314,9 @@ func TestDaemon_ApplyHaProfiles(t *testing.T) {
 	processManager.SetTestProfileProcess(*p3.Name, nil, "", "config1", p3)
 	dd := &daemon.Daemon{}
 	dd.SetProcessManager(processManager)
-	haProfiles, cmdLine := dd.ApplyHaProfiles(&p3, "")
-	assert.NotEmpty(t, cmdLine, "cmdLine is not empty")
+	haProfiles, cmdLine := dd.ApplyHaProfiles(&p3, "phc2sys")
 	assert.Equal(t, len(haProfiles), 2, "ha has two profiles")
-	assert.Equal(t, cmdLine, "-z socket1 -z socket2", "CmdLine is empty")
+	assert.Equal(t, cmdLine, "phc2sys -z socket1 -z socket2", "CmdLine is empty")
 }
 
 var (
@@ -337,7 +339,6 @@ type synceLogTestCase struct {
 
 func InitSynceLogTestCase() {
 	logTestCases = []synceLogTestCase{
-
 		{
 			output:               "synce4l[1225226.279]: [synce4l.0.config] tx_rebuild_tlv: attached new TLV, QL=0x1 on ens7f0",
 			expectedState:        "",
@@ -424,7 +425,6 @@ func InitSynceLogTestCase() {
 			expectedDescription:  "Will not produce any output;will use last data ",
 		},
 	}
-
 }
 
 func TestDaemon_ProcessSynceLogs(t *testing.T) {
