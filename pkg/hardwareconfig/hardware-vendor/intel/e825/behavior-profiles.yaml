@@ -32,13 +32,15 @@ behaviorProfiles:
                 state: disconnected
               pps:
                 state: disconnected
-          - sysfs:
-              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
-              value: "0 0"
+          - ptpPin:
+              name: SDP2
+              func: Disabled
+              chan: 0
               sourceName: PTP
-          - sysfs:
-              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP0
-              value: "0 0"
+          - ptpPin:
+              name: SDP0
+              func: Disabled
+              chan: 0
               sourceName: PTP
       
       - name: "PTP Source Locked"
@@ -46,6 +48,28 @@ behaviorProfiles:
           - conditionType: locked
             sourceName: PTP
         desiredStates:
+          - ptpPin:
+              name: SDP2
+              func: TX
+              chan: 2
+              sourceName: PTP
+          - ptpPin:
+              name: SDP0
+              func: TX
+              chan: 1
+              sourceName: PTP
+          - ptpPeriod:
+              index: 1
+              period:
+                sec: 1
+                nsec: 0
+              sourceName: PTP
+          - ptpPeriod:
+              index: 2
+              period:
+                sec: 0
+                nsec: 1000000
+              sourceName: PTP
           - dpll:
               subsystem: "{subsystem}"
               boardLabel: "{ptpInputPin}"
@@ -53,34 +77,20 @@ behaviorProfiles:
                 state: disconnected
               pps:
                 state: selectable
-          - sysfs:
-              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
-              value: "2 2"
-              sourceName: PTP
-          - sysfs:
-              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP0
-              value: "2 1"
-              sourceName: PTP
-          - sysfs:
-              path: /sys/class/net/{interface}/device/ptp/ptp*/period
-              value: "1 0 0 1 0"
-              sourceName: PTP
-          - sysfs:
-              path: /sys/class/net/{interface}/device/ptp/ptp*/period
-              value: "2 0 0 0 1000000"
-              sourceName: PTP
       
       - name: "PTP Source Lost - Leader Holdover"
         triggers:
           - conditionType: lost
             sourceName: PTP
         desiredStates:
-          - sysfs:
-              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP0
-              value: "0 0"
+          - ptpPin:
+              name: SDP0
+              func: Disabled
+              chan: 0
               sourceName: PTP
-          - sysfs:
-              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
-              value: "0 0"
+          - ptpPin:
+              name: SDP2
+              func: Disabled
+              chan: 0
               sourceName: PTP
 

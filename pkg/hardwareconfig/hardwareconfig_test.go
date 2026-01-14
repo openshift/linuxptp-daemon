@@ -557,11 +557,18 @@ func TestApplyConditionDesiredStatesWithRealData(t *testing.T) {
 						}
 					}
 				}
-				if desiredState.SysFS != nil {
-					t.Logf("    Desired state %d: SysFS - Path: %s, Value: %s",
-						j+1, desiredState.SysFS.Path, desiredState.SysFS.Value)
-					if desiredState.SysFS.SourceName != "" {
-						t.Logf("      Source: %s", desiredState.SysFS.SourceName)
+				if desiredState.PTPPin != nil {
+					t.Logf("    Desired state %d: PTPPin - Name: %s, Func: %s, Chan: %d",
+						j+1, desiredState.PTPPin.Name, desiredState.PTPPin.Func, desiredState.PTPPin.Chan)
+					if desiredState.PTPPin.SourceName != "" {
+						t.Logf("      Source: %s", desiredState.PTPPin.SourceName)
+					}
+				}
+				if desiredState.PTPPeriod != nil {
+					t.Logf("    Desired state %d: PTPPeriod - Index: %d",
+						j+1, desiredState.PTPPeriod.Index)
+					if desiredState.PTPPeriod.SourceName != "" {
+						t.Logf("      Source: %s", desiredState.PTPPeriod.SourceName)
 					}
 				}
 			}

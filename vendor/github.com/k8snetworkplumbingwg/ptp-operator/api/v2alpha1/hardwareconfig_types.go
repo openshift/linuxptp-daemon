@@ -146,15 +146,16 @@ type SourceState struct {
 }
 
 // DesiredState defines the desired configuration that is applied when a condition is triggered.
-// It supports either DPLL pin configurations OR sysFS-based Ethernet subsystem configurations.
+// It supports DPLL pin configurations and standardized PTP pin/period configurations.
 type DesiredState struct {
 	// DPLL defines DPLL pin configurations for the subsystem
 	DPLL *DPLLDesiredState `json:"dpll,omitempty" yaml:"dpll,omitempty"`
 
-	// SysFS defines a sysFS-based configuration for the Ethernet part of the subsystem.
-	// This configuration is applied by writing a value to a sysFS path, often including interface names
-	// that can be obtained from PTP sources' ptpTimeReceivers field.
-	SysFS *SysFSDesiredState `json:"sysfs,omitempty" yaml:"sysfs,omitempty"`
+	// PTPPin defines a standardized PTP pin configuration.
+	PTPPin *PTPPinDesiredState `json:"ptpPin,omitempty" yaml:"ptpPin,omitempty"`
+
+	// PTPPeriod defines a standardized PTP periodic output configuration.
+	PTPPeriod *PTPPeriodDesiredState `json:"ptpPeriod,omitempty" yaml:"ptpPeriod,omitempty"`
 }
 
 // DPLLDesiredState defines the desired DPLL pin configuration for a subsystem.
@@ -176,23 +177,125 @@ type DPLLDesiredState struct {
 	PPS *PinState `json:"pps,omitempty" yaml:"pps,omitempty"`
 }
 
-// SysFSDesiredState defines a sysFS-based configuration for Ethernet subsystems.
-// It specifies a path in sysFS and the value to write to it, with support for interface name templating.
-type SysFSDesiredState struct {
-	// Path is the sysFS path where the value should be written.
-	// It supports templating with interface names using the format: /sys/class/net/{interface}/...
-	// The {interface} placeholder will be replaced with actual interface names from PTP sources.
-	Path string `json:"path" yaml:"path"`
+// PTPTimeSpec represents a time specification with seconds and nanoseconds for PTP periodic output.
+type PTPTimeSpec struct {
+	// Sec is the seconds component of the time specification
+	Sec int64 `json:"sec" yaml:"sec"`
 
-	// Value is the value to write to the sysFS path
-	Value string `json:"value" yaml:"value"`
+	// Nsec is the nanoseconds component of the time specification (0-999999999)
+	Nsec int64 `json:"nsec" yaml:"nsec"`
+}
+
+// PTPPinFunction represents the function of a PTP pin.
+type PTPPinFunction int64
+
+const (
+	// PTPPinFunctionDisabled represents a disabled pin (0)
+	PTPPinFunctionDisabled PTPPinFunction = 0
+	// PTPPinFunctionRX represents a receive (RX) pin (1)
+	PTPPinFunctionRX PTPPinFunction = 1
+	// PTPPinFunctionTX represents a transmit (TX) pin (2)
+	PTPPinFunctionTX PTPPinFunction = 2
+	// PTPPinFunctionSync represents a sync pin (3)
+	PTPPinFunctionSync PTPPinFunction = 3
+)
+
+// String returns the string representation of the pin function
+func (f PTPPinFunction) String() string {
+	switch f {
+	case PTPPinFunctionDisabled:
+		return "Disabled"
+	case PTPPinFunctionRX:
+		return "RX"
+	case PTPPinFunctionTX:
+		return "TX"
+	case PTPPinFunctionSync:
+		return "Sync"
+	default:
+		return fmt.Sprintf("Unknown(%d)", int64(f))
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+// This is used by both JSON and YAML marshaling automatically.
+func (f PTPPinFunction) MarshalText() ([]byte, error) {
+	return []byte(f.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+// This is used by both JSON and YAML unmarshaling automatically.
+func (f *PTPPinFunction) UnmarshalText(text []byte) error {
+	s := strings.ToLower(string(text))
+	switch s {
+	case "disabled":
+		*f = PTPPinFunctionDisabled
+		return nil
+	case "rx":
+		*f = PTPPinFunctionRX
+		return nil
+	case "tx":
+		*f = PTPPinFunctionTX
+		return nil
+	case "sync":
+		*f = PTPPinFunctionSync
+		return nil
+	default:
+		return fmt.Errorf("invalid PTPPinFunction value: %s (valid values: Disabled, RX, TX, Sync)", string(text))
+	}
+}
+
+// PTPPinDesiredState defines a standardized PTP pin configuration.
+// Derived from Linux kernel struct ptp_pin_desc (include/uapi/linux/ptp_clock.h):
+//   - Name: pin name (corresponds to ptp_pin_desc.name)
+//   - Func: pin function (corresponds to ptp_pin_desc.func)
+//   - Chan: pin channel (corresponds to ptp_pin_desc.chan)
+type PTPPinDesiredState struct {
+	// Name is the pin name as appears under /sys/class/net/{interface}/device/ptp/ptp*/pins/
+	// (e.g., SMA1, SMA2, SDP0, SDP2, U.FL1, U.FL2)
+	Name string `json:"name" yaml:"name"`
+
+	// Func is the pin function. Valid values: "Disabled", "RX", "TX", "Sync"
+	Func PTPPinFunction `json:"func" yaml:"func"`
+
+	// Chan is the pin channel number
+	Chan int64 `json:"chan" yaml:"chan"`
 
 	// SourceName specifies which source to use for obtaining interface names.
 	// If specified, the interface names will be taken from the PTP source's ptpTimeReceivers field.
 	// If not specified, all available PTP sources will be considered for interface name resolution.
 	SourceName string `json:"sourceName,omitempty" yaml:"sourceName,omitempty"`
 
-	// Description provides optional context about this sysFS configuration
+	// Description provides optional context about this PTP pin configuration
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+}
+
+// PTPPeriodDesiredState defines a standardized PTP periodic output configuration.
+//
+// Derived from Linux kernel struct ptp_perout_request (include/uapi/linux/ptp_clock.h):
+//   - Index: period index (corresponds to ptp_perout_request.index)
+//   - Start: start time (corresponds to ptp_perout_request.start), defaults to {sec: 0, nsec: 0} if omitted
+//   - Period: period duration (corresponds to ptp_perout_request.period), defaults to {sec: 0, nsec: 0} if omitted
+//
+// Note: This API currently supports the basic period configuration. Advanced features like flags
+// and duty cycle (on duration) are not yet exposed but may be added in the future.
+type PTPPeriodDesiredState struct {
+	// Index is the period index
+	Index int64 `json:"index" yaml:"index"`
+
+	// Start defines the start time for the periodic output.
+	// If omitted, defaults to {sec: 0, nsec: 0} (start immediately).
+	Start *PTPTimeSpec `json:"start,omitempty" yaml:"start,omitempty"`
+
+	// Period defines the period duration.
+	// If omitted, defaults to {sec: 0, nsec: 0}.
+	Period *PTPTimeSpec `json:"period,omitempty" yaml:"period,omitempty"`
+
+	// SourceName specifies which source to use for obtaining interface names.
+	// If specified, the interface names will be taken from the PTP source's ptpTimeReceivers field.
+	// If not specified, all available PTP sources will be considered for interface name resolution.
+	SourceName string `json:"sourceName,omitempty" yaml:"sourceName,omitempty"`
+
+	// Description provides optional context about this PTP period configuration
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 

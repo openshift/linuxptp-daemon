@@ -48,6 +48,63 @@ type PtpDevice struct {
 	// This profile defines the PTP configuration settings for the device.
 	// +optional
 	Profile string `json:"profile,omitempty"`
+
+	// HardwareInfo contains detailed hardware identification information for the device.
+	// +optional
+	HardwareInfo *HardwareInfo `json:"hardwareInfo,omitempty"`
+}
+
+// HardwareInfo contains detailed hardware identification and characteristics of a PTP device
+type HardwareInfo struct {
+	// PCI Information - Device location and identification on the PCI bus
+
+	// PCIAddress is the PCI bus address (e.g., "0000:01:00.0")
+	// +optional
+	PCIAddress string `json:"pciAddress,omitempty"`
+
+	// VendorID is the PCI vendor identifier (e.g., "8086" for Intel)
+	// +optional
+	VendorID string `json:"vendorID,omitempty"`
+
+	// DeviceID is the PCI device identifier
+	// +optional
+	DeviceID string `json:"deviceID,omitempty"`
+
+	// SubsystemVendorID is the PCI subsystem vendor identifier
+	// +optional
+	SubsystemVendorID string `json:"subsystemVendorID,omitempty"`
+
+	// SubsystemDeviceID is the PCI subsystem device identifier
+	// +optional
+	SubsystemDeviceID string `json:"subsystemDeviceID,omitempty"`
+
+	// Firmware and Driver Information
+
+	// FirmwareVersion is the version of the device firmware
+	// +optional
+	FirmwareVersion string `json:"firmwareVersion,omitempty"`
+
+	// DriverVersion is the version of the kernel driver in use
+	// +optional
+	DriverVersion string `json:"driverVersion,omitempty"`
+
+	// VPD (Vital Product Data) - Manufacturing and product information
+
+	// VPDPartNumber is the manufacturer's part number from VPD
+	// +optional
+	VPDPartNumber string `json:"vpdPartNumber,omitempty"`
+
+	// VPDSerialNumber is the unique serial number from VPD
+	// +optional
+	VPDSerialNumber string `json:"vpdSerialNumber,omitempty"`
+
+	// VPDManufacturerID is the manufacturer identifier from VPD
+	// +optional
+	VPDManufacturerID string `json:"vpdManufacturerID,omitempty"`
+
+	// VPDProductName is the product name from VPD
+	// +optional
+	VPDProductName string `json:"vpdProductName,omitempty"`
 }
 
 type HwConfig struct {

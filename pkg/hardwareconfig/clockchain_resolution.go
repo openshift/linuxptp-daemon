@@ -451,11 +451,6 @@ func deepCopyAndResolveCondition(cond ptpv2alpha1.Condition, vars templateVariab
 			ds.DPLL.Subsystem = resolveTemplateString(ds.DPLL.Subsystem, vars)
 			ds.DPLL.BoardLabel = resolveTemplateString(ds.DPLL.BoardLabel, vars)
 		}
-
-		// Resolve SysFS desired state
-		if ds.SysFS != nil {
-			ds.SysFS.Path = resolveTemplateString(ds.SysFS.Path, vars)
-		}
 	}
 
 	return resolved
