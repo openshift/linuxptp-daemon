@@ -1120,26 +1120,64 @@ func (hcm *HardwareConfigManager) resolveDpllPinCommands(condition ptpv2alpha1.C
 	return pinCommands, nil
 }
 
+// processPTPPinConfig processes a PTP pin configuration and returns sysFS commands.
+func (hcm *HardwareConfigManager) processPTPPinConfig(pin ptpv2alpha1.PTPPinDesiredState, clockChain *ptpv2alpha1.ClockChain) ([]SysFSCommand, error) {
+	paths, err := hcm.resolvePTPPinPath(pin, clockChain)
+	if err != nil {
+		return nil, err
+	}
+	value := serializePTPPinValue(pin)
+	commands := make([]SysFSCommand, len(paths))
+	for i, path := range paths {
+		commands[i] = SysFSCommand{
+			Path:        path,
+			Value:       value,
+			Description: pin.Description,
+		}
+	}
+	return commands, nil
+}
+
+// processPTPPeriodConfig processes a PTP period configuration and returns sysFS commands.
+func (hcm *HardwareConfigManager) processPTPPeriodConfig(period ptpv2alpha1.PTPPeriodDesiredState, clockChain *ptpv2alpha1.ClockChain) ([]SysFSCommand, error) {
+	paths, err := hcm.resolvePTPPeriodPath(period, clockChain)
+	if err != nil {
+		return nil, err
+	}
+	value := serializePTPPeriodValue(period)
+	commands := make([]SysFSCommand, len(paths))
+	for i, path := range paths {
+		commands[i] = SysFSCommand{
+			Path:        path,
+			Value:       value,
+			Description: period.Description,
+		}
+	}
+	return commands, nil
+}
+
 func (hcm *HardwareConfigManager) resolveSysFSCommands(condition ptpv2alpha1.Condition, clockChain *ptpv2alpha1.ClockChain) ([]SysFSCommand, error) {
-	sysFSCommands := []SysFSCommand{}
+	var sysFSCommands []SysFSCommand
 	for idx, desiredState := range condition.DesiredStates {
-		if desiredState.SysFS != nil {
-			glog.Infof("      DesiredState[%d]: sysfs path=%s value=%s sourceName=%s", idx, desiredState.SysFS.Path, desiredState.SysFS.Value, desiredState.SysFS.SourceName)
-			resolvedPaths, err := hcm.resolveSysFSPath(*desiredState.SysFS, clockChain)
+		if desiredState.PTPPin != nil {
+			glog.Infof("      DesiredState[%d]: ptpPin name=%s func=%s chan=%d sourceName=%s", idx, desiredState.PTPPin.Name, desiredState.PTPPin.Func.String(), desiredState.PTPPin.Chan, desiredState.PTPPin.SourceName)
+			commands, err := hcm.processPTPPinConfig(*desiredState.PTPPin, clockChain)
 			if err != nil {
-				glog.Errorf("      DesiredState[%d]: failed to resolve sysFS path: %v", idx, err)
-				return nil, fmt.Errorf("failed to resolve sysFS path: %w", err)
+				glog.Errorf("      DesiredState[%d]: failed to resolve PTP pin path: %v", idx, err)
+				return nil, fmt.Errorf("failed to resolve PTP pin path (DesiredState[%d]): %w", idx, err)
 			}
-			glog.Infof("        Resolved to %d paths", len(resolvedPaths))
-			for _, resolvedPath := range resolvedPaths {
-				sysFSCommands = append(sysFSCommands, SysFSCommand{
-					Path:        resolvedPath,
-					Value:       desiredState.SysFS.Value,
-					Description: desiredState.SysFS.Description,
-				})
+			glog.Infof("        Resolved to %d paths", len(commands))
+			sysFSCommands = append(sysFSCommands, commands...)
+		}
+		if desiredState.PTPPeriod != nil {
+			glog.Infof("      DesiredState[%d]: ptpPeriod index=%d sourceName=%s", idx, desiredState.PTPPeriod.Index, desiredState.PTPPeriod.SourceName)
+			commands, err := hcm.processPTPPeriodConfig(*desiredState.PTPPeriod, clockChain)
+			if err != nil {
+				glog.Errorf("      DesiredState[%d]: failed to resolve PTP period path: %v", idx, err)
+				return nil, fmt.Errorf("failed to resolve PTP period path (DesiredState[%d]): %w", idx, err)
 			}
-		} else {
-			glog.Infof("      DesiredState[%d]: SysFS is nil (DPLL=%v)", idx, desiredState.DPLL != nil)
+			glog.Infof("        Resolved to %d paths", len(commands))
+			sysFSCommands = append(sysFSCommands, commands...)
 		}
 	}
 	return sysFSCommands, nil
@@ -1340,33 +1378,51 @@ func (hcm *HardwareConfigManager) extractConditionsByTypeAndSource(conditions []
 	return matchingConditions
 }
 
+// applyPTPCommands applies a list of sysFS commands by writing values to paths.
+func (hcm *HardwareConfigManager) applyPTPCommands(commands []SysFSCommand, idx int, configType string) error {
+	paths := make([]string, len(commands))
+	for i, cmd := range commands {
+		paths[i] = cmd.Path
+	}
+	glog.V(4).Infof("  DesiredState[%d]: resolved %s paths=%v", idx, configType, paths)
+	for _, cmd := range commands {
+		if err := hcm.writeSysFSValue(cmd.Path, cmd.Value); err != nil {
+			return fmt.Errorf("desiredState[%d] %s write failed: %w", idx, configType, err)
+		}
+	}
+	return nil
+}
+
 // applyDesiredStatesInOrder resolves and applies commands exactly in the order defined in DesiredStates.
-// Within a single DesiredState, SysFS (if present) is applied before DPLL (if present).
 func (hcm *HardwareConfigManager) applyDesiredStatesInOrder(condition ptpv2alpha1.Condition, profileName string, clockChain *ptpv2alpha1.ClockChain) error {
 	glog.Infof("Applying %d desired states for condition '%s' in profile %s", len(condition.DesiredStates), condition.Name, profileName)
 	for idx, desiredState := range condition.DesiredStates {
-		// 1) SysFS (if present)
-		if desiredState.SysFS != nil {
-			glog.Infof("  DesiredState[%d]: applying sysfs path=%s value=%s", idx, desiredState.SysFS.Path, desiredState.SysFS.Value)
-			paths, err := hcm.resolveSysFSPath(*desiredState.SysFS, clockChain)
+		if desiredState.PTPPin != nil {
+			glog.Infof("  DesiredState[%d]: applying PTP pin name=%s func=%s chan=%d", idx, desiredState.PTPPin.Name, desiredState.PTPPin.Func.String(), desiredState.PTPPin.Chan)
+			commands, err := hcm.processPTPPinConfig(*desiredState.PTPPin, clockChain)
 			if err != nil {
-				return fmt.Errorf("desiredState[%d] sysfs resolve failed: %w", idx, err)
+				return fmt.Errorf("desiredState[%d] ptp pin resolve failed: %w", idx, err)
 			}
-			glog.V(4).Infof("  DesiredState[%d]: resolved sysfs paths=%v", idx, paths)
-			for _, p := range paths {
-				if err = hcm.writeSysFSValue(p, desiredState.SysFS.Value); err != nil {
-					return fmt.Errorf("desiredState[%d] sysfs write failed: %w", idx, err)
-				}
+			if err = hcm.applyPTPCommands(commands, idx, "ptp pin"); err != nil {
+				return err
 			}
 		}
-		// 2) DPLL (if present)
+		if desiredState.PTPPeriod != nil {
+			glog.Infof("  DesiredState[%d]: applying PTP period index=%d", idx, desiredState.PTPPeriod.Index)
+			commands, err := hcm.processPTPPeriodConfig(*desiredState.PTPPeriod, clockChain)
+			if err != nil {
+				return fmt.Errorf("desiredState[%d] ptp period resolve failed: %w", idx, err)
+			}
+			if err = hcm.applyPTPCommands(commands, idx, "ptp period"); err != nil {
+				return err
+			}
+		}
 		if desiredState.DPLL != nil {
 			glog.Infof("  DesiredState[%d]: applying DPLL boardLabel=%s subsystem=%s", idx, desiredState.DPLL.BoardLabel, desiredState.DPLL.Subsystem)
 			cmd, err := hcm.createPinCommandForDPLLDesiredState(*desiredState.DPLL, clockChain)
 			if err != nil {
 				return fmt.Errorf("desiredState[%d] dpll command build failed: %w", idx, err)
 			}
-			// Apply single command to preserve strict ordering
 			if err = hcm.pinApplier([]dpll.PinParentDeviceCtl{cmd}); err != nil {
 				return fmt.Errorf("desiredState[%d] dpll apply failed: %w", idx, err)
 			}
@@ -1551,12 +1607,15 @@ func mergePinCommandsByID(commands []dpll.PinParentDeviceCtl) []dpll.PinParentDe
 	return result
 }
 
-// resolveSysFSPath resolves interface name templating in sysFS paths
-func (hcm *HardwareConfigManager) resolveSysFSPath(sysfSDesiredState ptpv2alpha1.SysFSDesiredState, clockChain *ptpv2alpha1.ClockChain) ([]string, error) {
-	path := sysfSDesiredState.Path
+func (hcm *HardwareConfigManager) resolveSysFSPtpDevice(interfacePath string) ([]string, error) {
+	glog.V(4).Infof("resolveSysFSPtpDevice: resolving %s", interfacePath)
+	return ptpDeviceResolver(interfacePath)
+}
 
-	// Get interface names from PTP sources
-	interfaceName, err := hcm.getInterfaceNameFromSources(sysfSDesiredState.SourceName, clockChain)
+// resolvePTPPinPath resolves the sysFS path for a PTP pin configuration.
+// Path pattern: /sys/class/net/{interface}/device/ptp/ptp*/pins/{pinName}
+func (hcm *HardwareConfigManager) resolvePTPPinPath(pin ptpv2alpha1.PTPPinDesiredState, clockChain *ptpv2alpha1.ClockChain) ([]string, error) {
+	interfaceName, err := hcm.getInterfaceNameFromSources(pin.SourceName, clockChain)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get interface names: %w", err)
 	}
@@ -1565,25 +1624,50 @@ func (hcm *HardwareConfigManager) resolveSysFSPath(sysfSDesiredState ptpv2alpha1
 		return nil, fmt.Errorf("no interface names found for path templating")
 	}
 
-	resolvedPath := strings.ReplaceAll(path, "{interface}", *interfaceName)
-
-	// Also resolve ptp* placeholders if present
-	if strings.Contains(resolvedPath, "ptp*") {
-		paths, resErr := hcm.resolveSysFSPtpDevice(resolvedPath)
-		if resErr != nil {
-			glog.V(3).Infof("resolveSysFSPath: ptp* resolution failed for %s (source=%s): %v", resolvedPath, sysfSDesiredState.SourceName, resErr)
-			return nil, resErr
-		}
-		glog.V(4).Infof("resolveSysFSPath: ptp* resolution for %s -> %v", resolvedPath, paths)
-		return paths, nil
-	}
-
-	return []string{resolvedPath}, nil
+	// Path pattern: /sys/class/net/{interface}/device/ptp/ptp*/pins/{pinName}
+	basePath := fmt.Sprintf("/sys/class/net/%s/device/ptp/ptp*/pins/%s", *interfaceName, pin.Name)
+	return hcm.resolveSysFSPtpDevice(basePath)
 }
 
-func (hcm *HardwareConfigManager) resolveSysFSPtpDevice(interfacePath string) ([]string, error) {
-	glog.V(4).Infof("resolveSysFSPtpDevice: resolving %s", interfacePath)
-	return ptpDeviceResolver(interfacePath)
+// resolvePTPPeriodPath resolves the sysFS path for a PTP period configuration.
+// Path pattern: /sys/class/net/{interface}/device/ptp/ptp*/period
+func (hcm *HardwareConfigManager) resolvePTPPeriodPath(period ptpv2alpha1.PTPPeriodDesiredState, clockChain *ptpv2alpha1.ClockChain) ([]string, error) {
+	interfaceName, err := hcm.getInterfaceNameFromSources(period.SourceName, clockChain)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get interface names: %w", err)
+	}
+
+	if interfaceName == nil {
+		return nil, fmt.Errorf("no interface names found for path templating")
+	}
+
+	// Path pattern: /sys/class/net/{interface}/device/ptp/ptp*/period
+	basePath := fmt.Sprintf("/sys/class/net/%s/device/ptp/ptp*/period", *interfaceName)
+	return hcm.resolveSysFSPtpDevice(basePath)
+}
+
+// serializePTPPinValue converts PTPPinDesiredState to sysFS format: "<func> <chan>"
+func serializePTPPinValue(pin ptpv2alpha1.PTPPinDesiredState) string {
+	return fmt.Sprintf("%d %d", int64(pin.Func), pin.Chan)
+}
+
+// serializePTPPeriodValue converts PTPPeriodDesiredState to sysFS format: "<index> <start.sec> <start.nsec> <period.sec> <period.nsec>"
+// Defaults start and period to {sec: 0, nsec: 0} if omitted.
+func serializePTPPeriodValue(period ptpv2alpha1.PTPPeriodDesiredState) string {
+	start := period.Start
+	if start == nil {
+		start = &ptpv2alpha1.PTPTimeSpec{Sec: 0, Nsec: 0}
+	}
+	periodDuration := period.Period
+	if periodDuration == nil {
+		periodDuration = &ptpv2alpha1.PTPTimeSpec{Sec: 0, Nsec: 0}
+	}
+	return fmt.Sprintf("%d %d %d %d %d",
+		period.Index,
+		start.Sec,
+		start.Nsec,
+		periodDuration.Sec,
+		periodDuration.Nsec)
 }
 
 // getInterfaceNameFromSources retrieves the network interface name for a given source.

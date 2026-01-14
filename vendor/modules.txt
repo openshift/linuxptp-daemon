@@ -136,7 +136,7 @@ github.com/josharian/intern
 # github.com/json-iterator/go v1.1.12
 ## explicit; go 1.12
 github.com/json-iterator/go
-# github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20260108160344-37b325b5fe7e
+# github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20260114120351-5c1581ff9a64
 ## explicit; go 1.24.0
 github.com/k8snetworkplumbingwg/ptp-operator/api/v1
 github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1
