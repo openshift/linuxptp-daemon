@@ -280,7 +280,7 @@ type PinConfig struct {
 	Connector string `json:"connector,omitempty" yaml:"connector,omitempty"`
 
 	// PhaseAdjustment is optional phase adjustment in picoseconds
-	PhaseAdjustment *PhaseAdjustment `json:"phaseAdjustment,omitempty" yaml:"phaseAdjustment,omitempty"`
+	PhaseAdjustment *int64 `json:"phaseAdjustment,omitempty" yaml:"phaseAdjustment,omitempty"`
 
 	// Frequency is the frequency value in Hz (for frequency pins) or phase reference frequency
 	// (for phase pins, defaults to 1 PPS). Mutually exclusive with esyncConfigName.
@@ -296,24 +296,6 @@ type PinConfig struct {
 	// ReferenceSync applies to frequency pins that can be paired to a phase pin by board label
 	// The value should match a phase pin label (from phaseInputs) within the same subsystem
 	ReferenceSync string `json:"referenceSync,omitempty" yaml:"referenceSync,omitempty"`
-}
-
-// PhaseAdjustment represents phase adjustment that must be applied to the input or the output pin
-// to compensate for phase delays from routing, logic and cables.
-// Usually internal delay is applied to output pins, and the sum of internal and external delays is applied to input pins.
-// Sometimes the above adjustment is not possible (e.g. if the input side is not programmable). In this case external delays
-// will be summed with the internal delays and applied to the output side.
-type PhaseAdjustment struct {
-	// Internal is the internal phase adjustment in picoseconds (required).
-	// Usually compensates for the board hardware delays and should not be changed by the user.
-	Internal int `json:"internal" yaml:"internal"`
-
-	// External is the external phase adjustment in picoseconds.
-	// Compensates for delays introduced by external cables.
-	External *int `json:"external,omitempty" yaml:"external,omitempty"`
-
-	// Description is an optional description for this phase adjustment
-	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
 // Custom validation functions

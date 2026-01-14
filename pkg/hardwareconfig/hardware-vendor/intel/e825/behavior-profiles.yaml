@@ -32,7 +32,6 @@ behaviorProfiles:
                 state: disconnected
               pps:
                 state: disconnected
-          # Hardware-specific pins are hardcoded (not templated)
           - sysfs:
               path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SDP2
               value: "0 0"
