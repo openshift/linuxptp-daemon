@@ -440,6 +440,10 @@ func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 				if dd.time < staleTime {
 					continue
 				}
+				if !d.window.IsFull() {
+					glog.Info("Largest offset ", FaultyPhaseOffset)
+					return FaultyPhaseOffset
+				}
 				if worstOffset == FaultyPhaseOffset {
 					if dd.IFace == e.clkSyncState[cfgName].leadingIFace {
 						worstOffset = int64(d.window.Mean())
