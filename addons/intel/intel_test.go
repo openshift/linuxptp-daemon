@@ -169,7 +169,6 @@ func Test_ProcessProfileTGMNew(t *testing.T) {
 func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
-	unitTest = true
 
 	// Setup filesystem mock for TBC profile - EnableE810Outputs needs this
 	mockFS := &MockFileSystem{}

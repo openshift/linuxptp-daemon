@@ -9,13 +9,16 @@ spec:
       behavior:
         conditions:
         - desiredStates:
-          - sysfs:
-              path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2
-              value: "2 2"
+          - ptpPin:
+              name: SMA2
+              func: TX
+              chan: 2
               sourceName: PTP
-          - sysfs:
-              path: /sys/class/net/{interface}/device/ptp/ptp*/period
-              value: "2 0 0 1 0"
+          - ptpPeriod:
+              index: 2
+              period:
+                sec: 1
+                nsec: 0
               sourceName: PTP 
           - dpll:
               subsystem: leader

@@ -218,6 +218,10 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 		e.clkSyncState[cfgName].clockOffset = e.getLargestOffset(cfgName)
 	}
 
+	if e.LeadingClockData.controlledPortsConfig == "" {
+		e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClassSlaveOnly
+	}
+
 	if updateDownstreamData {
 		go e.updateDownstreamData(cfgName, c)
 	}
@@ -435,6 +439,10 @@ func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 				// Skip stale data for all offsets, including the first one
 				if dd.time < staleTime {
 					continue
+				}
+				if !d.window.IsFull() {
+					glog.Info("Largest offset ", FaultyPhaseOffset)
+					return FaultyPhaseOffset
 				}
 				if worstOffset == FaultyPhaseOffset {
 					if dd.IFace == e.clkSyncState[cfgName].leadingIFace {

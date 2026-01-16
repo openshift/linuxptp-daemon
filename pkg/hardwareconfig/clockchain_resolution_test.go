@@ -258,13 +258,6 @@ func TestClockChainResolution(t *testing.T) {
 				assert.NotEqual(t, "{ptpInputPin}", desiredState.DPLL.BoardLabel,
 					"ptpInputPin variable should be resolved")
 			}
-			if desiredState.SysFS != nil {
-				assert.NotContains(t, desiredState.SysFS.Path, "{interface}",
-					"Interface variable should be resolved in sysfs paths")
-				// Verify that {interface} was replaced with the leading interface (eno5)
-				assert.Contains(t, desiredState.SysFS.Path, "eno5",
-					"SysFS path should contain the leading interface name")
-			}
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -274,6 +275,7 @@ func TestGetLargestOffset(t *testing.T) {
 		cfgName      string
 		data         map[string][]*Data
 		clkSyncState map[string]*clockSyncState
+		fillWindow   bool
 		expected     int64
 	}{
 		{
@@ -307,6 +309,24 @@ func TestGetLargestOffset(t *testing.T) {
 			expected: FaultyPhaseOffset,
 		},
 		{
+			name:    "Window not full - should return FaultyPhaseOffset",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: 15, time: recentTime},
+						{IFace: "eth1", Offset: 5, time: recentTime},
+					}},
+				},
+			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth99",
+				},
+			},
+			expected: FaultyPhaseOffset,
+		},
+		{
 			name:    "Single offset value",
 			cfgName: "test",
 			data: map[string][]*Data{
@@ -321,7 +341,8 @@ func TestGetLargestOffset(t *testing.T) {
 					leadingIFace: "eth99",
 				},
 			},
-			expected: 100,
+			fillWindow: true,
+			expected:   100,
 		},
 		{
 			name:    "Multiple offsets - largest positive",
@@ -340,7 +361,8 @@ func TestGetLargestOffset(t *testing.T) {
 					leadingIFace: "eth99",
 				},
 			},
-			expected: 25,
+			fillWindow: true,
+			expected:   25,
 		},
 		{
 			name:    "Multiple offsets - largest negative",
@@ -359,7 +381,8 @@ func TestGetLargestOffset(t *testing.T) {
 					leadingIFace: "eth99",
 				},
 			},
-			expected: -30,
+			fillWindow: true,
+			expected:   -30,
 		},
 		{
 			name:    "Mixed positive and negative - largest absolute value",
@@ -378,7 +401,8 @@ func TestGetLargestOffset(t *testing.T) {
 					leadingIFace: "eth99",
 				},
 			},
-			expected: -25,
+			fillWindow: true,
+			expected:   -25,
 		},
 		{
 			name:    "Stale data filtered out",
@@ -397,7 +421,8 @@ func TestGetLargestOffset(t *testing.T) {
 					leadingIFace: "eth99",
 				},
 			},
-			expected: 20,
+			fillWindow: true,
+			expected:   20,
 		},
 		{
 			name:    "All data stale - should return FaultyPhaseOffset",
@@ -439,7 +464,8 @@ func TestGetLargestOffset(t *testing.T) {
 					leadingIFace: "eth99",
 				},
 			},
-			expected: -40,
+			fillWindow: true,
+			expected:   -40,
 		},
 		{
 			name:    "Zero offset values",
@@ -457,7 +483,8 @@ func TestGetLargestOffset(t *testing.T) {
 					leadingIFace: "eth99",
 				},
 			},
-			expected: 0,
+			fillWindow: true,
+			expected:   0,
 		},
 		{
 			name:    "Mix of zero and non-zero offsets",
@@ -476,12 +503,27 @@ func TestGetLargestOffset(t *testing.T) {
 					leadingIFace: "eth99",
 				},
 			},
-			expected: 10,
+			fillWindow: true,
+			expected:   10,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.fillWindow {
+				for _, processData := range tt.data {
+					for _, d := range processData {
+						if len(d.Details) == 0 {
+							continue
+						}
+						d.window = *utils.NewWindow(WindowSize)
+						for i := 0; i < WindowSize; i++ {
+							offset := d.Details[i%len(d.Details)].Offset
+							d.window.Insert(float64(offset))
+						}
+					}
+				}
+			}
 			e := EventHandler{data: tt.data, clkSyncState: tt.clkSyncState}
 			result := e.getLargestOffset(tt.cfgName)
 			assert.Equal(t, tt.expected, result)

@@ -16,6 +16,9 @@ var intelE825DefaultsYAML []byte
 //go:embed hardware-vendor/intel/e825/behavior-profiles.yaml
 var intelE825BehaviorProfilesYAML []byte
 
+//go:embed hardware-vendor/intel/e825/delays.yaml
+var intelE825DelaysYAML []byte
+
 // embeddedDefaults maps hwDefPath -> raw YAML contents.
 // Example key: "intel/e810"
 var embeddedDefaults = map[string][]byte{
@@ -27,4 +30,10 @@ var embeddedDefaults = map[string][]byte{
 // Example key: "intel/e825"
 var embeddedBehaviorProfiles = map[string][]byte{
 	"intel/e825": intelE825BehaviorProfilesYAML,
+}
+
+// embeddedDelays maps hwDefPath -> raw YAML contents for delay compensation models.
+// Example key: "intel/e825"
+var embeddedDelays = map[string][]byte{
+	"intel/e825": intelE825DelaysYAML,
 }
