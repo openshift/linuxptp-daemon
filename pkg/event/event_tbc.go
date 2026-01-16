@@ -218,7 +218,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 		e.clkSyncState[cfgName].clockOffset = e.getLargestOffset(cfgName)
 	}
 
-	if e.LeadingClockData.controlledPortsConfig == "" {
+	if e.LeadingClockData.clockID != "" && e.LeadingClockData.controlledPortsConfig == "" {
 		e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClassSlaveOnly
 	}
 
