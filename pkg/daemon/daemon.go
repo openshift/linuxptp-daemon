@@ -1022,6 +1022,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			if controllingProfile, isControlled := (*nodeProfile).PtpSettings["controllingProfile"]; isControlled && controllingProfile != "" {
 				// See DownstreamIWF
 				glog.Infof("Skipping PMC monitoring for controlled profile %s", *nodeProfile.Name)
+			} else if clockType == event.GM {
+				glog.Infof("Skipping PMC monitoring for GM")
 			} else {
 				pmcClockType, clockTypeFound := (*nodeProfile).PtpSettings["clockType"]
 				if !clockTypeFound {
