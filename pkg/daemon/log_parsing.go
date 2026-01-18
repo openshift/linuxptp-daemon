@@ -67,9 +67,9 @@ func processWithParser(process *ptpProcess, output string) {
 	}
 
 	process.hasCollectedMetrics = true
-
 	// Process metrics if available
 	if metrics != nil {
+		process.offset = metrics.Offset
 		processParsedMetrics(process, metrics)
 	}
 
