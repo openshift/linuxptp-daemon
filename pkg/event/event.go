@@ -644,24 +644,28 @@ connect:
 				case <-e.closeCh:
 					return
 				case <-classTicker.C: // send clock class event 60 secs interval
+					for clkCfgName, data := range e.clkSyncState {
+						clockClass := data.clockClass
+						parts := strings.SplitN(clkCfgName, ".", 2)
+						if len(parts) >= 2 {
+							clkCfgName = "ptp4l." + strings.Join(parts[1:], ".")
+						}
+						if clockClass == 0 {
+							continue
+						}
+						if clkCfgName == cfgName {
+							// Stop double emmit
+							cfgName = ""
+						}
+						utils.EmitClockClass(c, PTP4lProcessName, clkCfgName, clockClass)
+					}
+
 					if cfgName != "" {
 						parts := strings.SplitN(cfgName, ".", 2)
 						if len(parts) >= 2 {
 							cfgName = "ptp4l." + strings.Join(parts[1:], ".")
 						}
 						utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
-					}
-
-					for cfgName, data := range e.clkSyncState {
-						clockClass := data.clockClass
-						parts := strings.SplitN(cfgName, ".", 2)
-						if len(parts) >= 2 {
-							cfgName = "ptp4l." + strings.Join(parts[1:], ".")
-						}
-						if clockClass == 0 {
-							continue
-						}
-						utils.EmitClockClass(c, PTP4lProcessName, cfgName, clockClass)
 					}
 				}
 			}
