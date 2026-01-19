@@ -128,6 +128,9 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 			e.clkSyncState[cfgName].state)
 		return *e.clkSyncState[cfgName]
 	}
+
+	isTTSC := (e.LeadingClockData.clockID != "" && e.LeadingClockData.controlledPortsConfig == "")
+
 	glog.Info("current BC state: ", e.clkSyncState[cfgName].state)
 	switch e.clkSyncState[cfgName].state {
 	case PTP_NOTSET, PTP_FREERUN:
@@ -160,7 +163,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 			}
 			if e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass == uint8(protocol.ClockClassFreerun) {
 				updateDownstreamData = false // Don't propagate uptream free run and instead let future call move to holdover/freerun
-			} else if e.clkSyncState[cfgName].clockClass != fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass) {
+			} else if e.clkSyncState[cfgName].clockClass != fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass) && !isTTSC {
 				e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass)
 				e.clkSyncState[cfgName].clockAccuracy = fbprotocol.ClockAccuracy(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockAccuracy)
 			}
@@ -218,12 +221,15 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 		e.clkSyncState[cfgName].clockOffset = e.getLargestOffset(cfgName)
 	}
 
-	if e.LeadingClockData.controlledPortsConfig == "" {
+	if isTTSC && e.clkSyncState[cfgName].clockClass != fbprotocol.ClockClassSlaveOnly {
 		e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClassSlaveOnly
 	}
-
-	if updateDownstreamData {
-		go e.updateDownstreamData(cfgName, c)
+	if updateDownstreamData && e.clkSyncState[cfgName].clockClass != protocol.ClockClassUninitialized {
+		if isTTSC {
+			e.announceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
+		} else {
+			go e.updateDownstreamData(cfgName, c)
+		}
 	}
 	// this will reduce log noise and prints 1 per sec
 	logTime := time.Now().Unix()
