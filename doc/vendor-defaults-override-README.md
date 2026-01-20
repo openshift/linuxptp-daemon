@@ -100,7 +100,7 @@ data:
       "GNR-D_SDP2": "ETH01_SDP_TIMESYNC_2"
       "GNR_D_SDP3": "ETH01_SDP_TIMESYNC_3"
       # these two are muxed into one, hence the same label
-      "OCP1_CLK": "PEXT_10M_OUT_M2_SW"
+      "OCP1_CLK": "EXT_10M_OUT_M2_SW"
       "OCP2_CLK": "EXT_10M_OUT_M2_SW"
       # unchanged
       "GNSS_1PPS_IN": "GNSS_1PPS_IN"
