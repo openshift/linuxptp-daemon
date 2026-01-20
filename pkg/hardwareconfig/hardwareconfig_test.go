@@ -16,8 +16,15 @@ import (
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 )
+
+// newHardwareConfigManagerForTests creates a HardwareConfigManager with a fake ConfigMap loader for tests
+func newHardwareConfigManagerForTests() *HardwareConfigManager {
+	fakeClient := fake.NewSimpleClientset()
+	return NewHardwareConfigManager(fakeClient, "default")
+}
 
 func TestApplyHardwareConfigsForProfile(t *testing.T) {
 	// Set up mock PTP device resolver for testing
@@ -75,7 +82,7 @@ func TestApplyHardwareConfigsForProfile(t *testing.T) {
 			assert.NotNil(t, hwConfig)
 
 			// Create hardware config manager and add test data
-			hcm := NewHardwareConfigManager()
+			hcm := newHardwareConfigManagerForTests()
 			defer hcm.resetExecutors()
 
 			hcm.overrideExecutors(nil, func(_, _ string) error { return nil })
@@ -130,7 +137,7 @@ func TestHardwareConfigManagerOperations(t *testing.T) {
 	SetCommandExecutor(mockCmd)
 	defer ResetCommandExecutor()
 
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 
 	// Test initial state
 	assert.Equal(t, 0, hcm.GetHardwareConfigCount())
@@ -176,7 +183,7 @@ func TestHardwareConfigManagerEmptyConfigs(t *testing.T) {
 	}
 	defer TeardownMockDpllPinsForTests()
 
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 
 	// Test with empty configs
 	err := hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
@@ -238,12 +245,6 @@ func TestLoadHardwareConfigFromFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to read file")
 }
 
-func TestNewHardwareConfigManager(t *testing.T) {
-	hcm := NewHardwareConfigManager()
-	assert.NotNil(t, hcm)
-	assert.Equal(t, 0, hcm.GetHardwareConfigCount())
-}
-
 func TestPTPStateDetector(t *testing.T) {
 	// Set up mock PTP device resolver for testing
 	SetupMockPtpDeviceResolver()
@@ -274,7 +275,7 @@ func TestPTPStateDetector(t *testing.T) {
 	assert.NotNil(t, hwConfig)
 
 	// Create hardware config manager and add test data
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 	err = hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{*hwConfig})
 	assert.NoError(t, err)
 
@@ -319,7 +320,7 @@ func TestDetectStateChange(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create hardware config manager and add test data
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 	err = hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{*hwConfig})
 	assert.NoError(t, err)
 
@@ -444,7 +445,7 @@ func TestDetectStateChange(t *testing.T) {
 }
 
 func TestNewPTPStateDetector(t *testing.T) {
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 	psd := NewPTPStateDetector(hcm)
 	assert.NotNil(t, psd)
 	assert.NotNil(t, psd.hcm)
@@ -484,7 +485,7 @@ func TestApplyConditionDesiredStatesWithRealData(t *testing.T) {
 	}
 
 	// Create a HardwareConfigManager using the proper constructor
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 	defer hcm.resetExecutors()
 
 	// Override executors to avoid actual hardware operations
@@ -707,7 +708,7 @@ func TestApplyDefaultAndInitConditions(t *testing.T) {
 	// Clock IDs are now resolved dynamically - no aliases needed
 
 	// Create hardware config manager
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 	err = hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{*hwConfig})
 	if err != nil {
 		t.Fatalf("Failed to update hardware config: %v", err)
@@ -825,7 +826,7 @@ func TestExtractConditionsByType(t *testing.T) {
 	}
 	defer TeardownMockDpllPinsForTests()
 
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 
 	// Create test conditions
 	conditions := []ptpv2alpha1.Condition{
@@ -1089,7 +1090,7 @@ func TestSysFSCommandCaching(t *testing.T) {
 	SetCommandExecutor(mockCmd)
 	defer ResetCommandExecutor()
 
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 	defer hcm.resetExecutors()
 
 	hcm.overrideExecutors(nil, func(_, _ string) error { return nil })
@@ -1169,14 +1170,14 @@ func TestESyncConfigurationFromYAML(t *testing.T) {
 	assert.Len(t, clockChain.Structure, 2, "Should have exactly 2 subsystems (Leader and Follower)")
 
 	// Test eSync resolution logic
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 	hcm.pinCache, err = GetDpllPins()
 	assert.NoError(t, err, "Should get DPLL pins")
 	assert.NotNil(t, hcm.pinCache, "Pin cache should not be nil")
 
 	// Load hardware defaults for intel/e810 (same as used in the hwconfig.yaml).
 	// Vendor defaults are embedded; no filesystem setup needed.
-	hwSpec, err := LoadHardwareDefaults("intel/e810")
+	hwSpec, err := LoadHardwareDefaults("intel/e810", nil)
 	assert.NoError(t, err, "Should load hardware defaults")
 	assert.NotNil(t, hwSpec, "Hardware spec should not be nil")
 	assert.NotNil(t, hwSpec.PinEsyncCommands, "Pin eSync commands should be defined")
@@ -1401,7 +1402,7 @@ func TestHoldoverParametersExtraction(t *testing.T) {
 		},
 	}
 
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 
 	// Test extractHoldoverParameters
 	params := hcm.extractHoldoverParameters(hwConfig)

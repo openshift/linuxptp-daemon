@@ -158,15 +158,15 @@ func findLeadingInterfaceFromUpstreamPortWithResolver(upstreamPort string, resol
 }
 
 // ResolveClockChain resolves a minimal hardwareconfig by deriving structure and behavior
-// from ptpconfig and behavior profile templates
-func ResolveClockChain(hwConfig *ptpv2alpha1.HardwareConfig, ptpConfig *ptpv1.PtpConfig) (*ptpv2alpha1.HardwareConfig, error) {
+// from ptpconfig and behavior profile templates.
+// Board label remapping from ConfigMap will be applied if configMapLoader is set.
+func (hcm *HardwareConfigManager) ResolveClockChain(hwConfig *ptpv2alpha1.HardwareConfig, ptpConfig *ptpv1.PtpConfig) (*ptpv2alpha1.HardwareConfig, error) {
 	if hwConfig == nil {
 		return nil, fmt.Errorf("hardwareconfig is nil")
 	}
 
 	if hwConfig.Spec.Profile.ClockType == nil {
-		// No clockType specified, return as-is (no resolution needed)
-		return hwConfig, nil
+		return nil, fmt.Errorf("hardwareconfig %s has no clockType specified", hwConfig.Name)
 	}
 
 	clockType := *hwConfig.Spec.Profile.ClockType
@@ -213,13 +213,13 @@ func ResolveClockChain(hwConfig *ptpv2alpha1.HardwareConfig, ptpConfig *ptpv1.Pt
 
 		// Derive structure from ptpconfig if not explicitly provided
 		if subsystem.DPLL.NetworkInterface == "" || len(subsystem.DPLL.PhaseInputs) == 0 || len(subsystem.Ethernet) == 0 {
-			if err := deriveSubsystemStructure(subsystem, ptpProfile, clockType); err != nil {
+			if err := hcm.deriveSubsystemStructure(subsystem, ptpProfile, clockType); err != nil {
 				return nil, fmt.Errorf("failed to derive structure for subsystem %s: %w", subsystem.Name, err)
 			}
 		}
 
 		// Inject pins from delay compensation model into PhaseOutputs/PhaseInputs
-		if err := injectDelayCompensationPins(subsystem); err != nil {
+		if err := hcm.injectDelayCompensationPins(subsystem); err != nil {
 			glog.Warningf("Failed to inject delay compensation pins for subsystem %s: %v", subsystem.Name, err)
 			// Continue even if injection fails
 		}
@@ -227,7 +227,7 @@ func ResolveClockChain(hwConfig *ptpv2alpha1.HardwareConfig, ptpConfig *ptpv1.Pt
 
 	// Derive behavior from templates if not explicitly provided
 	if resolvedConfig.Spec.Profile.ClockChain.Behavior == nil {
-		if err := deriveBehavior(resolvedConfig, clockType); err != nil {
+		if err := hcm.deriveBehavior(resolvedConfig, clockType); err != nil {
 			return nil, fmt.Errorf("failed to derive behavior: %w", err)
 		}
 	}
@@ -257,7 +257,7 @@ func printResolvedHardwareConfig(hwConfig *ptpv2alpha1.HardwareConfig) {
 }
 
 // deriveSubsystemStructure derives DPLL and Ethernet configuration from ptpconfig and vendor defaults
-func deriveSubsystemStructure(subsystem *ptpv2alpha1.Subsystem, ptpProfile *ptpv1.PtpProfile, clockType string) error {
+func (hcm *HardwareConfigManager) deriveSubsystemStructure(subsystem *ptpv2alpha1.Subsystem, ptpProfile *ptpv1.PtpProfile, clockType string) error {
 	if ptpProfile == nil {
 		return fmt.Errorf("ptpProfile is required for structure derivation")
 	}
@@ -286,7 +286,7 @@ func deriveSubsystemStructure(subsystem *ptpv2alpha1.Subsystem, ptpProfile *ptpv
 	}
 
 	// Load behavior profile to get pin roles
-	behaviorTemplate, err := LoadBehaviorProfile(hwDefPath, clockType)
+	behaviorTemplate, err := LoadBehaviorProfile(hwDefPath, clockType, hcm.configMapLoader)
 	if err != nil {
 		return fmt.Errorf("failed to load behavior profile: %w", err)
 	}
@@ -327,14 +327,13 @@ func deriveSubsystemStructure(subsystem *ptpv2alpha1.Subsystem, ptpProfile *ptpv
 
 // injectDelayCompensationPins injects pins from delay compensation model into PhaseOutputs/PhaseInputs
 // if they don't already exist. This ensures pins referenced in delays.yaml are available for phase adjustment population.
-func injectDelayCompensationPins(subsystem *ptpv2alpha1.Subsystem) error {
+func (hcm *HardwareConfigManager) injectDelayCompensationPins(subsystem *ptpv2alpha1.Subsystem) error {
 	hwDefPath := strings.TrimSpace(subsystem.HardwareSpecificDefinitions)
 	if hwDefPath == "" {
 		return nil // No hardware definition, nothing to inject
 	}
 
-	// Load hardware defaults to get delay compensation model
-	hwDefaults, err := LoadHardwareDefaults(hwDefPath)
+	hwDefaults, err := hcm.getHardwareDefaults(hwDefPath)
 	if err != nil {
 		return fmt.Errorf("failed to load hardware defaults for %s: %w", hwDefPath, err)
 	}
@@ -457,7 +456,7 @@ func deepCopyAndResolveCondition(cond ptpv2alpha1.Condition, vars templateVariab
 }
 
 // deriveBehavior derives behavior section from templates
-func deriveBehavior(hwConfig *ptpv2alpha1.HardwareConfig, clockType string) error {
+func (hcm *HardwareConfigManager) deriveBehavior(hwConfig *ptpv2alpha1.HardwareConfig, clockType string) error {
 	clockChain := hwConfig.Spec.Profile.ClockChain
 
 	// If behavior is already provided, merge with templates (future enhancement)
@@ -480,7 +479,7 @@ func deriveBehavior(hwConfig *ptpv2alpha1.HardwareConfig, clockType string) erro
 		}
 
 		// Load behavior template
-		behaviorTemplate, err := LoadBehaviorProfile(hwDefPath, clockType)
+		behaviorTemplate, err := LoadBehaviorProfile(hwDefPath, clockType, hcm.configMapLoader)
 		if err != nil {
 			return fmt.Errorf("failed to load behavior profile for %s/%s: %w", hwDefPath, clockType, err)
 		}

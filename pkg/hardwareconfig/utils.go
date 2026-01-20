@@ -176,7 +176,7 @@ type ClockIDTransformer func(serialNumber string) (uint64, error)
 // If hwDefPath is empty or invalid, falls back to EUI-64 (generic).
 func getClockIDTransformer(hwDefPath string) ClockIDTransformer {
 	if hwDefPath != "" {
-		spec, err := LoadHardwareDefaults(hwDefPath)
+		spec, err := LoadHardwareDefaults(hwDefPath, nil)
 		if err == nil && spec != nil && spec.ClockIDTransformation != nil {
 			method := spec.ClockIDTransformation.Method
 			switch method {

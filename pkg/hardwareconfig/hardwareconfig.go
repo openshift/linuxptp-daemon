@@ -13,6 +13,7 @@ import (
 	"github.com/golang/glog"
 	dpllcfg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"k8s.io/client-go/kubernetes"
 
 	// loader is part of this package (vendor_loader.go)
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -213,13 +214,15 @@ type HardwareConfigManager struct {
 	clockIDCache map[string]uint64
 	// current PtpConfig used for resolving clock chains (optional)
 	ptpConfig *ptpv1.PtpConfig
-	mu        sync.RWMutex
-	cond      *sync.Cond
-	ready     bool
+	// ConfigMap loader for board label remapping (optional, can be nil)
+	configMapLoader *BoardLabelMapLoader
+	mu              sync.RWMutex
+	cond            *sync.Cond
+	ready           bool
 }
 
-// NewHardwareConfigManager creates a new hardware config manager
-func NewHardwareConfigManager() *HardwareConfigManager {
+// NewHardwareConfigManager creates a new hardware config manager.
+func NewHardwareConfigManager(kubeClient kubernetes.Interface, namespace string) *HardwareConfigManager {
 	hcm := &HardwareConfigManager{
 		hardwareConfigs: make([]enrichedHardwareConfig, 0),
 		pinApplier:      func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(&cmds) },
@@ -234,7 +237,17 @@ func NewHardwareConfigManager() *HardwareConfigManager {
 		},
 	}
 	hcm.cond = sync.NewCond(&hcm.mu)
+
+	// Set up ConfigMap loader for board label remapping
+	configMapLoader := NewBoardLabelMapLoader(kubeClient, namespace)
+	hcm.configMapLoader = configMapLoader
+
 	return hcm
+}
+
+// SetConfigMapLoader sets the ConfigMap loader for board label remapping (optional)
+func (hcm *HardwareConfigManager) SetConfigMapLoader(loader *BoardLabelMapLoader) {
+	hcm.configMapLoader = loader
 }
 
 // getClockIDCached returns the clock ID for an interface, using cache to avoid repeated resolution
@@ -306,7 +319,7 @@ func (hcm *HardwareConfigManager) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.H
 			hcm.mu.RLock()
 			ptpConfig := hcm.ptpConfig
 			hcm.mu.RUnlock()
-			resolvedConfig, err = ResolveClockChain(&hwConfig, ptpConfig)
+			resolvedConfig, err = hcm.ResolveClockChain(&hwConfig, ptpConfig)
 			if err != nil {
 				return fmt.Errorf("failed to resolve clock chain for hardware config %s: %w", hwConfig.Name, err)
 			}
@@ -717,7 +730,19 @@ func (hcm *HardwareConfigManager) getHardwareDefaults(hwDefPath string) (*Hardwa
 	if ok {
 		return spec, nil
 	}
-	loaded, err := LoadHardwareDefaults(hwDefPath)
+
+	// Load board label map if ConfigMap loader is available
+	var labelMap BoardLabelMap
+	if hcm.configMapLoader != nil {
+		var err error
+		labelMap, err = hcm.configMapLoader.LoadBoardLabelMap(hwDefPath)
+		if err != nil {
+			// Log but continue - remapping is optional (ConfigMap not found is not an error)
+			glog.Warningf("Failed to load board label map for %s: %v (using embedded defaults)", hwDefPath, err)
+		}
+	}
+
+	loaded, err := LoadHardwareDefaults(hwDefPath, labelMap)
 	if err != nil {
 		return nil, err
 	}

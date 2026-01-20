@@ -20,10 +20,22 @@ import (
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/yaml"
 )
 
 // vendor defaults are embedded; no filesystem setup needed
+
+// NewDaemonForTests creates a Daemon instance for testing
+func NewDaemonForTests(tracker *ReadyTracker, processManager *ProcessManager) *Daemon {
+	tracker.processManager = processManager
+	fakeClient := fake.NewSimpleClientset()
+	return &Daemon{
+		readyTracker:          tracker,
+		processManager:        processManager,
+		hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(fakeClient, "default"),
+	}
+}
 
 func loadProfile(path string) (*ptpv1.PtpProfile, error) {
 	profileData, err := os.ReadFile(path)
@@ -542,7 +554,8 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 		defer func() { vTbcHasHardwareConfig = oldValue }()
 
 		// Create a mock Daemon with hardwareConfigManager and set up hardware config
-		hcm := hardwareconfig.NewHardwareConfigManager()
+		fakeClient := fake.NewSimpleClientset()
+		hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 		err := setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 		assert.NoError(t, err, "Should be able to set up hardware config")
 		mockDaemon := &Daemon{
@@ -623,7 +636,8 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 		defer func() { vTbcHasHardwareConfig = oldValue }()
 
 		// Create a mock Daemon with hardwareConfigManager and set up hardware config
-		hcm := hardwareconfig.NewHardwareConfigManager()
+		fakeClient := fake.NewSimpleClientset()
+		hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 		err := setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 		assert.NoError(t, err, "Should be able to set up hardware config")
 		mockDaemon := &Daemon{
@@ -867,7 +881,8 @@ func setupHardwareConfigForTest(hcm *hardwareconfig.HardwareConfigManager, profi
 // Creates a hardware config with a PTP source that monitors ens4f0, then initializes the detector
 func createMockPTPStateDetectorForHardwareConfig() *hardwareconfig.PTPStateDetector {
 	// Create a detector using the normal constructor - this properly initializes ptp4lExtractor
-	hcm := hardwareconfig.NewHardwareConfigManager()
+	fakeClient := fake.NewSimpleClientset()
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 	_ = setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 
 	// Create detector - it will automatically populate monitoredPorts from the hardware config
@@ -925,7 +940,8 @@ func TestProcessTBCTransitionHardwareConfig_HardwareConfigIntegration(t *testing
 	assert.Contains(t, ptpSource.PTPTimeReceivers, "ens4f1", "Expected ens4f1 to be monitored")
 
 	// Create hardware config manager and verify it works with our config
-	hcm := hardwareconfig.NewHardwareConfigManager()
+	fakeClient := fake.NewSimpleClientset()
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 	err = hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig})
 	assert.NoError(t, err, "Should be able to update hardware config")
 
@@ -998,7 +1014,8 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 	assert.NoError(t, err, "Should be able to parse hardware config YAML")
 
 	// Create hardware config manager and initialize it
-	hcm := hardwareconfig.NewHardwareConfigManager()
+	fakeClient := fake.NewSimpleClientset()
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 	err = hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig})
 	assert.NoError(t, err, "Should be able to update hardware config")
 

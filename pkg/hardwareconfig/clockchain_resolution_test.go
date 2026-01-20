@@ -9,6 +9,7 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 )
 
@@ -143,8 +144,12 @@ func TestClockChainResolution(t *testing.T) {
 	}
 	assert.Contains(t, upstreamPorts, "eno2", "Should find eno2 as upstream port")
 
+	// Set up fake ConfigMap loader for tests (reused later for hcm)
+	fakeClient := fake.NewSimpleClientset()
+	loader := NewBoardLabelMapLoader(fakeClient, "default")
+
 	// Load behavior profile template
-	behaviorTemplate, err := LoadBehaviorProfile("intel/e825", *hwConfig.Spec.Profile.ClockType)
+	behaviorTemplate, err := LoadBehaviorProfile("intel/e825", *hwConfig.Spec.Profile.ClockType, loader)
 	assert.NoError(t, err)
 	assert.NotNil(t, behaviorTemplate, "Behavior template should be loaded")
 	if behaviorTemplate == nil {
@@ -171,7 +176,8 @@ func TestClockChainResolution(t *testing.T) {
 	defer ResetLeadingInterfaceResolver()
 
 	// Resolve clock chain (this is what we're testing)
-	resolvedConfig, err := ResolveClockChain(hwConfig, ptpConfig)
+	hcm := NewHardwareConfigManager(fakeClient, "default")
+	resolvedConfig, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
 	assert.NoError(t, err)
 	assert.NotNil(t, resolvedConfig)
 	if resolvedConfig == nil {
