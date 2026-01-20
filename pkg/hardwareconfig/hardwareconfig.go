@@ -770,6 +770,21 @@ func (hcm *HardwareConfigManager) buildESyncPinCommands(subsystem ptpv2alpha1.Su
 	return commands, nil
 }
 
+// roundToGranularity rounds a phase adjustment value to the nearest multiple of granularity.
+// If gran is 0 or 1, returns the value unchanged (no rounding needed).
+func roundToGranularity(value int32, gran uint32) int32 {
+	if gran <= 1 {
+		return value
+	}
+
+	granInt32 := int32(gran)
+	// Round to nearest and return according to the sign
+	if value >= 0 {
+		return ((value + granInt32/2) / granInt32) * granInt32
+	}
+	return ((value - granInt32/2) / granInt32) * granInt32
+}
+
 // buildPhaseAdjustmentCommands builds DPLL commands for phase adjustments from populated PhaseAdjustment fields
 func (hcm *HardwareConfigManager) buildPhaseAdjustmentCommands(subsystem ptpv2alpha1.Subsystem, hwDefPath string) ([]dpll.PinParentDeviceCtl, error) {
 	if hcm.pinCache == nil {
@@ -826,6 +841,15 @@ func (hcm *HardwareConfigManager) buildPhaseAdjustmentCommands(subsystem ptpv2al
 			// Convert to int32 and validate against pin limits
 			adjustmentInt32 := int32(totalAdjustment)
 
+			// Round to granularity first (before clamping) to ensure we work with granularity-aligned values
+			originalAdjustment := adjustmentInt32
+
+			adjustmentInt32 = roundToGranularity(adjustmentInt32, pin.PhaseAdjustGran)
+			if adjustmentInt32 != originalAdjustment {
+				glog.V(3).Infof("Pin %s phase adjustment rounded from %d to %d ps (granularity: %d ps)",
+					boardLabel, originalAdjustment, adjustmentInt32, pin.PhaseAdjustGran)
+			}
+
 			// Clamp to pin's min/max range
 			if pin.PhaseAdjustMin != 0 && adjustmentInt32 < pin.PhaseAdjustMin {
 				glog.Warningf("Pin %s phase adjustment %d ps clamped to minimum %d ps", boardLabel, adjustmentInt32, pin.PhaseAdjustMin)
@@ -834,16 +858,6 @@ func (hcm *HardwareConfigManager) buildPhaseAdjustmentCommands(subsystem ptpv2al
 			if pin.PhaseAdjustMax != 0 && adjustmentInt32 > pin.PhaseAdjustMax {
 				glog.Warningf("Pin %s phase adjustment %d ps clamped to maximum %d ps", boardLabel, adjustmentInt32, pin.PhaseAdjustMax)
 				adjustmentInt32 = pin.PhaseAdjustMax
-			}
-
-			// Round to granularity if specified
-			if pin.PhaseAdjustGran > 1 {
-				rounded := (adjustmentInt32 / int32(pin.PhaseAdjustGran)) * int32(pin.PhaseAdjustGran)
-				if adjustmentInt32 != rounded {
-					glog.V(3).Infof("Pin %s phase adjustment rounded from %d to %d ps (granularity: %d ps)",
-						boardLabel, adjustmentInt32, rounded, pin.PhaseAdjustGran)
-					adjustmentInt32 = rounded
-				}
 			}
 
 			// Build command
