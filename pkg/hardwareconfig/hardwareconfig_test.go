@@ -1459,3 +1459,346 @@ func TestHoldoverParametersExtraction(t *testing.T) {
 
 	t.Logf("✓ Holdover parameter extraction and retrieval working correctly")
 }
+
+// TestRoundToGranularity tests the roundToGranularity function with various inputs
+func TestRoundToGranularity(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    int32
+		gran     uint32
+		expected int32
+	}{
+		// No rounding needed (gran <= 1)
+		{
+			name:     "granularity 0 - no rounding",
+			value:    1234,
+			gran:     0,
+			expected: 1234,
+		},
+		{
+			name:     "granularity 1 - no rounding",
+			value:    1234,
+			gran:     1,
+			expected: 1234,
+		},
+		// Positive values with gran=2500 (from perla2-pins.json)
+		{
+			name:     "positive value already aligned",
+			value:    5000,
+			gran:     2500,
+			expected: 5000,
+		},
+		{
+			name:     "positive value round down",
+			value:    6000,
+			gran:     2500,
+			expected: 5000, // (6000 + 1250) / 2500 * 2500 = 7250 / 2500 * 2500 = 2 * 2500 = 5000
+		},
+		{
+			name:     "positive value round up",
+			value:    7000,
+			gran:     2500,
+			expected: 7500, // (7000 + 1250) / 2500 * 2500 = 8250 / 2500 * 2500 = 3 * 2500 = 7500
+		},
+		{
+			name:     "positive value near boundary",
+			value:    6250,
+			gran:     2500,
+			expected: 7500, // (6250 + 1250) / 2500 * 2500 = 7500 / 2500 * 2500 = 3 * 2500 = 7500
+		},
+		{
+			name:     "positive value below boundary",
+			value:    6249,
+			gran:     2500,
+			expected: 5000, // (6249 + 1250) / 2500 * 2500 = 7499 / 2500 * 2500 = 2 * 2500 = 5000
+		},
+		// Negative values with gran=2500
+		{
+			name:     "negative value already aligned",
+			value:    -5000,
+			gran:     2500,
+			expected: -5000,
+		},
+		{
+			name:     "negative value round down (toward more negative)",
+			value:    -6000,
+			gran:     2500,
+			expected: -5000, // (-6000 - 1250) / 2500 * 2500 = -7250 / 2500 * 2500 = -2 * 2500 = -5000
+		},
+		{
+			name:     "negative value round up (toward zero)",
+			value:    -7000,
+			gran:     2500,
+			expected: -7500, // (-7000 - 1250) / 2500 * 2500 = -8250 / 2500 * 2500 = -3 * 2500 = -7500
+		},
+		{
+			name:     "negative value near boundary",
+			value:    -6250,
+			gran:     2500,
+			expected: -7500, // (-6250 - 1250) / 2500 * 2500 = -7500 / 2500 * 2500 = -3 * 2500 = -7500
+		},
+		{
+			name:     "negative value above boundary",
+			value:    -6249,
+			gran:     2500,
+			expected: -5000, // (-6249 - 1250) / 2500 * 2500 = -7499 / 2500 * 2500 = -2 * 2500 = -5000
+		},
+		// Zero
+		{
+			name:     "zero value",
+			value:    0,
+			gran:     2500,
+			expected: 0,
+		},
+		// Granularity 1600 (from perla2-pins.json)
+		{
+			name:     "granularity 1600 - positive round up",
+			value:    2000,
+			gran:     1600,
+			expected: 1600, // (2000 + 800) / 1600 * 1600 = 2800 / 1600 * 1600 = 1 * 1600 = 1600
+		},
+		{
+			name:     "granularity 1600 - positive round up to next",
+			value:    2500,
+			gran:     1600,
+			expected: 3200, // (2500 + 800) / 1600 * 1600 = 3300 / 1600 * 1600 = 2 * 1600 = 3200
+		},
+		{
+			name:     "granularity 1600 - negative",
+			value:    -2000,
+			gran:     1600,
+			expected: -1600, // (-2000 - 800) / 1600 * 1600 = -2800 / 1600 * 1600 = -1 * 1600 = -1600
+		},
+		// Edge cases
+		{
+			name:     "large positive value",
+			value:    1000000,
+			gran:     2500,
+			expected: 1000000, // (1000000 + 1250) / 2500 * 2500 = 1001250 / 2500 * 2500 = 400 * 2500 = 1000000
+		},
+		{
+			name:     "large negative value",
+			value:    -1000000,
+			gran:     2500,
+			expected: -1000000, // (-1000000 - 1250) / 2500 * 2500 = -1001250 / 2500 * 2500 = -400 * 2500 = -1000000
+		},
+		{
+			name:     "small value below granularity",
+			value:    1000,
+			gran:     2500,
+			expected: 0, // (1000 + 1250) / 2500 * 2500 = 2250 / 2500 * 2500 = 0 * 2500 = 0
+		},
+		{
+			name:     "small negative value above -granularity",
+			value:    -1000,
+			gran:     2500,
+			expected: 0, // (-1000 - 1250) / 2500 * 2500 = -2250 / 2500 * 2500 = 0 * 2500 = 0
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := roundToGranularity(tt.value, tt.gran)
+			assert.Equal(t, tt.expected, result,
+				"roundToGranularity(%d, %d) = %d, expected %d", tt.value, tt.gran, result, tt.expected)
+			// Verify result is a multiple of granularity (if gran > 1)
+			if tt.gran > 1 && result != 0 {
+				remainder := result % int32(tt.gran)
+				if remainder < 0 {
+					remainder = -remainder
+				}
+				assert.Equal(t, int32(0), remainder,
+					"Result %d should be a multiple of granularity %d", result, tt.gran)
+			}
+		})
+	}
+}
+
+// TestBuildPhaseAdjustmentCommandsWithGranularity tests phase adjustment command building
+// using real pin data from perla2-pins.json with actual granularity values
+func TestBuildPhaseAdjustmentCommandsWithGranularity(t *testing.T) {
+	// Load pins from perla2-pins.json
+	mockGetter, err := CreateMockDpllPinsGetterFromFile("../daemon/testdata/perla2-pins.json")
+	if !assert.NoError(t, err, "Failed to create mock getter from perla2-pins.json") {
+		t.FailNow()
+	}
+	SetDpllPinsGetter(mockGetter)
+	defer TeardownMockDpllPinsForTests()
+
+	// Get pin cache to verify pins loaded
+	cache, err := GetDpllPins()
+	if !assert.NoError(t, err, "Failed to get DPLL pins") {
+		return
+	}
+
+	// Get clock ID from cache
+	var clockID uint64
+	for cid := range cache.Pins {
+		clockID = cid
+		break
+	}
+	t.Logf("Using clock ID: %#x", clockID)
+
+	// Verify pins with granularity exist
+	pinsWithGran := []struct {
+		boardLabel string
+		gran       uint32
+	}{
+		{"OCP1_CLK", 2500},
+		{"OCP2_CLK", 2500},
+		{"GNR_D_SDP3", 2500},
+		{"GNR_D_SDP1", 2500},
+		{"NAC0_CLK_REF_SYNCE", 1600},
+		{"NAC0_TIME_REF", 1600},
+	}
+
+	for _, pinInfo := range pinsWithGran {
+		pin, found := cache.GetPin(clockID, pinInfo.boardLabel)
+		if !assert.True(t, found, "Pin %s should exist", pinInfo.boardLabel) {
+			continue
+		}
+		assert.Equal(t, pinInfo.gran, pin.PhaseAdjustGran,
+			"Pin %s should have granularity %d", pinInfo.boardLabel, pinInfo.gran)
+		t.Logf("✓ Pin %s has granularity %d", pinInfo.boardLabel, pin.PhaseAdjustGran)
+	}
+
+	// Create hardware config manager
+	hcm := NewHardwareConfigManager()
+	defer hcm.resetExecutors()
+
+	// Set pin cache
+	hcm.pinCache = cache
+
+	// Test cases with different adjustment values that need rounding
+	tests := []struct {
+		name        string
+		boardLabel  string
+		adjustment  int64
+		expected    int32 // Expected after rounding
+		description string
+	}{
+		{
+			name:        "OCP1_CLK - value needs rounding up",
+			boardLabel:  "OCP1_CLK",
+			adjustment:  1234, // Should round to 0 or 2500
+			expected:    0,    // (1234 + 1250) / 2500 * 2500 = 0
+			description: "Small positive value rounds to 0",
+		},
+		{
+			name:        "OCP1_CLK - value needs rounding to 2500",
+			boardLabel:  "OCP1_CLK",
+			adjustment:  3000, // Should round to 2500
+			expected:    2500, // (3000 + 1250) / 2500 * 2500 = 2500
+			description: "Value rounds to nearest multiple",
+		},
+		{
+			name:        "OCP1_CLK - value already aligned",
+			boardLabel:  "OCP1_CLK",
+			adjustment:  5000, // Already a multiple of 2500
+			expected:    5000,
+			description: "Value already aligned with granularity",
+		},
+		{
+			name:        "OCP1_CLK - negative value rounds correctly",
+			boardLabel:  "OCP1_CLK",
+			adjustment:  -1234, // Should round to 0 or -2500
+			expected:    0,     // (-1234 - 1250) / 2500 * 2500 = 0
+			description: "Small negative value rounds to 0",
+		},
+		{
+			name:        "OCP1_CLK - negative value rounds to -2500",
+			boardLabel:  "OCP1_CLK",
+			adjustment:  -3000, // Should round to -2500
+			expected:    -2500, // (-3000 - 1250) / 2500 * 2500 = -2500
+			description: "Negative value rounds correctly",
+		},
+		{
+			name:        "NAC0_CLK_REF_SYNCE - granularity 1600",
+			boardLabel:  "NAC0_CLK_REF_SYNCE",
+			adjustment:  2000, // Should round to 1600 or 3200
+			expected:    1600, // (2000 + 800) / 1600 * 1600 = 1600
+			description: "Value rounds to 1600 granularity",
+		},
+		{
+			name:        "NAC0_CLK_REF_SYNCE - rounds to 3200",
+			boardLabel:  "NAC0_CLK_REF_SYNCE",
+			adjustment:  2500, // Should round to 1600 or 3200
+			expected:    3200, // (2500 + 800) / 1600 * 1600 = 3200
+			description: "Value rounds up to next multiple",
+		},
+		{
+			name:        "GNR_D_SDP3 - existing phaseAdjust value",
+			boardLabel:  "GNR_D_SDP3",
+			adjustment:  7500, // Already aligned (from perla2-pins.json)
+			expected:    7500,
+			description: "Existing value already respects granularity",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Verify pin exists
+			pin, found := cache.GetPin(clockID, tt.boardLabel)
+			if !assert.True(t, found, "Pin %s should exist", tt.boardLabel) {
+				return
+			}
+
+			// Create subsystem with phase adjustment
+			subsystem := ptpv2alpha1.Subsystem{
+				Name: "test-subsystem",
+				DPLL: ptpv2alpha1.DPLL{
+					NetworkInterface: "eno5", // Dummy interface
+					PhaseOutputs: map[string]ptpv2alpha1.PinConfig{
+						tt.boardLabel: {
+							PhaseAdjustment: &tt.adjustment,
+						},
+					},
+				},
+				Ethernet: []ptpv2alpha1.Ethernet{
+					{
+						Ports: []string{"eno5"},
+					},
+				},
+			}
+
+			// Mock clock ID resolution
+			hcm.clockIDCache = map[string]uint64{
+				"eno5:intel/e825": clockID,
+			}
+
+			// Build phase adjustment commands
+			commands, bldErr := hcm.buildPhaseAdjustmentCommands(subsystem, "intel/e825")
+			if !assert.NoError(t, bldErr, "buildPhaseAdjustmentCommands should succeed") {
+				return
+			}
+
+			// Verify command was created
+			if !assert.Len(t, commands, 1, "Should create one command") {
+				return
+			}
+
+			cmd := commands[0]
+			assert.Equal(t, pin.ID, cmd.ID, "Command should target correct pin ID")
+			if !assert.NotNil(t, cmd.PhaseAdjust, "PhaseAdjust should be set") {
+				return
+			}
+
+			// Verify rounded value matches expected
+			assert.Equal(t, tt.expected, *cmd.PhaseAdjust,
+				"Phase adjustment should be rounded correctly. %s", tt.description)
+
+			// Verify result is a multiple of granularity
+			if pin.PhaseAdjustGran > 1 {
+				remainder := *cmd.PhaseAdjust % int32(pin.PhaseAdjustGran)
+				if remainder < 0 {
+					remainder = -remainder
+				}
+				assert.Equal(t, int32(0), remainder,
+					"Result %d should be a multiple of granularity %d", *cmd.PhaseAdjust, pin.PhaseAdjustGran)
+			}
+
+			t.Logf("✓ %s: adjustment %d -> %d (granularity: %d)",
+				tt.boardLabel, tt.adjustment, *cmd.PhaseAdjust, pin.PhaseAdjustGran)
+		})
+	}
+}
