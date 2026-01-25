@@ -970,7 +970,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 					}
 					output = pm.ProcessLog(p.name, output)
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
-					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
+					output = p.replaceClockID(output)
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
 						fmt.Printf("%s\n", output)
 					}
