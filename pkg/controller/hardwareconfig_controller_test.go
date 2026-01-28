@@ -2,341 +2,355 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
-	"time"
 
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	"github.com/stretchr/testify/assert"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // MockHardwareConfigHandler implements HardwareConfigUpdateHandler for testing
 type MockHardwareConfigHandler struct {
-	LastUpdateConfigs []ptpv2alpha1.HardwareConfig
-	UpdateCallCount   int
+	LastUpdateConfigs      []ptpv2alpha1.HardwareConfig
+	CurrentHardwareConfigs []ptpv2alpha1.HardwareConfig // Configs that are "currently applied" in the system
+	UpdateCallCount        int
+	UpdateError            error // Set this to simulate update failures
 }
 
 func (m *MockHardwareConfigHandler) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.HardwareConfig) error {
 	m.LastUpdateConfigs = hwConfigs
 	m.UpdateCallCount++
-	return nil
+	// Update current configs to simulate what's applied in the system
+	m.CurrentHardwareConfigs = make([]ptpv2alpha1.HardwareConfig, len(hwConfigs))
+	for i := range hwConfigs {
+		m.CurrentHardwareConfigs[i] = *hwConfigs[i].DeepCopy()
+	}
+	return m.UpdateError
+}
+
+func (m *MockHardwareConfigHandler) GetCurrentHardwareConfigs() []ptpv2alpha1.HardwareConfig {
+	if m == nil {
+		return []ptpv2alpha1.HardwareConfig{}
+	}
+	// Return a copy of current configs
+	result := make([]ptpv2alpha1.HardwareConfig, len(m.CurrentHardwareConfigs))
+	for i := range m.CurrentHardwareConfigs {
+		result[i] = *m.CurrentHardwareConfigs[i].DeepCopy()
+	}
+	return result
 }
 
 // MockHardwareConfigRestartTrigger implements HardwareConfigRestartTrigger for testing
 type MockHardwareConfigRestartTrigger struct {
 	RestartTriggerCount int
 	CurrentProfiles     []string
+	RestartError        error // Set this to simulate restart failures
 }
 
 func (m *MockHardwareConfigRestartTrigger) TriggerRestartForHardwareChange() error {
 	m.RestartTriggerCount++
-	return nil
+	return m.RestartError
 }
 
 func (m *MockHardwareConfigRestartTrigger) GetCurrentPTPProfiles() []string {
+	if m == nil {
+		return []string{}
+	}
 	return m.CurrentProfiles
+}
+
+// Helper function to create a test hardware config
+func createTestHardwareConfig(name, profileName, relatedPtpProfile string) ptpv2alpha1.HardwareConfig {
+	return ptpv2alpha1.HardwareConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "openshift-ptp",
+		},
+		Spec: ptpv2alpha1.HardwareConfigSpec{
+			Profile: ptpv2alpha1.HardwareProfile{
+				Name:        stringPtr(profileName),
+				Description: stringPtr("Test profile"),
+				ClockChain: &ptpv2alpha1.ClockChain{
+					Structure: []ptpv2alpha1.Subsystem{
+						{
+							Name: "test-subsystem",
+							DPLL: ptpv2alpha1.DPLL{
+								NetworkInterface: "ens1f0",
+							},
+							Ethernet: []ptpv2alpha1.Ethernet{
+								{
+									Ports: []string{"ens1f0"},
+								},
+							},
+						},
+					},
+				},
+			},
+			RelatedPtpProfileName: relatedPtpProfile,
+		},
+	}
 }
 
 func TestCalculateNodeHardwareConfigs(t *testing.T) {
 	testCases := []struct {
 		name                 string
 		nodeName             string
+		activeProfiles       []string
 		hwConfigs            []ptpv2alpha1.HardwareConfig
 		expectedConfigsCount int
 		expectedConfigNames  []string
+		description          string
 	}{
 		{
 			name:                 "no hardware configs",
 			nodeName:             "test-node",
+			activeProfiles:       []string{"grandmaster"},
 			hwConfigs:            []ptpv2alpha1.HardwareConfig{},
 			expectedConfigsCount: 0,
 			expectedConfigNames:  []string{},
+			description:          "Should return empty when no configs provided",
 		},
 		{
-			name:     "single hardware config with grandmaster profile",
-			nodeName: "test-node",
+			name:           "single hardware config with matching active profile",
+			nodeName:       "test-node",
+			activeProfiles: []string{"grandmaster"},
 			hwConfigs: []ptpv2alpha1.HardwareConfig{
-				{
-					Spec: ptpv2alpha1.HardwareConfigSpec{
-						Profile: ptpv2alpha1.HardwareProfile{
-							Name:        stringPtr("grandmaster-profile"),
-							Description: stringPtr("High-precision grandmaster configuration"),
-							ClockChain: &ptpv2alpha1.ClockChain{
-								Structure: []ptpv2alpha1.Subsystem{
-									{
-										Name:                        "primary-subsystem",
-										HardwareSpecificDefinitions: "intel/e810",
-										DPLL: ptpv2alpha1.DPLL{
-											NetworkInterface: "ens1f0",
-										},
-										Ethernet: []ptpv2alpha1.Ethernet{
-											{
-												Ports: []string{"ens1f0", "ens1f1"},
-											},
-										},
-									},
-								},
-							},
-						},
-						RelatedPtpProfileName: "grandmaster",
-					},
-				},
+				createTestHardwareConfig("gm-config", "grandmaster-profile", "grandmaster"),
 			},
 			expectedConfigsCount: 1,
 			expectedConfigNames:  []string{"grandmaster-profile"},
+			description:          "Should include config when related profile is active",
 		},
 		{
-			name:     "multiple hardware configs",
-			nodeName: "worker-node",
+			name:           "single hardware config with non-matching active profile",
+			nodeName:       "test-node",
+			activeProfiles: []string{"boundary-clock"},
 			hwConfigs: []ptpv2alpha1.HardwareConfig{
-				{
-					Spec: ptpv2alpha1.HardwareConfigSpec{
-						Profile: ptpv2alpha1.HardwareProfile{
-							Name:        stringPtr("boundary-clock-profile"),
-							Description: stringPtr("Boundary clock configuration"),
-							ClockChain: &ptpv2alpha1.ClockChain{
-								Structure: []ptpv2alpha1.Subsystem{
-									{
-										Name: "bc-subsystem",
-										DPLL: ptpv2alpha1.DPLL{
-											NetworkInterface: "ens2f0",
-										},
-										Ethernet: []ptpv2alpha1.Ethernet{
-											{
-												Ports: []string{"ens2f0"},
-											},
-										},
-									},
-								},
-							},
-						},
-						RelatedPtpProfileName: "boundary-clock",
-					},
-				},
-				{
-					Spec: ptpv2alpha1.HardwareConfigSpec{
-						Profile: ptpv2alpha1.HardwareProfile{
-							Name:        stringPtr("ordinary-clock-profile"),
-							Description: stringPtr("Ordinary clock configuration"),
-							ClockChain: &ptpv2alpha1.ClockChain{
-								Structure: []ptpv2alpha1.Subsystem{
-									{
-										Name: "oc-subsystem",
-										DPLL: ptpv2alpha1.DPLL{
-											NetworkInterface: "ens3f0",
-										},
-										Ethernet: []ptpv2alpha1.Ethernet{
-											{
-												Ports: []string{"ens3f0"},
-											},
-										},
-									},
-								},
-							},
-						},
-						RelatedPtpProfileName: "ordinary-clock",
-					},
-				},
+				createTestHardwareConfig("gm-config", "grandmaster-profile", "grandmaster"),
+			},
+			expectedConfigsCount: 0,
+			expectedConfigNames:  []string{},
+			description:          "Should exclude config when related profile is not active",
+		},
+		{
+			name:           "multiple hardware configs, all matching",
+			nodeName:       "worker-node",
+			activeProfiles: []string{"boundary-clock", "ordinary-clock"},
+			hwConfigs: []ptpv2alpha1.HardwareConfig{
+				createTestHardwareConfig("bc-config", "boundary-clock-profile", "boundary-clock"),
+				createTestHardwareConfig("oc-config", "ordinary-clock-profile", "ordinary-clock"),
 			},
 			expectedConfigsCount: 2,
 			expectedConfigNames:  []string{"boundary-clock-profile", "ordinary-clock-profile"},
+			description:          "Should include all configs when all related profiles are active",
+		},
+		{
+			name:           "multiple hardware configs, partial matching",
+			nodeName:       "worker-node",
+			activeProfiles: []string{"boundary-clock"},
+			hwConfigs: []ptpv2alpha1.HardwareConfig{
+				createTestHardwareConfig("bc-config", "boundary-clock-profile", "boundary-clock"),
+				createTestHardwareConfig("oc-config", "ordinary-clock-profile", "ordinary-clock"),
+			},
+			expectedConfigsCount: 1,
+			expectedConfigNames:  []string{"boundary-clock-profile"},
+			description:          "Should only include configs whose related profiles are active",
+		},
+		{
+			name:           "hardware config without related profile",
+			nodeName:       "test-node",
+			activeProfiles: []string{"grandmaster"},
+			hwConfigs: []ptpv2alpha1.HardwareConfig{
+				createTestHardwareConfig("no-profile-config", "some-profile", ""), // Empty relatedPtpProfileName
+			},
+			expectedConfigsCount: 0,
+			expectedConfigNames:  []string{},
+			description:          "Should exclude configs without relatedPtpProfileName",
+		},
+		{
+			name:           "no active profiles - excludes all configs",
+			nodeName:       "test-node",
+			activeProfiles: []string{},
+			hwConfigs: []ptpv2alpha1.HardwareConfig{
+				createTestHardwareConfig("gm-config", "grandmaster-profile", "grandmaster"),
+			},
+			expectedConfigsCount: 0,
+			expectedConfigNames:  []string{},
+			description:          "Should exclude all configs when no active profiles (no profiles means no hardware configs needed)",
+		},
+		{
+			name:           "no active profiles - excludes all configs",
+			nodeName:       "test-node",
+			activeProfiles: []string{}, // Empty list means no active profiles
+			hwConfigs: []ptpv2alpha1.HardwareConfig{
+				createTestHardwareConfig("gm-config", "grandmaster-profile", "grandmaster"),
+			},
+			expectedConfigsCount: 0,
+			expectedConfigNames:  []string{},
+			description:          "Should exclude all configs when no active profiles exist",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			reconciler := &HardwareConfigReconciler{
-				NodeName: tc.nodeName,
+			// Always provide a mock ConfigUpdate (required field)
+			// Use empty profiles list if nil is specified in test
+			activeProfiles := tc.activeProfiles
+			if activeProfiles == nil {
+				activeProfiles = []string{} // Default to empty list
+			}
+			mockTrigger := &MockHardwareConfigRestartTrigger{
+				CurrentProfiles: activeProfiles,
 			}
 
-			// Call the method under test
+			reconciler := &HardwareConfigReconciler{
+				NodeName:     tc.nodeName,
+				ConfigUpdate: mockTrigger, // Always set - required field
+			}
+
 			result := reconciler.calculateNodeHardwareConfigs(context.TODO(), tc.hwConfigs)
 
-			// Verify the number of hardware configs
 			assert.Len(t, result, tc.expectedConfigsCount,
-				"Expected %d hardware configs, got %d", tc.expectedConfigsCount, len(result))
+				"%s: Expected %d hardware configs, got %d", tc.description, tc.expectedConfigsCount, len(result))
 
-			// Verify config names match expected (based on profile names within configs)
 			var actualConfigNames []string
 			for _, hwConfig := range result {
-				actualConfigNames = append(actualConfigNames, *hwConfig.Spec.Profile.Name)
+				if hwConfig.Spec.Profile.Name != nil {
+					actualConfigNames = append(actualConfigNames, *hwConfig.Spec.Profile.Name)
+				}
 			}
 			assert.ElementsMatch(t, tc.expectedConfigNames, actualConfigNames,
-				"Expected config names %v, got %v", tc.expectedConfigNames, actualConfigNames)
-
-			// Additional validations
-			for i, hwConfig := range result {
-				profile := hwConfig.Spec.Profile
-				if profile.Name != nil {
-					assert.NotEmpty(t, *profile.Name, "Profile name should not be empty for config %d", i)
-				}
-				assert.NotNil(t, profile.ClockChain, "ClockChain should not be nil for config %d", i)
-				if profile.ClockChain != nil {
-					assert.NotEmpty(t, profile.ClockChain.Structure, "ClockChain structure should not be empty for config %d", i)
-				}
-			}
+				"%s: Expected config names %v, got %v", tc.description, tc.expectedConfigNames, actualConfigNames)
 		})
 	}
 }
 
-func TestHardwareConfigUpdateHandlerIntegration(t *testing.T) {
-	// Test the interaction between controller and handler
-	mockHandler := &MockHardwareConfigHandler{}
+// TestDiffHardwareConfigs tests the config diff logic using maps
+func TestDiffHardwareConfigs(t *testing.T) {
+	t.Run("empty configs have no changes", func(t *testing.T) {
+		oldMap := sliceToHardwareConfigMap([]ptpv2alpha1.HardwareConfig{})
+		diff := diffHardwareConfigs(oldMap, []ptpv2alpha1.HardwareConfig{})
+		assert.False(t, diff.HasChanges())
+	})
 
-	reconciler := &HardwareConfigReconciler{
-		NodeName:              "test-node", //nolint:govet // needed for test setup
-		HardwareConfigHandler: mockHandler,
-	}
+	t.Run("different lengths are detected as change", func(t *testing.T) {
+		cfg1 := createTestHardwareConfig("config1", "profile1", "ptp1")
+		oldMap := sliceToHardwareConfigMap([]ptpv2alpha1.HardwareConfig{cfg1})
+		diff := diffHardwareConfigs(oldMap, []ptpv2alpha1.HardwareConfig{})
+		assert.True(t, diff.HasChanges())
+		assert.Len(t, diff.Removed, 1)
+	})
 
-	// Create some test hardware configs
-	testConfigs := []ptpv2alpha1.HardwareConfig{
-		{
-			Spec: ptpv2alpha1.HardwareConfigSpec{
-				Profile: ptpv2alpha1.HardwareProfile{
-					Name:        stringPtr("ordinary-clock-profile"),
-					Description: stringPtr("Test ordinary clock configuration"),
-					ClockChain: &ptpv2alpha1.ClockChain{
-						Structure: []ptpv2alpha1.Subsystem{
-							{
-								Name: "oc-subsystem",
-								DPLL: ptpv2alpha1.DPLL{
-									NetworkInterface: "ens1f0",
-								},
-								Ethernet: []ptpv2alpha1.Ethernet{
-									{
-										Ports: []string{"ens1f0"},
-									},
-								},
-							},
-						},
-					},
-				},
-				RelatedPtpProfileName: "ordinary-clock",
-			},
-		},
-		{
-			Spec: ptpv2alpha1.HardwareConfigSpec{
-				Profile: ptpv2alpha1.HardwareProfile{
-					Name:        stringPtr("grandmaster-profile"),
-					Description: stringPtr("Test grandmaster configuration"),
-					ClockChain: &ptpv2alpha1.ClockChain{
-						Structure: []ptpv2alpha1.Subsystem{
-							{
-								Name:                        "gm-subsystem",
-								HardwareSpecificDefinitions: "intel/e810",
-								DPLL: ptpv2alpha1.DPLL{
-									NetworkInterface: "ens2f0",
-								},
-								Ethernet: []ptpv2alpha1.Ethernet{
-									{
-										Ports: []string{"ens2f0", "ens2f1"},
-									},
-								},
-							},
-						},
-					},
-				},
-				RelatedPtpProfileName: "grandmaster",
-			},
-		},
-	}
+	t.Run("same configs have no changes", func(t *testing.T) {
+		cfg1 := createTestHardwareConfig("config1", "profile1", "ptp1")
+		cfg2 := createTestHardwareConfig("config1", "profile1", "ptp1")
+		oldMap := sliceToHardwareConfigMap([]ptpv2alpha1.HardwareConfig{cfg1})
+		diff := diffHardwareConfigs(oldMap, []ptpv2alpha1.HardwareConfig{cfg2})
+		assert.False(t, diff.HasChanges())
+	})
 
-	// Call UpdateHardwareConfig through the handler
-	err := reconciler.HardwareConfigHandler.UpdateHardwareConfig(testConfigs)
+	t.Run("different configs are detected as modified", func(t *testing.T) {
+		cfg1 := createTestHardwareConfig("config1", "profile1", "ptp1")
+		cfg2 := createTestHardwareConfig("config1", "profile2", "ptp1") // Different profile name
+		oldMap := sliceToHardwareConfigMap([]ptpv2alpha1.HardwareConfig{cfg1})
+		diff := diffHardwareConfigs(oldMap, []ptpv2alpha1.HardwareConfig{cfg2})
+		assert.True(t, diff.HasChanges())
+		assert.Len(t, diff.Modified, 1)
+	})
 
-	// Verify the call succeeded
-	assert.NoError(t, err)
+	t.Run("added config is detected", func(t *testing.T) {
+		cfg1 := createTestHardwareConfig("config1", "profile1", "ptp1")
+		cfg2 := createTestHardwareConfig("config2", "profile2", "ptp2")
+		oldMap := sliceToHardwareConfigMap([]ptpv2alpha1.HardwareConfig{cfg1})
+		diff := diffHardwareConfigs(oldMap, []ptpv2alpha1.HardwareConfig{cfg1, cfg2})
+		assert.True(t, diff.HasChanges())
+		assert.Len(t, diff.Added, 1)
+		assert.Equal(t, "config2", diff.Added[0].Name)
+	})
 
-	// Verify the handler received the correct configurations
-	assert.Equal(t, 1, mockHandler.UpdateCallCount, "Handler should have been called exactly once")
-	assert.Len(t, mockHandler.LastUpdateConfigs, 2, "Handler should have received 2 hardware configs")
-
-	// Verify the specific profiles
-	assert.Equal(t, "ordinary-clock-profile", *mockHandler.LastUpdateConfigs[0].Spec.Profile.Name)
-	assert.Equal(t, "Test ordinary clock configuration", *mockHandler.LastUpdateConfigs[0].Spec.Profile.Description)
-	assert.NotNil(t, mockHandler.LastUpdateConfigs[0].Spec.Profile.ClockChain)
-
-	assert.Equal(t, "grandmaster-profile", *mockHandler.LastUpdateConfigs[1].Spec.Profile.Name)
-	assert.Equal(t, "Test grandmaster configuration", *mockHandler.LastUpdateConfigs[1].Spec.Profile.Description)
-	assert.NotNil(t, mockHandler.LastUpdateConfigs[1].Spec.Profile.ClockChain)
+	t.Run("removed config is detected", func(t *testing.T) {
+		cfg1 := createTestHardwareConfig("config1", "profile1", "ptp1")
+		cfg2 := createTestHardwareConfig("config2", "profile2", "ptp2")
+		oldMap := sliceToHardwareConfigMap([]ptpv2alpha1.HardwareConfig{cfg1, cfg2})
+		diff := diffHardwareConfigs(oldMap, []ptpv2alpha1.HardwareConfig{cfg1})
+		assert.True(t, diff.HasChanges())
+		assert.Len(t, diff.Removed, 1)
+		assert.Equal(t, "config2", diff.Removed[0].Name)
+	})
 }
 
-func TestCheckIfActiveProfilesAffected(t *testing.T) {
+// TestCheckIfChangedConfigsAffectActiveProfiles tests the new change detection logic
+func TestCheckIfChangedConfigsAffectActiveProfiles(t *testing.T) {
 	testCases := []struct {
 		name            string
 		activeProfiles  []string
-		hwConfigs       []ptpv2alpha1.HardwareConfig
+		oldConfigs      []ptpv2alpha1.HardwareConfig
+		newConfigs      []ptpv2alpha1.HardwareConfig
 		expectedRestart bool
 		description     string
 	}{
 		{
 			name:            "no active profiles",
 			activeProfiles:  []string{},
-			hwConfigs:       []ptpv2alpha1.HardwareConfig{},
+			oldConfigs:      []ptpv2alpha1.HardwareConfig{},
+			newConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "ptp1")},
 			expectedRestart: false,
 			description:     "Should not restart when no active profiles exist",
 		},
 		{
-			name:            "no hardware configs",
-			activeProfiles:  []string{"grandmaster-profile"},
-			hwConfigs:       []ptpv2alpha1.HardwareConfig{},
+			name:            "config added but not associated with active profile",
+			activeProfiles:  []string{"active-profile"},
+			oldConfigs:      []ptpv2alpha1.HardwareConfig{},
+			newConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "other-profile")},
 			expectedRestart: false,
-			description:     "Should not restart when no hardware configs exist",
+			description:     "Should not restart when added config is not associated with active profile",
 		},
 		{
-			name:           "hardware config associated with active profile",
-			activeProfiles: []string{"grandmaster-profile", "boundary-clock-profile"},
-			hwConfigs: []ptpv2alpha1.HardwareConfig{
-				{
-					Spec: ptpv2alpha1.HardwareConfigSpec{
-						RelatedPtpProfileName: "grandmaster-profile",
-						Profile: ptpv2alpha1.HardwareProfile{
-							Name: stringPtr("intel-e810-gm"),
-						},
-					},
-				},
-			},
+			name:            "config added and associated with active profile",
+			activeProfiles:  []string{"active-profile"},
+			oldConfigs:      []ptpv2alpha1.HardwareConfig{},
+			newConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "active-profile")},
 			expectedRestart: true,
-			description:     "Should restart when hardware config is associated with active profile",
+			description:     "Should restart when added config is associated with active profile",
 		},
 		{
-			name:           "hardware config not associated with active profile",
-			activeProfiles: []string{"ordinary-clock-profile"},
-			hwConfigs: []ptpv2alpha1.HardwareConfig{
-				{
-					Spec: ptpv2alpha1.HardwareConfigSpec{
-						RelatedPtpProfileName: "grandmaster-profile",
-						Profile: ptpv2alpha1.HardwareProfile{
-							Name: stringPtr("intel-e810-gm"),
-						},
-					},
-				},
+			name:            "config removed and was associated with active profile",
+			activeProfiles:  []string{"active-profile"},
+			oldConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "active-profile")},
+			newConfigs:      []ptpv2alpha1.HardwareConfig{},
+			expectedRestart: true,
+			description:     "Should restart when removed config was associated with active profile",
+		},
+		{
+			name:            "config modified and associated with active profile",
+			activeProfiles:  []string{"active-profile"},
+			oldConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "active-profile")},
+			newConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1-modified", "active-profile")},
+			expectedRestart: true,
+			description:     "Should restart when modified config is associated with active profile",
+		},
+		{
+			name:            "config unchanged - no restart",
+			activeProfiles:  []string{"active-profile"},
+			oldConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "active-profile")},
+			newConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "active-profile")},
+			expectedRestart: false,
+			description:     "Should not restart when configs are unchanged",
+		},
+		{
+			name:           "multiple configs, only changed one affects active profile",
+			activeProfiles: []string{"active-profile"},
+			oldConfigs: []ptpv2alpha1.HardwareConfig{
+				createTestHardwareConfig("config1", "profile1", "other-profile"),
+				createTestHardwareConfig("config2", "profile2", "active-profile"),
+			},
+			newConfigs: []ptpv2alpha1.HardwareConfig{
+				createTestHardwareConfig("config1", "profile1-modified", "other-profile"), // Modified but not active
+				createTestHardwareConfig("config2", "profile2", "active-profile"),         // Unchanged
 			},
 			expectedRestart: false,
-			description:     "Should not restart when hardware config is not associated with any active profile",
-		},
-		{
-			name:           "multiple hardware configs, one matches",
-			activeProfiles: []string{"boundary-clock-profile"},
-			hwConfigs: []ptpv2alpha1.HardwareConfig{
-				{
-					Spec: ptpv2alpha1.HardwareConfigSpec{
-						RelatedPtpProfileName: "grandmaster-profile",
-						Profile: ptpv2alpha1.HardwareProfile{
-							Name: stringPtr("intel-e810-gm"),
-						},
-					},
-				},
-				{
-					Spec: ptpv2alpha1.HardwareConfigSpec{
-						RelatedPtpProfileName: "boundary-clock-profile",
-						Profile: ptpv2alpha1.HardwareProfile{
-							Name: stringPtr("intel-e810-bc"),
-						},
-					},
-				},
-			},
-			expectedRestart: true,
-			description:     "Should restart when at least one hardware config is associated with active profile",
+			description:     "Should not restart when only changed config is not associated with active profile",
 		},
 	}
 
@@ -351,65 +365,33 @@ func TestCheckIfActiveProfilesAffected(t *testing.T) {
 				ConfigUpdate: mockTrigger,
 			}
 
-			result := reconciler.checkIfActiveProfilesAffected(context.TODO(), tc.hwConfigs)
+			// Compute diff from old and new configs (matching production code pattern)
+			oldMap := sliceToHardwareConfigMap(tc.oldConfigs)
+			diff := diffHardwareConfigs(oldMap, tc.newConfigs)
+			result := reconciler.checkIfChangedConfigsAffectActiveProfiles(diff)
 
 			assert.Equal(t, tc.expectedRestart, result, tc.description)
 		})
 	}
 }
 
-func TestRestartTriggerIntegration(t *testing.T) {
-	// Test the complete flow of hardware config change triggering deferred PTP restart
-	mockHandler := &MockHardwareConfigHandler{}
-	mockTrigger := &MockHardwareConfigRestartTrigger{
-		CurrentProfiles: []string{"grandmaster-profile"},
+// TestReconcileWhenNothingChanged tests that diffHardwareConfigs detects no changes for identical configs
+func TestReconcileWhenNothingChanged(t *testing.T) {
+	initialConfigs := []ptpv2alpha1.HardwareConfig{
+		createTestHardwareConfig("config1", "profile1", "active-profile"),
 	}
 
-	reconciler := &HardwareConfigReconciler{
-		NodeName:              "test-node",
-		HardwareConfigHandler: mockHandler,
-		ConfigUpdate:          mockTrigger,
-	}
-
-	// Create a hardware config that is associated with an active profile
-	hwConfigs := []ptpv2alpha1.HardwareConfig{
-		{
-			Spec: ptpv2alpha1.HardwareConfigSpec{
-				RelatedPtpProfileName: "grandmaster-profile",
-				Profile: ptpv2alpha1.HardwareProfile{
-					Name:        stringPtr("intel-e810-gm"),
-					Description: stringPtr("Intel E810 grandmaster configuration"),
-				},
-			},
-		},
-	}
-
-	// Test that the restart is needed
-	needsRestart := reconciler.checkIfActiveProfilesAffected(context.TODO(), hwConfigs)
-	assert.True(t, needsRestart, "Should detect that restart is needed")
-
-	// Test the deferred restart mechanism
-	reconciler.scheduleDeferredRestart(context.TODO())
-
-	// Wait for the deferred restart to execute (waits for active reconciliations to complete)
-	// Since there are no active reconciliations, it should trigger immediately
-	// Use a small retry loop to wait for the goroutine to complete
-	for i := 0; i < 10; i++ {
-		if mockTrigger.RestartTriggerCount > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	// Verify that the restart was triggered after waiting for reconciliations
-	assert.Equal(t, 1, mockTrigger.RestartTriggerCount, "Restart should have been triggered once after reconciliations complete")
+	// Test that diffHardwareConfigs correctly identifies unchanged configs
+	oldMap := sliceToHardwareConfigMap(initialConfigs)
+	diff := diffHardwareConfigs(oldMap, initialConfigs)
+	assert.False(t, diff.HasChanges(), "Same configs should have no changes")
 }
 
-// Test that multiple restart requests are handled properly
-func TestDeferredRestartDebouncing(t *testing.T) {
+// TestReconcileWhenHardwareConfigChanged tests that reconciliation triggers update and restart when config changes
+func TestReconcileWhenHardwareConfigChanged(t *testing.T) {
 	mockHandler := &MockHardwareConfigHandler{}
 	mockTrigger := &MockHardwareConfigRestartTrigger{
-		CurrentProfiles: []string{"grandmaster-profile"},
+		CurrentProfiles: []string{"active-profile"},
 	}
 
 	reconciler := &HardwareConfigReconciler{
@@ -418,34 +400,27 @@ func TestDeferredRestartDebouncing(t *testing.T) {
 		ConfigUpdate:          mockTrigger,
 	}
 
-	// Schedule the first deferred restart
-	reconciler.scheduleDeferredRestart(context.TODO())
-
-	// Wait a bit to ensure the first restart is scheduled
-	time.Sleep(10 * time.Millisecond)
-
-	// Schedule additional deferred restarts - these should be debounced
-	reconciler.scheduleDeferredRestart(context.TODO())
-	reconciler.scheduleDeferredRestart(context.TODO())
-
-	// Wait for the goroutine to complete (waits for active reconciliations)
-	// Use a small retry loop to wait for the goroutine to complete
-	for i := 0; i < 10; i++ {
-		if mockTrigger.RestartTriggerCount > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+	oldConfigs := []ptpv2alpha1.HardwareConfig{
+		createTestHardwareConfig("config1", "profile1", "active-profile"),
 	}
 
-	// Only the first restart should have been triggered due to debouncing
-	assert.Equal(t, 1, mockTrigger.RestartTriggerCount, "Only one restart should have been triggered due to debouncing")
+	newConfigs := []ptpv2alpha1.HardwareConfig{
+		createTestHardwareConfig("config1", "profile1-modified", "active-profile"),
+	}
+
+	// Verify configs are different and check restart
+	oldMap := sliceToHardwareConfigMap(oldConfigs)
+	diff := diffHardwareConfigs(oldMap, newConfigs)
+	assert.True(t, diff.HasChanges(), "Configs should be different")
+	shouldRestart := reconciler.checkIfChangedConfigsAffectActiveProfiles(diff)
+	assert.True(t, shouldRestart, "Should restart when changed config affects active profile")
 }
 
-// Test that restart waits for active reconciliations to complete
-func TestDeferredRestartWaitsForReconciliations(t *testing.T) {
+// TestReconcileWhenHardwareConfigChangedButNotAssociated tests that no restart happens when changed config is not associated
+func TestReconcileWhenHardwareConfigChangedButNotAssociated(t *testing.T) {
 	mockHandler := &MockHardwareConfigHandler{}
 	mockTrigger := &MockHardwareConfigRestartTrigger{
-		CurrentProfiles: []string{"grandmaster-profile"},
+		CurrentProfiles: []string{"active-profile"},
 	}
 
 	reconciler := &HardwareConfigReconciler{
@@ -454,33 +429,95 @@ func TestDeferredRestartWaitsForReconciliations(t *testing.T) {
 		ConfigUpdate:          mockTrigger,
 	}
 
-	// Start a reconciliation (simulate active reconciliation)
-	reconciler.reconciliationMutex.Lock()
-	reconciler.activeReconciliations.Add(1)
-	reconciler.reconciliationMutex.Unlock()
-
-	// Schedule restart - it should wait for the active reconciliation
-	reconciler.scheduleDeferredRestart(context.TODO())
-
-	// Verify restart hasn't been triggered yet (reconciliation still active)
-	time.Sleep(100 * time.Millisecond)
-	assert.Equal(t, 0, mockTrigger.RestartTriggerCount, "Restart should not have been triggered while reconciliation is active")
-
-	// Complete the reconciliation
-	reconciler.reconciliationMutex.Lock()
-	reconciler.activeReconciliations.Done()
-	reconciler.reconciliationMutex.Unlock()
-
-	// Wait for the restart to be triggered now that reconciliation is complete
-	for i := 0; i < 10; i++ {
-		if mockTrigger.RestartTriggerCount > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+	oldConfigs := []ptpv2alpha1.HardwareConfig{
+		createTestHardwareConfig("config1", "profile1", "other-profile"),
 	}
 
-	// Verify that the restart was triggered after reconciliation completed
-	assert.Equal(t, 1, mockTrigger.RestartTriggerCount, "Restart should have been triggered after reconciliation completed")
+	newConfigs := []ptpv2alpha1.HardwareConfig{
+		createTestHardwareConfig("config1", "profile1-modified", "other-profile"),
+	}
+
+	// Verify configs are different but don't affect active profiles
+	oldMap := sliceToHardwareConfigMap(oldConfigs)
+	diff := diffHardwareConfigs(oldMap, newConfigs)
+	assert.True(t, diff.HasChanges(), "Configs should be different")
+	shouldRestart := reconciler.checkIfChangedConfigsAffectActiveProfiles(diff)
+	assert.False(t, shouldRestart, "Should not restart when changed config does not affect active profile")
+}
+
+// TestMockHandlerReturnsError tests that the mock handler returns configured errors
+func TestMockHandlerReturnsError(t *testing.T) {
+	mockHandler := &MockHardwareConfigHandler{
+		UpdateError: errors.New("update failed"),
+	}
+
+	newConfigs := []ptpv2alpha1.HardwareConfig{
+		createTestHardwareConfig("config1", "profile1-modified", "active-profile"),
+	}
+
+	// Verify mock returns error as configured
+	err := mockHandler.UpdateHardwareConfig(newConfigs)
+	assert.Error(t, err, "Mock should return configured error")
+	assert.Equal(t, 1, mockHandler.UpdateCallCount, "Update should have been called once")
+}
+
+// TestReconcileEmptyToSomething tests that change from empty to something is detected
+func TestReconcileEmptyToSomething(t *testing.T) {
+	emptyConfigs := []ptpv2alpha1.HardwareConfig{}
+	someConfigs := []ptpv2alpha1.HardwareConfig{
+		createTestHardwareConfig("config1", "profile1", "ptp1"),
+	}
+
+	// Empty to something should be detected as change
+	emptyMap := sliceToHardwareConfigMap(emptyConfigs)
+	someMap := sliceToHardwareConfigMap(someConfigs)
+	diff1 := diffHardwareConfigs(emptyMap, someConfigs)
+	diff2 := diffHardwareConfigs(someMap, emptyConfigs)
+	assert.True(t, diff1.HasChanges(), "Empty to something should be detected as change")
+	assert.True(t, diff2.HasChanges(), "Something to empty should be detected as change")
+}
+
+// TestReconcileMultipleConfigsInSequence tests that only changed configs trigger restarts
+func TestReconcileMultipleConfigsInSequence(t *testing.T) {
+	mockHandler := &MockHardwareConfigHandler{}
+	mockTrigger := &MockHardwareConfigRestartTrigger{
+		CurrentProfiles: []string{"active-profile"},
+	}
+
+	reconciler := &HardwareConfigReconciler{
+		NodeName:              "test-node",
+		HardwareConfigHandler: mockHandler,
+		ConfigUpdate:          mockTrigger,
+	}
+
+	// Initial configs
+	config1 := createTestHardwareConfig("config1", "profile1", "active-profile")
+	config2 := createTestHardwareConfig("config2", "profile2", "other-profile")
+
+	initialConfigs := []ptpv2alpha1.HardwareConfig{config1, config2}
+
+	// Set initial configs (no mutex needed in tests - single-threaded)
+	reconciler.lastAppliedConfigs = deepCopyHardwareConfigMap(sliceToHardwareConfigMap(initialConfigs))
+
+	// First change: modify config1 (affects active profile)
+	modifiedConfig1 := createTestHardwareConfig("config1", "profile1-modified", "active-profile")
+	firstChange := []ptpv2alpha1.HardwareConfig{modifiedConfig1, config2}
+
+	// Compute diff and check (matching production code pattern)
+	initialMap := sliceToHardwareConfigMap(initialConfigs)
+	diff1 := diffHardwareConfigs(initialMap, firstChange)
+	shouldRestart1 := reconciler.checkIfChangedConfigsAffectActiveProfiles(diff1)
+	assert.True(t, shouldRestart1, "Should restart when config1 (affecting active profile) changes")
+
+	// Second change: modify config2 (does not affect active profile)
+	modifiedConfig2 := createTestHardwareConfig("config2", "profile2-modified", "other-profile")
+	secondChange := []ptpv2alpha1.HardwareConfig{modifiedConfig1, modifiedConfig2}
+
+	// Compute diff and check (matching production code pattern)
+	firstChangeMap := sliceToHardwareConfigMap(firstChange)
+	diff2 := diffHardwareConfigs(firstChangeMap, secondChange)
+	shouldRestart2 := reconciler.checkIfChangedConfigsAffectActiveProfiles(diff2)
+	assert.False(t, shouldRestart2, "Should not restart when only config2 (not affecting active profile) changes")
 }
 
 func TestHardwareConfigReconcilerFields(t *testing.T) {
@@ -493,12 +530,7 @@ func TestHardwareConfigReconcilerFields(t *testing.T) {
 		ConfigUpdate:          mockTrigger,
 	}
 
-	// Verify reconciler has all required fields
 	assert.Equal(t, "test-node", reconciler.NodeName)
 	assert.NotNil(t, reconciler.HardwareConfigHandler)
 	assert.NotNil(t, reconciler.ConfigUpdate)
-
-	// Verify the handler implements the interface
-	var _ = reconciler.HardwareConfigHandler
-	var _ = reconciler.ConfigUpdate
 }

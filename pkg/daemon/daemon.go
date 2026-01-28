@@ -350,6 +350,13 @@ func (dn *Daemon) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.HardwareConfig) e
 	return dn.hardwareConfigManager.UpdateHardwareConfig(hwConfigs)
 }
 
+// GetCurrentHardwareConfigs implements controller.HardwareConfigUpdateHandler.
+// Returns the currently applied hardware configurations from the HardwareConfigManager.
+// This is used at startup to initialize lastAppliedConfigs and avoid unnecessary restarts.
+func (dn *Daemon) GetCurrentHardwareConfigs() []ptpv2alpha1.HardwareConfig {
+	return dn.hardwareConfigManager.CloneHardwareConfigs()
+}
+
 // getHoldoverParameters retrieves holdover parameters from HardwareConfig for a specific clock ID
 // Returns nil if no hardware config is available or no parameters are configured for the clock
 func (dn *Daemon) getHoldoverParameters(profileName string, clockID uint64) *ptpv2alpha1.HoldoverParameters {

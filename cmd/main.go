@@ -225,13 +225,14 @@ func main() {
 
 // controllerManagerSetup holds the controller manager and its context
 type controllerManagerSetup struct {
-	mgr       ctrl.Manager
-	mgrCtx    context.Context
-	mgrCancel context.CancelFunc
+	mgr                ctrl.Manager
+	mgrCtx             context.Context
+	mgrCancel          context.CancelFunc
+	hwConfigReconciler *controller.HardwareConfigReconciler
 }
 
 // setupControllerManager creates and starts the controller manager with required controllers
-func setupControllerManager(cfg *rest.Config, nodeName string, ptpConfUpdate *daemon.LinuxPTPConfUpdate, daemonInstance *daemon.Daemon, enablePtpConfigController bool) (*controllerManagerSetup, error) {
+func setupControllerManager(cfg *rest.Config, nodeName string, ptpConfUpdate *daemon.LinuxPTPConfUpdate, daemonInstance *daemon.Daemon, enablePtpConfigController bool, profileDir string) (*controllerManagerSetup, error) {
 	glog.Info("Setting up controller manager")
 
 	// Setup controller-runtime logger to use klog/glog
@@ -288,7 +289,7 @@ func setupControllerManager(cfg *rest.Config, nodeName string, ptpConfUpdate *da
 		ConfigUpdate:          ptpConfUpdate, // Enable hardware config to trigger PTP restarts
 	}
 
-	if err = hwConfigReconciler.SetupWithManager(mgr); err != nil {
+	if err = hwConfigReconciler.SetupWithManager(mgr, enablePtpConfigController, profileDir); err != nil {
 		return nil, fmt.Errorf("unable to create controller for HardwareConfig: %w", err)
 	}
 	glog.Info("HardwareConfig controller registered successfully")
@@ -305,18 +306,19 @@ func setupControllerManager(cfg *rest.Config, nodeName string, ptpConfUpdate *da
 	glog.Info("Controller manager started successfully")
 
 	return &controllerManagerSetup{
-		mgr:       mgr,
-		mgrCtx:    mgrCtx,
-		mgrCancel: mgrCancel,
+		mgr:                mgr,
+		mgrCtx:             mgrCtx,
+		mgrCancel:          mgrCancel,
+		hwConfigReconciler: hwConfigReconciler,
 	}, nil
 }
 
 // runFullControllerMode runs in full controller mode with both PtpConfig and HardwareConfig controllers
-func runFullControllerMode(cfg *rest.Config, _ *cliParams, nodeName string, ptpConfUpdate *daemon.LinuxPTPConfUpdate, daemonInstance *daemon.Daemon, ptpClient *ptpclient.Clientset, nodeNameForDevice string, hwconfigs *[]ptpv1.HwConfig, refreshNodePtpDevice *bool, tickerPull *time.Ticker, sigCh chan os.Signal, closeProcessManager chan bool) {
+func runFullControllerMode(cfg *rest.Config, cp *cliParams, nodeName string, ptpConfUpdate *daemon.LinuxPTPConfUpdate, daemonInstance *daemon.Daemon, ptpClient *ptpclient.Clientset, nodeNameForDevice string, hwconfigs *[]ptpv1.HwConfig, refreshNodePtpDevice *bool, tickerPull *time.Ticker, sigCh chan os.Signal, closeProcessManager chan bool) {
 	glog.Info("Running in full controller mode - PtpConfig and HardwareConfig resources will be watched automatically")
 
 	// Setup controller manager
-	cmSetup, err := setupControllerManager(cfg, nodeName, ptpConfUpdate, daemonInstance, true)
+	cmSetup, err := setupControllerManager(cfg, nodeName, ptpConfUpdate, daemonInstance, true, cp.profileDir)
 	if err != nil {
 		glog.Errorf("Failed to setup controller manager: %v", err)
 		return
@@ -366,7 +368,7 @@ func runHybridMode(cfg *rest.Config, cp *cliParams, nodeName string, ptpConfUpda
 	glog.Info("Running in hybrid mode - HardwareConfig controller active, PtpConfig from files")
 
 	// Setup controller manager
-	cmSetup, err := setupControllerManager(cfg, nodeName, ptpConfUpdate, daemonInstance, false)
+	cmSetup, err := setupControllerManager(cfg, nodeName, ptpConfUpdate, daemonInstance, false, cp.profileDir)
 	if err != nil {
 		glog.Errorf("Failed to setup controller manager: %v", err)
 		return
@@ -386,6 +388,12 @@ func runHybridMode(cfg *rest.Config, cp *cliParams, nodeName string, ptpConfUpda
 			// Read PtpConfig from file
 			if fileErr := readAndUpdatePtpConfigFromFile(cp.profileDir, nodeNameForDevice, ptpConfUpdate); fileErr != nil {
 				glog.Errorf("Failed to read/update PtpConfig from file: %v", fileErr)
+			} else {
+				// Trigger HardwareConfig reconciliation after profiles are updated
+				// This ensures HardwareConfigs are applied when PtpConfig becomes active
+				if cmSetup.hwConfigReconciler != nil {
+					cmSetup.hwConfigReconciler.TriggerReconciliationForProfileChange()
+				}
 			}
 		case sig := <-sigCh:
 			glog.Info("signal received, shutting down", sig)
