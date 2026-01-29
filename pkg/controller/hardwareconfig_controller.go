@@ -734,7 +734,7 @@ func (r *HardwareConfigReconciler) triggerReconciliationForProfileChangeInternal
 	r.profileChangeMutex.Lock()
 	defer r.profileChangeMutex.Unlock()
 
-	// If a timer is already running, reset it (debounce)
+	// If a timer is already running, stop it
 	if r.profileChangeTimer != nil {
 		r.profileChangeTimer.Stop()
 	}
@@ -744,6 +744,7 @@ func (r *HardwareConfigReconciler) triggerReconciliationForProfileChangeInternal
 	// Create a new timer that will fire after the debounce interval
 	r.profileChangeTimer = time.AfterFunc(profileChangeDebounceInterval, func() {
 		r.executeProfileChangeReconciliation(reason)
+		r.profileChangeTimer = nil
 	})
 }
 
