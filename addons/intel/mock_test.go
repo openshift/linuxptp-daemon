@@ -3,6 +3,8 @@ package intel
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
@@ -239,4 +241,18 @@ func (m *mockClockChain) assertCallCounts(t *testing.T, expectedNormalTBC, expec
 	assert.Equal(t, expectedNormalTBC, m.enterNormalTBCCount, "Expected enterNormalTBCCount")
 	assert.Equal(t, expectedHoldoverTBC, m.enterHoldoverTBCCount, "Expected enterHoldoverTBCCount")
 	assert.Equal(t, expectedSetPinDefaults, m.setPinDefaultsCount, "Expected setPinDefaultsCount")
+}
+
+func mockClockIDsFromProfile(mfs *MockFileSystem, profile *ptpv1.PtpProfile) {
+	for key, val := range profile.PtpSettings {
+		var iface string
+		if strings.HasPrefix(key, "clockId[") && strings.HasSuffix(key, "]") {
+			iface = strings.TrimSuffix(strings.TrimPrefix(key, "clockId["), "]")
+			id, err := strconv.ParseUint(val, 10, 64)
+			if err != nil {
+				continue
+			}
+			mfs.AllowReadFile(fmt.Sprintf("/sys/class/net/%s/device/config", iface), generatePCIDataForClockID(id), nil)
+		}
+	}
 }

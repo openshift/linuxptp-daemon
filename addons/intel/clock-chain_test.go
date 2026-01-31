@@ -38,10 +38,15 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 	// Set unitTest for MockPins() call
 	unitTest = true
 	defer func() { unitTest = false }()
+	// mockPins
+	mockPinConfig, restorePins := setupMockPinConfig()
+	defer restorePins()
 
 	// Can read test profile
 	profile, err := loadProfile("./testdata/profile-tbc.yaml")
 	assert.NoError(t, err)
+
+	mockClockIDsFromProfile(mockFS, profile)
 
 	// Can run PTP config change handler without errors
 	p, d := E810("e810")
@@ -52,6 +57,8 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 	assert.Equal(t, "5799633565432596414", ccData.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
 	assert.Equal(t, 9, len(ccData.LeadingNIC.Pins), "wrong number of configurable pins")
 	assert.Equal(t, "ens4f1", ccData.LeadingNIC.UpstreamPort, "wrong upstream port")
+	assert.Equal(t, 12, mockPinConfig.actualPinSetCount)
+	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 
 	// Test holdover entry
 	mockPinSet.reset()
@@ -102,10 +109,15 @@ func Test_ProcessProfileTtscClockChain(t *testing.T) {
 	// Set unitTest for MockPins() call
 	unitTest = true
 	defer func() { unitTest = false }()
+	// mockPins
+	mockPinConfig, restorePins := setupMockPinConfig()
+	defer restorePins()
 
 	// Can read test profile
 	profile, err := loadProfile("./testdata/profile-t-tsc.yaml")
 	assert.NoError(t, err)
+
+	mockClockIDsFromProfile(mockFS, profile)
 
 	// Can run PTP config change handler without errors
 	p, d := E810("e810")
@@ -117,6 +129,8 @@ func Test_ProcessProfileTtscClockChain(t *testing.T) {
 	assert.Equal(t, 9, len(ccData.LeadingNIC.Pins), "wrong number of configurable pins")
 	assert.Equal(t, "ens4f1", ccData.LeadingNIC.UpstreamPort, "wrong upstream port")
 	assert.NotNil(t, mockPinSet.commands, "Ensure some pins were set")
+	assert.Equal(t, 4, mockPinConfig.actualPinSetCount)
+	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 
 	// Test holdover entry
 	mockPinSet.reset()
@@ -136,6 +150,9 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 	defer restorePinSet()
 	unitTest = true
 
+	mockPinConfig, restorePinConfig := setupMockPinConfig()
+	defer restorePinConfig()
+
 	// Setup filesystem mock for EnableE810Outputs
 	mockFS, restoreFs := setupMockFS()
 	defer restoreFs()
@@ -148,9 +165,13 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 	profile, err := loadProfile("./testdata/profile-tbc.yaml")
 	assert.NoError(t, err)
 
+	mockClockIDsFromProfile(mockFS, profile)
+
 	// Initialize the clock chain with multiple NICs
 	err = OnPTPConfigChangeE810(nil, profile)
 	assert.NoError(t, err)
+	assert.Equal(t, 12, mockPinConfig.actualPinSetCount)
+	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 
 	// Verify we have the expected clock chain structure
 	ccData := clockChain.(*ClockChain)

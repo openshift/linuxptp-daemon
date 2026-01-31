@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"reflect"
 	"strconv"
 	"strings"
 
@@ -16,13 +15,27 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
+var pluginNameE810 = "e810"
+
 type E810Opts struct {
 	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
 	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
-	DevicePins          map[string]map[string]string `json:"pins"`
+	Devices             []string                     `json:"devices"`
+	DevicePins          map[string]pinSet            `json:"pins"`
+	DeviceFreqencies    map[string]frqSet            `json:"frequencies"`
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
 	PhaseInputs         []PhaseInputs                `json:"interconnections"`
+}
+
+// allDevices enumerates all defined devices (Devices/DevicePins/DeviceFrequencies/PhaseOffsets)
+func (opts *E810Opts) allDevices() []string {
+	// Enumerate all defined devices (Devices/DevicePins/DeviceFrequencies)
+	allDevices := opts.Devices
+	allDevices = extendWithKeys(allDevices, opts.DevicePins)
+	allDevices = extendWithKeys(allDevices, opts.DeviceFreqencies)
+	allDevices = extendWithKeys(allDevices, opts.PhaseOffsetPins)
+	return allDevices
 }
 
 // GetPhaseInputs implements PhaseInputsProvider
@@ -68,15 +81,12 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	glog.Info("calling onPTPConfigChange for e810 plugin")
 	var e810Opts E810Opts
 	var err error
-	var optsByteArray []byte
-	var stdout []byte
-	var pinPath string
 
 	e810Opts.EnableDefaultConfig = false
 
 	for name, opts := range (*nodeProfile).Plugins {
-		if name == "e810" {
-			optsByteArray, _ = json.Marshal(opts)
+		if name == pluginNameE810 {
+			optsByteArray, _ := json.Marshal(opts)
 			err = json.Unmarshal(optsByteArray, &e810Opts)
 			if err != nil {
 				glog.Error("e810 failed to unmarshal opts: " + err.Error())
@@ -88,59 +98,53 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				MockPins()
 			}
 
+			allDevices := e810Opts.allDevices()
+			glog.Infof("Initializing e810 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
+
 			if e810Opts.EnableDefaultConfig {
-				stdout, _ = exec.Command("/usr/bin/bash", "-c", EnableE810PTPConfig).Output()
+				stdout, _ := exec.Command("/usr/bin/bash", "-c", EnableE810PTPConfig).Output()
 				glog.Infof(string(stdout))
 			}
 			if (*nodeProfile).PtpSettings == nil {
 				(*nodeProfile).PtpSettings = make(map[string]string)
 			}
-			for device, pins := range e810Opts.DevicePins {
+
+			// Setup clockID
+			for _, device := range allDevices {
 				dpllClockIdStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				if !unitTest {
-					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getPCIClockID(device), 10)
-					for pin, value := range pins {
-						deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
-						phcs, err := os.ReadDir(deviceDir)
-						if err != nil {
-							glog.Error("e810 failed to read " + deviceDir + ": " + err.Error())
-							continue
-						}
-						for _, phc := range phcs {
-							pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
-							glog.Infof("echo %s > %s", value, pinPath)
-							err = os.WriteFile(pinPath, []byte(value), 0o666)
-							if err != nil {
-								glog.Error("e810 failed to write " + value + " to " + pinPath + ": " + err.Error())
-							}
-						}
-					}
+				(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getPCIClockID(device), 10)
+			}
+
+			// Initialize all user-specified phc pins and frequencies
+			for device, pins := range e810Opts.DevicePins {
+				err = pinConfig.applyPinSet(device, pins)
+				if err != nil {
+					glog.Errorf("e825 failed to set Pin configuration for %s: %s", device, err)
+				}
+			}
+			for device, frequencies := range e810Opts.DeviceFreqencies {
+				err = pinConfig.applyPinFrq(device, frequencies)
+				if err != nil {
+					glog.Errorf("e825 failed to set PHC frequencies for %s: %s", device, err)
 				}
 			}
 
+			// Copy DPLL Settings from plugin config to PtpSettings
 			for k, v := range e810Opts.DpllSettings {
 				if _, ok := (*nodeProfile).PtpSettings[k]; !ok {
 					(*nodeProfile).PtpSettings[k] = strconv.FormatUint(v, 10)
 				}
 			}
+
+			// Copy PhaseOffsetPins settings from plugin config to PtpSettings
 			for iface, properties := range e810Opts.PhaseOffsetPins {
-				ifaceFound := false
-				for dev := range e810Opts.DevicePins {
-					if strings.Compare(iface, dev) == 0 {
-						ifaceFound = true
-						break
-					}
-				}
-				if !ifaceFound {
-					glog.Errorf("e810 phase offset pin filter initialization failed: interface %s not found among  %v",
-						iface, reflect.ValueOf(e810Opts.DevicePins).MapKeys())
-					break
-				}
 				for pinProperty, value := range properties {
 					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getPCIClockID(iface), 10), pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
 				}
 			}
+
+			// Initialize clockChain
 			if e810Opts.PhaseInputs != nil {
 				clockChain, err = InitClockChain(e810Opts, nodeProfile)
 				if err != nil {
@@ -166,13 +170,12 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 	glog.Info("calling AfterRunPTPCommandE810 for e810 plugin")
 	var e810Opts E810Opts
 	var err error
-	var optsByteArray []byte
 
 	e810Opts.EnableDefaultConfig = false
 
 	for name, opts := range (*nodeProfile).Plugins {
-		if name == "e810" {
-			optsByteArray, _ = json.Marshal(opts)
+		if name == pluginNameE810 {
+			optsByteArray, _ := json.Marshal(opts)
 			err = json.Unmarshal(optsByteArray, &e810Opts)
 			if err != nil {
 				glog.Error("e810 failed to unmarshal opts: " + err.Error())
@@ -221,7 +224,7 @@ func PopulateHwConfigE810(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error 
 		if _pluginData.hwplugins != nil {
 			for _, _hwconfig := range *_pluginData.hwplugins {
 				hwConfig := ptpv1.HwConfig{}
-				hwConfig.DeviceID = "e810"
+				hwConfig.DeviceID = pluginNameE810
 				hwConfig.Status = _hwconfig
 				*hwconfigs = append(*hwconfigs, hwConfig)
 			}
@@ -231,7 +234,7 @@ func PopulateHwConfigE810(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error 
 }
 
 func E810(name string) (*plugin.Plugin, *interface{}) {
-	if name != "e810" {
+	if name != pluginNameE810 {
 		glog.Errorf("Plugin must be initialized as 'e810'")
 		return nil, nil
 	}
@@ -239,7 +242,7 @@ func E810(name string) (*plugin.Plugin, *interface{}) {
 	hwplugins := []string{}
 	pluginData := E810PluginData{hwplugins: &hwplugins}
 	_plugin := plugin.Plugin{
-		Name:               "e810",
+		Name:               pluginNameE810,
 		OnPTPConfigChange:  OnPTPConfigChangeE810,
 		AfterRunPTPCommand: AfterRunPTPCommandE810,
 		PopulateHwConfig:   PopulateHwConfigE810,

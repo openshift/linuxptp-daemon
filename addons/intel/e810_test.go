@@ -81,6 +81,11 @@ func Test_ProcessProfileTGMNew(t *testing.T) {
 	profile, err := loadProfile("./testdata/profile-tgm.yaml")
 	assert.NoError(t, err)
 	p, d := E810("e810")
+
+	mockFs, restoreFs := setupMockFS()
+	defer restoreFs()
+	mockClockIDsFromProfile(mockFs, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
 	assert.NotNil(t, mockPinSet.commands, "Ensure clockChain.SetPinDefaults was called")
@@ -95,6 +100,10 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 	mockFS, restoreFs := setupMockFS()
 	defer restoreFs()
 
+	// mockPins
+	mockPinConfig, restorePins := setupMockPinConfig()
+	defer restorePins()
+
 	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
 
 	// EnableE810Outputs reads the ptp directory and writes to SMA2 and period
@@ -105,8 +114,13 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 	profile, err := loadProfile("./testdata/profile-tbc-no-input-delays.yaml")
 	assert.NoError(t, err)
 	p, d := E810("e810")
+
+	mockClockIDsFromProfile(mockFS, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
+	assert.Equal(t, 12, mockPinConfig.actualPinSetCount)
+	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 
 	// Verify that clockChain was initialized (SetPinDefaults is called as part of InitClockChain)
 	// If SetPinDefaults wasn't called, InitClockChain would have failed
@@ -126,6 +140,11 @@ func Test_ProcessProfileTGMOld(t *testing.T) {
 	profile, err := loadProfile("./testdata/profile-tgm-old.yaml")
 	assert.NoError(t, err)
 	p, d := E810("e810")
+
+	mockFS, restoreFs := setupMockFS()
+	defer restoreFs()
+	mockClockIDsFromProfile(mockFS, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
 	assert.NotNil(t, mockPinSet.commands, "Ensure some pins were set")
