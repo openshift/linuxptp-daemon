@@ -39,7 +39,7 @@ func TestResolvePhaseAdjustments(t *testing.T) {
 			networkInterface: "ens4f0",
 			expectedCount:    1,
 			expectedAdjustments: map[string]int64{
-				"GNR-D_SDP2": -8750, // Negated delay (adjustment)
+				"GNR-D_SDP2": 8750, // Delay summed directly (no negation)
 			},
 		},
 		{
@@ -71,8 +71,8 @@ func TestResolvePhaseAdjustments(t *testing.T) {
 			networkInterface: "ens4f0",
 			expectedCount:    2,
 			expectedAdjustments: map[string]int64{
-				"GNR-D_SDP2": -8750,  // Negated delay (adjustment)
-				"OCP1_CLK":   -10000, // Negated delay (adjustment)
+				"GNR-D_SDP2": 8750,  // Delay summed directly (no negation)
+				"OCP1_CLK":   10000, // Delay summed directly (no negation)
 			},
 		},
 		{
@@ -191,7 +191,7 @@ func TestCalculateRouteDelay(t *testing.T) {
 			expectedDelay:    3000,
 		},
 		{
-			name: "route with positive delays",
+			name: "route with delays",
 			model: &DelayCompensationModel{
 				Connections: []Connection{
 					{From: "DPLL ePPS output 1", To: "CF1 ePPS input", DelayPs: 10000},
@@ -199,7 +199,7 @@ func TestCalculateRouteDelay(t *testing.T) {
 			},
 			sequence:         []string{"DPLL ePPS output 1", "CF1 ePPS input"},
 			networkInterface: "ens4f0",
-			expectedDelay:    10000, // Delays are positive, calculateRouteDelay returns raw sum
+			expectedDelay:    10000, // calculateRouteDelay returns raw sum (no negation)
 		},
 		{
 			name: "missing connection",
@@ -372,8 +372,8 @@ func TestPopulatePhaseAdjustmentsFromDelays(t *testing.T) {
 			verifyFunc: func(t *testing.T, hwConfig *ptpv2alpha1.HardwareConfig) {
 				pinConfig := hwConfig.Spec.Profile.ClockChain.Structure[0].DPLL.PhaseOutputs["OCP1_CLK"]
 				assert.NotNil(t, pinConfig.PhaseAdjustment)
-				// Internal adjustment is -10000 (already negated from delay), user adjustment is 0, so total is -10000
-				assert.Equal(t, int64(-10000), *pinConfig.PhaseAdjustment)
+				// Internal delay is 10000 (no negation), user adjustment is 0, so total is 10000
+				assert.Equal(t, int64(10000), *pinConfig.PhaseAdjustment)
 			},
 		},
 		{
@@ -418,8 +418,8 @@ func TestPopulatePhaseAdjustmentsFromDelays(t *testing.T) {
 			verifyFunc: func(t *testing.T, hwConfig *ptpv2alpha1.HardwareConfig) {
 				pinConfig := hwConfig.Spec.Profile.ClockChain.Structure[0].DPLL.PhaseOutputs["OCP1_CLK"]
 				assert.NotNil(t, pinConfig.PhaseAdjustment)
-				// Internal adjustment is -10000 (already negated from delay), user adjustment is -5000, so total is -15000
-				assert.Equal(t, int64(-15000), *pinConfig.PhaseAdjustment)
+				// Internal delay is 10000 (no negation), user adjustment is -5000, so total is 5000
+				assert.Equal(t, int64(5000), *pinConfig.PhaseAdjustment)
 			},
 		},
 		{
