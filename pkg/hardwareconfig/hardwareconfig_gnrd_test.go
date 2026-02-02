@@ -40,7 +40,7 @@ func TestGNRDHardwareConfigFullFlow(t *testing.T) {
 	t.Logf("  Related PTP Profile: %s", hwConfig.Spec.RelatedPtpProfileName)
 
 	// Create hardware config manager
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 	defer hcm.resetExecutors()
 
 	// Track captured DPLL commands
@@ -200,7 +200,7 @@ func validateGNRDStructureCommands(t *testing.T, hcm *HardwareConfigManager, clo
 	t.Logf("Structure commands: %d", len(structureCommands))
 
 	// Load e825 defaults for validation
-	hwSpec, err := LoadHardwareDefaults("intel/e825")
+	hwSpec, err := LoadHardwareDefaults("intel/e825", nil)
 	if !assert.NoError(t, err, "Failed to load e825 defaults") {
 		return
 	}
@@ -328,7 +328,7 @@ func validateGNRDInitCommands(t *testing.T, dpllCommands []dpll.PinParentDeviceC
 func validateGNRDVendorDefaults(t *testing.T) {
 	t.Logf("\n=== Validating Vendor Defaults (intel/e825) ===")
 
-	hwSpec, err := LoadHardwareDefaults("intel/e825")
+	hwSpec, err := LoadHardwareDefaults("intel/e825", nil)
 	if !assert.NoError(t, err, "Failed to load e825 defaults") {
 		return
 	}

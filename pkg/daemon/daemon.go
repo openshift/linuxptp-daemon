@@ -137,16 +137,6 @@ func NewProcessManager() *ProcessManager {
 	}
 }
 
-// NewDaemonForTests is used by unit tests
-func NewDaemonForTests(tracker *ReadyTracker, processManager *ProcessManager) *Daemon {
-	tracker.processManager = processManager
-	return &Daemon{
-		readyTracker:          tracker,
-		processManager:        processManager,
-		hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(),
-	}
-}
-
 // SetTestProfileProcess ...
 func (p *ProcessManager) SetTestProfileProcess(name string, ifaces config.IFaces, socketPath,
 	processConfigPath string, nodeProfile ptpv1.PtpProfile) {
@@ -469,7 +459,7 @@ func New(
 		ptpUpdate:             ptpUpdate,
 		pluginManager:         pluginManager,
 		hwconfigs:             hwconfigs,
-		hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(),
+		hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(kubeClient, namespace),
 		refreshNodePtpDevice:  refreshNodePtpDevice,
 		pmcPollInterval:       pmcPollInterval,
 		processManager:        pm,

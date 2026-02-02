@@ -192,7 +192,8 @@ type PinParentDeviceConfig struct {
 // LoadHardwareDefaults loads defaults for a given hardware definition path (hwDefPath)
 // from embedded defaults baked into the binary.
 // It loads both defaults.yaml and delays.yaml (if available) and merges them.
-func LoadHardwareDefaults(hwDefPath string) (*HardwareDefaults, error) {
+// If labelMap is provided, board labels are remapped before returning.
+func LoadHardwareDefaults(hwDefPath string, labelMap BoardLabelMap) (*HardwareDefaults, error) {
 	if hwDefPath == "" {
 		return nil, nil
 	}
@@ -223,6 +224,10 @@ func LoadHardwareDefaults(hwDefPath string) (*HardwareDefaults, error) {
 		hd.DelayCompensation = delayModel
 	} else {
 		glog.V(4).Infof("Hardware defaults: no delay compensation model for %s", hwDefPath)
+	}
+
+	if len(labelMap) > 0 {
+		RemapDefaultProfileLabels(hd, labelMap)
 	}
 
 	return hd, nil
@@ -263,25 +268,35 @@ type BehaviorProfiles struct {
 
 // LoadBehaviorProfile loads behavior profile template for a given hardware definition path and clock type
 // Returns nil if no profile is found (not an error - templates are optional)
-func LoadBehaviorProfile(hwDefPath string, clockType string) (*BehaviorProfileTemplate, error) {
-	if hwDefPath == "" || clockType == "" {
-		return nil, nil
+// hwDefPath and clockType are guaranteed to be non-empty by callers (validated upstream).
+func LoadBehaviorProfile(hwDefPath string, clockType string, loader *BoardLabelMapLoader) (*BehaviorProfileTemplate, error) {
+	// Load optional board label remapping information from ConfigMap
+	var labelMap BoardLabelMap
+	labelMap, err := loader.LoadBoardLabelMap(hwDefPath)
+	if err != nil {
+		// Log but continue - remapping is optional (ConfigMap not found is not an error)
+		glog.Warningf("Failed to load board label map for %s: %v (using embedded defaults)", hwDefPath, err)
 	}
 
-	// Normalize clock type to lowercase (e.g., "T-BC" -> "t-bc")
 	clockTypeKey := strings.ToLower(clockType)
 
 	// Load embedded behavior profiles
 	if data, ok := embeddedBehaviorProfiles[hwDefPath]; ok && len(data) > 0 {
 		glog.Infof("Behavior profile: loading embedded profiles for %s", hwDefPath)
-		profiles, err := decodeBehaviorProfiles("embedded:"+hwDefPath, data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode behavior profiles for %s: %w", hwDefPath, err)
+		profiles, errDecode := decodeBehaviorProfiles("embedded:"+hwDefPath, data)
+		if errDecode != nil {
+			return nil, fmt.Errorf("failed to decode behavior profiles for %s: %w", hwDefPath, errDecode)
 		}
 
 		if template, found := profiles.BehaviorProfiles[clockTypeKey]; found {
 			glog.Infof("Behavior profile: found template for %s/%s", hwDefPath, clockTypeKey)
-			return &template, nil
+			result := &template
+
+			if len(labelMap) > 0 {
+				RemapBehaviorProfileLabels(result, labelMap)
+			}
+
+			return result, nil
 		}
 
 		glog.Infof("Behavior profile: no template found for clock type %s in %s", clockTypeKey, hwDefPath)
