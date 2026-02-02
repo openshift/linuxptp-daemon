@@ -58,7 +58,7 @@ func Test_AfterRunPTPCommandE810(t *testing.T) {
 	}
 	assert.Equal(t, requiredUblxCmds, found)
 	// And expect 3 of them to have produced output (as specified in the profile)
-	assert.Equal(t, 3, len(*data.hwplugins))
+	assert.Equal(t, 3, len(data.hwplugins))
 }
 
 func Test_initInternalDelays(t *testing.T) {
@@ -315,7 +315,7 @@ func Test_PopulateHwConfdigE810(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(output))
 
-	data.hwplugins = &[]string{"A", "B", "C"}
+	data.hwplugins = []string{"A", "B", "C"}
 	err = p.PopulateHwConfig(d, &output)
 	assert.NoError(t, err)
 	assert.Equal(t, []ptpv1.HwConfig{

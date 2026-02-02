@@ -18,24 +18,10 @@ import (
 var pluginNameE810 = "e810"
 
 type E810Opts struct {
-	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
-	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
-	Devices             []string                     `json:"devices"`
-	DevicePins          map[string]pinSet            `json:"pins"`
-	DeviceFreqencies    map[string]frqSet            `json:"frequencies"`
-	DpllSettings        map[string]uint64            `json:"settings"`
-	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
-	PhaseInputs         []PhaseInputs                `json:"interconnections"`
-}
-
-// allDevices enumerates all defined devices (Devices/DevicePins/DeviceFrequencies/PhaseOffsets)
-func (opts *E810Opts) allDevices() []string {
-	// Enumerate all defined devices (Devices/DevicePins/DeviceFrequencies)
-	allDevices := opts.Devices
-	allDevices = extendWithKeys(allDevices, opts.DevicePins)
-	allDevices = extendWithKeys(allDevices, opts.DeviceFreqencies)
-	allDevices = extendWithKeys(allDevices, opts.PhaseOffsetPins)
-	return allDevices
+	PluginOpts
+	EnableDefaultConfig bool          `json:"enableDefaultConfig"`
+	UblxCmds            UblxCmdList   `json:"ublxCmds"`
+	PhaseInputs         []PhaseInputs `json:"interconnections"`
 }
 
 // GetPhaseInputs implements PhaseInputsProvider
@@ -47,7 +33,7 @@ type E810UblxCmds struct {
 }
 
 type E810PluginData struct {
-	hwplugins *[]string
+	PluginData
 }
 
 // Sourced from https://github.com/RHsyseng/oot-ice/blob/main/ptp-config.sh
@@ -184,9 +170,9 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			case "gpspipe":
 				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
 				// Execute user-supplied UblxCmds first:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, e810Opts.UblxCmds.runAll()...)
+				pluginData.hwplugins = append(pluginData.hwplugins, e810Opts.UblxCmds.runAll()...)
 				// Finish with the default commands:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
+				pluginData.hwplugins = append(pluginData.hwplugins, defaultUblxCmds().runAll()...)
 			case "tbc-ho-exit":
 				err = clockChain.EnterNormalTBC()
 				if err != nil {
@@ -214,15 +200,12 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 }
 
 func PopulateHwConfigE810(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error {
-	//hwConfig := ptpv1.HwConfig{}
-	//hwConfig.DeviceID = "e810"
-	//*hwconfigs = append(*hwconfigs, hwConfig)
 	if data != nil {
 		_data := *data
 		pluginData := _data.(*E810PluginData)
 		_pluginData := *pluginData
 		if _pluginData.hwplugins != nil {
-			for _, _hwconfig := range *_pluginData.hwplugins {
+			for _, _hwconfig := range _pluginData.hwplugins {
 				hwConfig := ptpv1.HwConfig{}
 				hwConfig.DeviceID = pluginNameE810
 				hwConfig.Status = _hwconfig
@@ -239,8 +222,7 @@ func E810(name string) (*plugin.Plugin, *interface{}) {
 		return nil, nil
 	}
 	glog.Infof("registering e810 plugin")
-	hwplugins := []string{}
-	pluginData := E810PluginData{hwplugins: &hwplugins}
+	pluginData := E810PluginData{}
 	_plugin := plugin.Plugin{
 		Name:               pluginNameE810,
 		OnPTPConfigChange:  OnPTPConfigChangeE810,

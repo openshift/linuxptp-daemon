@@ -18,25 +18,12 @@ var pluginNameE830 = "e830"
 
 // E830Opts is the options for e830 plugin
 type E830Opts struct {
-	Devices          []string                     `json:"devices"`
-	DevicePins       map[string]pinSet            `json:"pins"`
-	DeviceFreqencies map[string]frqSet            `json:"frequencies"`
-	DpllSettings     map[string]uint64            `json:"settings"`
-	PhaseOffsetPins  map[string]map[string]string `json:"phaseOffsetPins"`
-}
-
-// allDevices enumerates all defined devices (Devices/DevicePins/DeviceFrequencies/PhaseOffsets)
-func (opts *E830Opts) allDevices() []string {
-	allDevices := opts.Devices
-	allDevices = extendWithKeys(allDevices, opts.DevicePins)
-	allDevices = extendWithKeys(allDevices, opts.DeviceFreqencies)
-	allDevices = extendWithKeys(allDevices, opts.PhaseOffsetPins)
-	return allDevices
+	PluginOpts
 }
 
 // E830PluginData is the plugin data for e830 plugin
 type E830PluginData struct {
-	hwplugins *[]string
+	PluginData
 }
 
 func _hasDpllForClockID(clockID uint64) bool {
@@ -174,8 +161,7 @@ func E830(name string) (*plugin.Plugin, *interface{}) {
 		return nil, nil
 	}
 	glog.Infof("registering e830 plugin")
-	hwplugins := []string{}
-	pluginData := E830PluginData{hwplugins: &hwplugins}
+	pluginData := E830PluginData{}
 	_plugin := plugin.Plugin{
 		Name:               pluginNameE830,
 		OnPTPConfigChange:  OnPTPConfigChangeE830,

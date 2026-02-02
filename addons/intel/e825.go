@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -43,13 +42,9 @@ var bcDpllPeriods = frqSet{
 
 // E825Opts is the options structure for e825 plugin
 type E825Opts struct {
-	UblxCmds         UblxCmdList                  `json:"ublxCmds"`
-	Devices          []string                     `json:"devices"`
-	DevicePins       map[string]pinSet            `json:"pins"`
-	DeviceFreqencies map[string]frqSet            `json:"frequencies"`
-	DpllSettings     map[string]uint64            `json:"settings"`
-	PhaseOffsetPins  map[string]map[string]string `json:"phaseOffsetPins"`
-	Gnss             GnssOptions                  `json:"gnss"`
+	PluginOpts
+	UblxCmds UblxCmdList `json:"ublxCmds"`
+	Gnss     GnssOptions `json:"gnss"`
 }
 
 // GnssOptions defines GNSS-specific options for the e825
@@ -57,33 +52,14 @@ type GnssOptions struct {
 	Disabled bool `json:"disabled"`
 }
 
-// allDevices enumerates all defined devices (Devices/DevicePins/DeviceFrequencies/PhaseOffsets)
-func (opts *E825Opts) allDevices() []string {
-	// Enumerate all defined devices (Devices/DevicePins/DeviceFrequencies)
-	allDevices := opts.Devices
-	allDevices = extendWithKeys(allDevices, opts.DevicePins)
-	allDevices = extendWithKeys(allDevices, opts.DeviceFreqencies)
-	allDevices = extendWithKeys(allDevices, opts.PhaseOffsetPins)
-	return allDevices
-}
-
 // E825PluginData is the data structure for e825 plugin
 type E825PluginData struct {
-	hwplugins *[]string
-	dpllPins  []*dpll_netlink.PinInfo
+	PluginData
+	dpllPins []*dpll_netlink.PinInfo
 }
 
 func tbcConfigured(nodeProfile *ptpv1.PtpProfile) bool {
 	return nodeProfile.PtpSettings["clockType"] == "T-BC"
-}
-
-func extendWithKeys[T any](s []string, m map[string]T) []string {
-	for key := range m {
-		if !slices.Contains(s, key) {
-			s = append(s, key)
-		}
-	}
-	return s
 }
 
 // OnPTPConfigChangeE825 performs actions on PTP config change for e825 plugin
@@ -272,9 +248,9 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			case "gpspipe":
 				glog.Infof("AfterRunPTPCommandE825 doing ublx config for command: %s", command)
 				// Execute user-supplied UblxCmds first:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, e825Opts.UblxCmds.runAll()...)
+				pluginData.hwplugins = append(pluginData.hwplugins, e825Opts.UblxCmds.runAll()...)
 				// Finish with the default commands:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
+				pluginData.hwplugins = append(pluginData.hwplugins, defaultUblxCmds().runAll()...)
 			// "tbc-ho-exit" is called when ptp4l sync is achieved on the T-BC upstreamPort
 			case "tbc-ho-exit":
 				if tbcConfigured(nodeProfile) {
@@ -316,9 +292,9 @@ func PopulateHwConfigE825(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error 
 		pluginData := _data.(*E825PluginData)
 		_pluginData := *pluginData
 		if _pluginData.hwplugins != nil {
-			for _, _hwconfig := range *_pluginData.hwplugins {
+			for _, _hwconfig := range _pluginData.hwplugins {
 				hwConfig := ptpv1.HwConfig{}
-				hwConfig.DeviceID = "e825"
+				hwConfig.DeviceID = pluginNameE825
 				hwConfig.Status = _hwconfig
 				*hwconfigs = append(*hwconfigs, hwConfig)
 			}
@@ -329,15 +305,14 @@ func PopulateHwConfigE825(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error 
 
 // E825 initializes the e825 plugin
 func E825(name string) (*plugin.Plugin, *interface{}) {
-	if name != "e825" {
+	if name != pluginNameE825 {
 		glog.Errorf("Plugin must be initialized as 'e825'")
 		return nil, nil
 	}
 	glog.Infof("registering e825 plugin")
-	hwplugins := []string{}
-	pluginData := E825PluginData{hwplugins: &hwplugins}
+	pluginData := E825PluginData{}
 	_plugin := plugin.Plugin{
-		Name:               "e825",
+		Name:               pluginNameE825,
 		OnPTPConfigChange:  OnPTPConfigChangeE825,
 		AfterRunPTPCommand: AfterRunPTPCommandE825,
 		PopulateHwConfig:   PopulateHwConfigE825,

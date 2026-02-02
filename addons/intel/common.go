@@ -1,6 +1,43 @@
+// Package intel contains plugins for all supported Intel NICs
 package intel
 
-import "os"
+import (
+	"os"
+	"slices"
+)
+
+// PluginOpts contains all configuration data common to all addons/intel NIC plugins
+type PluginOpts struct {
+	Devices          []string                     `json:"devices"`
+	DevicePins       map[string]pinSet            `json:"pins"`
+	DeviceFreqencies map[string]frqSet            `json:"frequencies"`
+	DpllSettings     map[string]uint64            `json:"settings"`
+	PhaseOffsetPins  map[string]map[string]string `json:"phaseOffsetPins"`
+}
+
+// PluginData contains all persistent data commont to all addons/intel NIC plugins
+type PluginData struct {
+	hwplugins []string
+}
+
+func extendWithKeys[T any](s []string, m map[string]T) []string {
+	for key := range m {
+		if !slices.Contains(s, key) {
+			s = append(s, key)
+		}
+	}
+	return s
+}
+
+// allDevices enumerates all defined devices (Devices/DevicePins/DeviceFrequencies/PhaseOffsets)
+func (opts *PluginOpts) allDevices() []string {
+	// Enumerate all defined devices (Devices/DevicePins/DeviceFrequencies)
+	allDevices := opts.Devices
+	allDevices = extendWithKeys(allDevices, opts.DevicePins)
+	allDevices = extendWithKeys(allDevices, opts.DeviceFreqencies)
+	allDevices = extendWithKeys(allDevices, opts.PhaseOffsetPins)
+	return allDevices
+}
 
 // FileSystemInterface defines the interface for filesystem operations to enable mocking
 type FileSystemInterface interface {
