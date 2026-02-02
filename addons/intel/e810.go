@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -27,37 +26,21 @@ type E810Opts struct {
 // GetPhaseInputs implements PhaseInputsProvider
 func (o E810Opts) GetPhaseInputs() []PhaseInputs { return o.PhaseInputs }
 
-type E810UblxCmds struct {
-	ReportOutput bool     `json:"reportOutput"`
-	Args         []string `json:"args"`
-}
-
 type E810PluginData struct {
 	PluginData
 }
 
-// Sourced from https://github.com/RHsyseng/oot-ice/blob/main/ptp-config.sh
-var EnableE810PTPConfig = `
-#!/bin/bash
-set -eu
-
-ETH=$(grep -e 000e -e 000f /sys/class/net/*/device/subsystem_device | awk -F"/" '{print $5}')
-
-for DEV in $ETH; do
-  if [ -f /sys/class/net/$DEV/device/ptp/ptp*/pins/U.FL2 ]; then
-    echo 0 2 > /sys/class/net/$DEV/device/ptp/ptp*/pins/U.FL2
-    echo 0 1 > /sys/class/net/$DEV/device/ptp/ptp*/pins/U.FL1
-    echo 0 2 > /sys/class/net/$DEV/device/ptp/ptp*/pins/SMA2
-    echo 0 1 > /sys/class/net/$DEV/device/ptp/ptp*/pins/SMA1
-  fi
-done
-
-echo "Disabled all SMA and U.FL Connections"
-`
-
 var (
 	unitTest   bool
 	clockChain ClockChainInterface = &ClockChain{}
+
+	// defaultE810PinConfig -> All outputs disabled
+	defaultE810PinConfig = pinSet{
+		"SMA1":  "0 1",
+		"SMA2":  "0 2",
+		"U.FL1": "0 1",
+		"U.FL2": "0 2",
+	}
 )
 
 // For mocking DPLL pin info
@@ -88,9 +71,14 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			glog.Infof("Initializing e810 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
 
 			if e810Opts.EnableDefaultConfig {
-				stdout, _ := exec.Command("/usr/bin/bash", "-c", EnableE810PTPConfig).Output()
-				glog.Infof(string(stdout))
+				for _, device := range allDevices {
+					err = pinConfig.applyPinSet(device, defaultE810PinConfig)
+					if err != nil {
+						glog.Errorf("e825 failed to set default Pin configuration for %s: %s", device, err)
+					}
+				}
 			}
+
 			if (*nodeProfile).PtpSettings == nil {
 				(*nodeProfile).PtpSettings = make(map[string]string)
 			}
