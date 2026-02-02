@@ -256,3 +256,33 @@ func mockClockIDsFromProfile(mfs *MockFileSystem, profile *ptpv1.PtpProfile) {
 		}
 	}
 }
+
+func setupGNSSMocks(data *E825PluginData) (*mockBatchPinSet, func()) {
+	// Setup Mock gnss dpll pin data
+	data.dpllPins = []*dpll.PinInfo{
+		{
+			ID:           1,
+			BoardLabel:   "SkipMe",
+			Type:         dpll.PinTypeEXT,
+			Capabilities: dpll.PinCapPrio,
+		},
+		{
+			BoardLabel:   "GNSS_1PPS_IN",
+			ID:           2,
+			Type:         dpll.PinTypeGNSS,
+			Capabilities: dpll.PinCapPrio | dpll.PinCapState,
+			ParentDevice: []dpll.PinParentDevice{
+				{
+					ParentID:  uint32(1),
+					Direction: dpll.PinDirectionInput,
+				},
+				{
+					ParentID:  uint32(2),
+					Direction: dpll.PinDirectionInput,
+				},
+			},
+		},
+	}
+	// Mock pin-set logic
+	return setupBatchPinSetMock()
+}

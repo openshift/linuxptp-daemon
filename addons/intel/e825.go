@@ -190,9 +190,6 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 
 // populateDpllPins creates a list of all known DPLL pins
 func (d *E825PluginData) populateDpllPins() error {
-	if unitTest {
-		return nil
-	}
 	conn, err := dpll_netlink.Dial(nil)
 	if err != nil {
 		return fmt.Errorf("failed to dial DPLL: %w", err)

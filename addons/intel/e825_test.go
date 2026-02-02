@@ -43,7 +43,6 @@ func Test_E825(t *testing.T) {
 }
 
 func Test_AfterRunPTPCommandE825(t *testing.T) {
-	unitTest = true
 	profile, err := loadProfile("./testdata/e825-tgm.yaml")
 	assert.NoError(t, err)
 	p, d := E825("e825")
@@ -162,7 +161,6 @@ func Test_PopulateHwConfdigE825(t *testing.T) {
 }
 
 func Test_setupGnss(t *testing.T) {
-	unitTest = true
 	tcs := []struct {
 		name             string
 		gnss             GnssOptions
@@ -318,7 +316,6 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(tt *testing.T) {
-			unitTest = true
 			mockPins, restorePins := setupMockPinConfig()
 			defer restorePins()
 			profile, err := loadProfile(tc.profile)
@@ -327,6 +324,9 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 			}
 			assert.NoError(tt, err)
 			p, d := E825("e825")
+			data := (*d).(*E825PluginData)
+			mockDpllPinset, restoreDpllPins := setupGNSSMocks(data)
+			defer restoreDpllPins()
 			err = p.OnPTPConfigChange(d, profile)
 			if tc.expectError {
 				assert.Error(tt, err)
@@ -334,6 +334,7 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 				assert.NoError(tt, err)
 				assert.Equal(tt, tc.expectedPinSets, mockPins.actualPinSetCount)
 				assert.Equal(tt, tc.expectedPinFrqs, mockPins.actualPinFrqCount)
+				assert.Equal(tt, 1, len(*mockDpllPinset.commands))
 			}
 		})
 	}
