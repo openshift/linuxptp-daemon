@@ -1664,7 +1664,7 @@ func TestBuildPhaseAdjustmentCommandsWithGranularity(t *testing.T) {
 	}
 
 	// Create hardware config manager
-	hcm := NewHardwareConfigManager()
+	hcm := newHardwareConfigManagerForTests()
 	defer hcm.resetExecutors()
 
 	// Set pin cache
