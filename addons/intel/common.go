@@ -4,6 +4,8 @@ package intel
 import (
 	"os"
 	"slices"
+
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
 // PluginOpts contains all configuration data common to all addons/intel NIC plugins
@@ -17,7 +19,19 @@ type PluginOpts struct {
 
 // PluginData contains all persistent data commont to all addons/intel NIC plugins
 type PluginData struct {
+	name      string
 	hwplugins []string
+}
+
+// PopulateHwConfig populates hwconfig for all intel plugins
+func (data *PluginData) PopulateHwConfig(_ *interface{}, hwconfigs *[]ptpv1.HwConfig) error {
+	for _, _hwconfig := range data.hwplugins {
+		hwConfig := ptpv1.HwConfig{}
+		hwConfig.DeviceID = data.name
+		hwConfig.Status = _hwconfig
+		*hwconfigs = append(*hwconfigs, hwConfig)
+	}
+	return nil
 }
 
 func extendWithKeys[T any](s []string, m map[string]T) []string {

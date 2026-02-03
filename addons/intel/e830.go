@@ -151,9 +151,6 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 // AfterRunPTPCommandE830 is called after running ptp command for e830 plugin
 func AfterRunPTPCommandE830(_ *interface{}, _ *ptpv1.PtpProfile, _ string) error { return nil }
 
-// PopulateHwConfigE830 populates hwconfig for e830 plugin
-func PopulateHwConfigE830(_ *interface{}, _ *[]ptpv1.HwConfig) error { return nil }
-
 // E830 initializes the e830 plugin
 func E830(name string) (*plugin.Plugin, *interface{}) {
 	if name != pluginNameE830 {
@@ -161,12 +158,14 @@ func E830(name string) (*plugin.Plugin, *interface{}) {
 		return nil, nil
 	}
 	glog.Infof("registering e830 plugin")
-	pluginData := E830PluginData{}
+	pluginData := E830PluginData{
+		PluginData: PluginData{name: pluginNameE830},
+	}
 	_plugin := plugin.Plugin{
 		Name:               pluginNameE830,
 		OnPTPConfigChange:  OnPTPConfigChangeE830,
 		AfterRunPTPCommand: AfterRunPTPCommandE830,
-		PopulateHwConfig:   PopulateHwConfigE830,
+		PopulateHwConfig:   pluginData.PopulateHwConfig,
 	}
 	var iface interface{} = &pluginData
 	return &_plugin, &iface

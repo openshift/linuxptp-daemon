@@ -285,24 +285,6 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 	return nil
 }
 
-// PopulateHwConfigE825 populates hwconfig for e825 plugin
-func PopulateHwConfigE825(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error {
-	if data != nil {
-		_data := *data
-		pluginData := _data.(*E825PluginData)
-		_pluginData := *pluginData
-		if _pluginData.hwplugins != nil {
-			for _, _hwconfig := range _pluginData.hwplugins {
-				hwConfig := ptpv1.HwConfig{}
-				hwConfig.DeviceID = pluginNameE825
-				hwConfig.Status = _hwconfig
-				*hwconfigs = append(*hwconfigs, hwConfig)
-			}
-		}
-	}
-	return nil
-}
-
 // E825 initializes the e825 plugin
 func E825(name string) (*plugin.Plugin, *interface{}) {
 	if name != pluginNameE825 {
@@ -310,12 +292,14 @@ func E825(name string) (*plugin.Plugin, *interface{}) {
 		return nil, nil
 	}
 	glog.Infof("registering e825 plugin")
-	pluginData := E825PluginData{}
+	pluginData := E825PluginData{
+		PluginData: PluginData{name: pluginNameE825},
+	}
 	_plugin := plugin.Plugin{
 		Name:               pluginNameE825,
 		OnPTPConfigChange:  OnPTPConfigChangeE825,
 		AfterRunPTPCommand: AfterRunPTPCommandE825,
-		PopulateHwConfig:   PopulateHwConfigE825,
+		PopulateHwConfig:   pluginData.PopulateHwConfig,
 	}
 	var iface interface{} = &pluginData
 	return &_plugin, &iface

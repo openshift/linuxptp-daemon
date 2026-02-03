@@ -187,35 +187,20 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 	return nil
 }
 
-func PopulateHwConfigE810(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error {
-	if data != nil {
-		_data := *data
-		pluginData := _data.(*E810PluginData)
-		_pluginData := *pluginData
-		if _pluginData.hwplugins != nil {
-			for _, _hwconfig := range _pluginData.hwplugins {
-				hwConfig := ptpv1.HwConfig{}
-				hwConfig.DeviceID = pluginNameE810
-				hwConfig.Status = _hwconfig
-				*hwconfigs = append(*hwconfigs, hwConfig)
-			}
-		}
-	}
-	return nil
-}
-
 func E810(name string) (*plugin.Plugin, *interface{}) {
 	if name != pluginNameE810 {
 		glog.Errorf("Plugin must be initialized as 'e810'")
 		return nil, nil
 	}
 	glog.Infof("registering e810 plugin")
-	pluginData := E810PluginData{}
+	pluginData := E810PluginData{
+		PluginData: PluginData{name: pluginNameE810},
+	}
 	_plugin := plugin.Plugin{
 		Name:               pluginNameE810,
 		OnPTPConfigChange:  OnPTPConfigChangeE810,
 		AfterRunPTPCommand: AfterRunPTPCommandE810,
-		PopulateHwConfig:   PopulateHwConfigE810,
+		PopulateHwConfig:   pluginData.PopulateHwConfig,
 	}
 	var iface interface{} = &pluginData
 	return &_plugin, &iface
