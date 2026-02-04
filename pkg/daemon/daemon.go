@@ -85,6 +85,17 @@ var ptpTmpFiles = []string{
 	pmcSocketName,
 }
 
+const socketDialTimeout = 5 * time.Second
+
+func dialSocket() (net.Conn, error) {
+	c, err := net.DialTimeout("unix", eventSocket, socketDialTimeout)
+	if err != nil {
+		glog.Errorf("error trying to connect to event socket")
+		time.Sleep(connectionRetryInterval)
+	}
+	return c, err
+}
+
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
 // Processes in ProcessManager will be started
@@ -169,6 +180,27 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 	}
 	p.process[0].syncERelations = config
 
+}
+
+// EmitProcessStatusLogs emits process status logs using the EventHandler's
+// managed connection with reconnection support.
+func (p *ProcessManager) EmitProcessStatusLogs() {
+	for _, proc := range p.process {
+		status := PtpProcessUp
+		if proc.Stopped() {
+			status = PtpProcessDown
+		}
+		p.ptpEventHandler.EmitProcessStatusLog(proc.name, proc.configName, status)
+	}
+}
+
+// EmitClockClassLogs re-emits clock class via the EventHandler's managed connection.
+func (p *ProcessManager) EmitClockClassLogs() {
+	for _, proc := range p.process {
+		if proc.name == ptp4lProcessName {
+			p.ptpEventHandler.EmitClockClass(proc.configName)
+		}
+	}
 }
 
 type tBCProcessAttributes struct {
