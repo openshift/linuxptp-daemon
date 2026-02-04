@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -89,23 +88,13 @@ func (h metricHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	go func() {
-		var socketConnection net.Conn
-		for {
-			var err error
-			socketConnection, err = dialSocket()
-			if err == nil {
-				break
-			}
-		}
-		defer socketConnection.Close()
-
 		eventHandler := h.tracker.processManager.ptpEventHandler
-		eventHandler.EmitClockSyncLogs(socketConnection)
-		eventHandler.EmitPortRoleLogs(socketConnection)
+		eventHandler.EmitClockSyncLogs()
+		eventHandler.EmitPortRoleLogs()
 
 		processManager := h.tracker.processManager
 		go processManager.EmitProcessStatusLogs()
-		go processManager.EmitClockClassLogs(socketConnection)
+		go processManager.EmitClockClassLogs()
 	}()
 }
 
