@@ -1,7 +1,19 @@
 FROM golang:1.24.0 AS builder
 WORKDIR /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon
-COPY . .
-RUN make clean && make
+
+COPY go.mod go.sum ./
+COPY vendor vendor
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY addons addons
+COPY cmd cmd
+COPY deploy deploy
+COPY hack hack
+COPY Makefile Makefile
+COPY pkg pkg
+COPY .git .git
+
+RUN --mount=type=cache,target=/root/.cache/go-build make
 
 FROM quay.io/centos/centos:stream9
 
