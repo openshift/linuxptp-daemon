@@ -1047,8 +1047,9 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 					output = pm.ProcessLog(p.name, output)
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
 					output = p.replaceClockID(output)
+					output = fmt.Sprintf("%s\n", output)
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
-						fmt.Printf("%s\n", output)
+						fmt.Printf("%s", output)
 					}
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
