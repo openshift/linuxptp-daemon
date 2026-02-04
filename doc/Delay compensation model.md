@@ -69,9 +69,10 @@ We define a **Route** (the specific sequence of interest) and a **Compensation S
 
 | Route | Strategy | Designated compensator | Configuration |
 | :---- | :---- | :---- | :---- |
-| NAC to DPLL input | Input side compensation | DPLL REF0 input \*Note 1  | User space will sum 5700ps and 129ps, and dial \-5829 ps of phase adjustment (rounded to the nearest phase adjustment granularity) to the designated compensator |
-| DPLL to CF (unmanaged inputs) | Output side compensation | DPLL OUT5 output \*Note 1 | User space will sum 6732ps and 152ps, and dial \-6884 ps of phase adjustment (rounded to the nearest phase adjustment granularity) to the designated compensator |
+| NAC to DPLL input | Input side compensation | DPLL REF0 input \*Note 1  | User space will sum delay values along the route and dial the total phase adjustment (rounded to the nearest phase adjustment granularity) to the designated compensator. \*Note 2 |
+| DPLL to CF (unmanaged inputs) | Output side compensation | DPLL OUT5 output \*Note 1 | User space will sum delay values along the route and dial the total phase adjustment (rounded to the nearest phase adjustment granularity) to the designated compensator. \*Note 2 |
 | Note 1: Specific numbers, labels and pins are subject to change per platform generation |  |  |  |
+| Note 2: No automatic negation is applied. Users must provide delay values with the correct sign for their specific DPLL hardware, as different DPLL implementations treat phase adjustment direction differently. |  |  |  |
 
 #### 
 
@@ -174,9 +175,10 @@ Vendor-defined delays are specified in `delays.yaml` files located in the hardwa
 
 ### Delay Values
 
-- **Delays are positive values** representing the actual propagation delay in picoseconds
-- Example: `delayPs: 10000` means a 10,000 picosecond (10 nanosecond) delay
-- These delays are automatically negated during compensation calculation
+- **Delay values** are specified in picoseconds and summed directly without automatic negation
+- Example: `delayPs: 10000` means a 10,000 picosecond (10 nanosecond) value
+- **Users are responsible for providing delay values with the correct sign** for their specific DPLL hardware, as different DPLL implementations treat phase adjustment direction differently
+- The system sums all delay values along a route and passes the total directly to the DPLL
 
 ### Example `delays.yaml` Structure
 
@@ -197,7 +199,7 @@ connections:
   - from: "DPLL ePPS output 1"
     to: "CF1 ePPS input"
     description: "Internal routing delay from DPLL output 1 to CF1 input"
-    delayPs: 10000  # Positive delay value in picoseconds
+    delayPs: -10000  # Delay value in picoseconds (sign depends on DPLL hardware)
 
 # Routes define compensation strategies
 routes:
@@ -257,17 +259,18 @@ spec:
 ### Example Calculation
 
 Given:
-- `delays.yaml` route delay: `10000 ps` (positive delay)
+- `delays.yaml` route delay: `-10000 ps`
 - HardwareConfig `phaseAdjustment`: `1250 ps` (user adjustment)
 
 Calculation:
 ```
-Internal delay:        10000 ps  (from delays.yaml)
-Internal adjustment:  -10000 ps  (negated)
+Internal delay:       -10000 ps  (from delays.yaml)
 User adjustment:        1250 ps  (from HardwareConfig)
 ─────────────────────────────────────────────
 Total adjustment:      -8750 ps  (sent to DPLL)
 ```
+
+**Note:** No automatic negation is applied. The delay values in `delays.yaml` should already have the correct sign for the target DPLL hardware. Different DPLL implementations may require different sign conventions.
 
 ## Complete Example
 
@@ -283,7 +286,7 @@ components:
 connections:
   - from: "DPLL ePPS output 1"
     to: "CF1 ePPS input"
-    delayPs: 10000
+    delayPs: -10000  # Sign appropriate for specific DPLL hardware
 
 routes:
   - name: "DPLL to CF1"
@@ -314,16 +317,16 @@ spec:
 
 ### 3. Result
 
-- Internal delay: `10000 ps`
-- Internal adjustment: `-10000 ps`
+- Internal delay: `-10000 ps`
 - User adjustment: `2000 ps`
 - **Final adjustment applied to DPLL**: `-8000 ps`
 
 ## Notes
 
-- **Delays in `delays.yaml` are always positive** (representing actual propagation delay)
-- **User adjustments in HardwareConfig** are already adjustment values (can be positive or negative)
-- The system automatically handles the negation of internal delays
+- **Delays in `delays.yaml`** should have the correct sign for the target DPLL hardware (different DPLL implementations treat phase adjustment direction differently)
+- **User adjustments in HardwareConfig** can be positive or negative
+- **No automatic negation is applied** - all delay values are summed directly and passed to the DPLL
+- Users/vendors are responsible for determining the correct sign convention for their specific DPLL hardware
 - Pins referenced in `delays.yaml` routes are automatically injected into the HardwareConfig structure if not already present
 - Phase adjustments are validated against pin-specific min/max ranges and rounded to pin granularity before application
 
