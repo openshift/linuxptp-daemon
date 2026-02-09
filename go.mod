@@ -10,9 +10,9 @@ require (
 	github.com/jaypipes/ghw v0.12.0
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
-	github.com/openshift/ptp-operator v0.0.0-20240623153039-2f8235d2dad8
+	github.com/openshift/ptp-operator v0.0.0-20260130144609-2312fffc395b
 	github.com/prometheus/client_golang v1.16.0
-	github.com/sirupsen/logrus v1.9.0
+	github.com/sirupsen/logrus v1.9.3
 	github.com/stratoberry/go-gpsd v1.1.0
 	github.com/stretchr/testify v1.8.2
 	golang.org/x/sync v0.10.0
@@ -24,6 +24,7 @@ require (
 )
 
 require (
+	github.com/Masterminds/semver/v3 v3.3.0 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
