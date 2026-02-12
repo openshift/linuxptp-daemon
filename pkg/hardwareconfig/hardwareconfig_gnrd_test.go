@@ -13,6 +13,7 @@ import (
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // TestGNRDHardwareConfigFullFlow tests the complete flow for GNRD hardware config:
@@ -553,6 +554,279 @@ func TestPerla2PinsLoading(t *testing.T) {
 		if foundPins[expected] {
 			t.Logf("  ✓ Found pin: %s", expected)
 		}
+	}
+}
+
+// TestPerla4PinsLoading tests that pins-perla4.json (Dell XR8720t / zl3073x) loads correctly
+func TestPerla4PinsLoading(t *testing.T) {
+	// Load pins from file
+	data, err := os.ReadFile("testdata/pins-perla4.json")
+	if !assert.NoError(t, err, "Failed to read pins-perla4.json") {
+		return
+	}
+
+	var hrPins []*PinInfoHR
+	err = json.Unmarshal(data, &hrPins)
+	if !assert.NoError(t, err, "Failed to parse pins-perla4.json") {
+		return
+	}
+
+	t.Logf("Loaded %d pins from pins-perla4.json", len(hrPins))
+
+	// Verify clock ID is consistent
+	var clockIDStr string
+	for i, pin := range hrPins {
+		if i == 0 {
+			clockIDStr = pin.ClockID
+			if parsedID, parseErr := strconv.ParseUint(strings.TrimPrefix(clockIDStr, "0x"), 16, 64); parseErr == nil {
+				t.Logf("Clock ID: %#x (from %s)", parsedID, clockIDStr)
+			} else {
+				t.Logf("Clock ID: %s", clockIDStr)
+			}
+		} else {
+			assert.Equal(t, clockIDStr, pin.ClockID, "All pins should have same clock ID")
+		}
+	}
+
+	// Verify module name is zl3073x (Dell/PERLA4 hardware uses zl3073x DPLL)
+	for _, pin := range hrPins {
+		assert.Equal(t, "zl3073x", pin.ModuleName, "All pins should be from zl3073x module")
+	}
+
+	// Verify key pins exist
+	expectedPins := []string{
+		"ETH01_SDP_TIMESYNC_0",
+		"ETH01_SDP_TIMESYNC_2",
+		"GNSS_1PPS_IN",
+		"GNSS_10M_IN",
+		"1EPPS_IN",
+		"ETH01_SDP_TIMESYNC_1",
+		"ETH01_SDP_TIMESYNC_3",
+		"EPPS_10M_ADD_IN_CARD_SYNC",
+	}
+
+	foundPins := make(map[string]bool)
+	for _, pin := range hrPins {
+		if pin.BoardLabel != "" {
+			foundPins[pin.BoardLabel] = true
+		}
+	}
+
+	for _, expected := range expectedPins {
+		assert.True(t, foundPins[expected], "Expected pin %s not found", expected)
+		if foundPins[expected] {
+			t.Logf("  ✓ Found pin: %s", expected)
+		}
+	}
+}
+
+// TestDellXR8720tBehaviorTransitions validates that dell/XR8720t behavior profiles
+// can be loaded and processed with perla4 pin data
+func TestDellXR8720tBehaviorTransitions(t *testing.T) {
+	// Setup test environment using perla4 pins
+	mockGetter, err := CreateMockDpllPinsGetterFromFile("testdata/pins-perla4.json")
+	if !assert.NoError(t, err, "Failed to create mock getter from pins-perla4.json") {
+		t.FailNow()
+	}
+	SetDpllPinsGetter(mockGetter)
+	defer TeardownMockDpllPinsForTests()
+
+	// Verify pins loaded correctly
+	cache, err := GetDpllPins()
+	if !assert.NoError(t, err, "Failed to get DPLL pins") {
+		t.FailNow()
+	}
+	t.Logf("✓ Loaded %d pins from pins-perla4.json", cache.Count())
+
+	// Get the clock ID from the loaded pins
+	var actualClockID uint64
+	for clockID := range cache.Pins {
+		actualClockID = clockID
+		t.Logf("✓ Using clock ID from pin cache: %#x", actualClockID)
+		break
+	}
+
+	// Verify key pins referenced in dell/XR8720t behavior-profiles.yaml exist
+	ptpInputPin, found := cache.GetPin(actualClockID, "ETH01_SDP_TIMESYNC_0")
+	assert.True(t, found, "ptpInputPin (ETH01_SDP_TIMESYNC_0) should exist in perla4 pins")
+	if found {
+		t.Logf("  ✓ PTP input pin: ETH01_SDP_TIMESYNC_0 (ID=%d)", ptpInputPin.ID)
+	}
+
+	gnssInputPin, found := cache.GetPin(actualClockID, "GNSS_1PPS_IN")
+	assert.True(t, found, "gnssInputPin (GNSS_1PPS_IN) should exist in perla4 pins")
+	if found {
+		t.Logf("  ✓ GNSS input pin: GNSS_1PPS_IN (ID=%d)", gnssInputPin.ID)
+	}
+
+	// Load the minimal hardware config for dell/XR8720t
+	hwConfig, err := loadHardwareConfigFromFile("testdata/gnrd-hwconfig-minimal-perla4.yaml")
+	if !assert.NoError(t, err, "Failed to load gnrd-hwconfig-minimal-perla4.yaml") {
+		return
+	}
+	assert.NotNil(t, hwConfig)
+	assert.Equal(t, "dell/XR8720t", hwConfig.Spec.Profile.ClockChain.Structure[0].HardwareSpecificDefinitions,
+		"Hardware specific definitions should reference dell/XR8720t")
+
+	t.Logf("✓ Loaded hardware config: %s (clockType=%s, hwDef=%s)",
+		hwConfig.Name,
+		*hwConfig.Spec.Profile.ClockType,
+		hwConfig.Spec.Profile.ClockChain.Structure[0].HardwareSpecificDefinitions)
+}
+
+// TestLoadBehaviorProfile_DellXR8720t tests that dell/XR8720t behavior profiles load correctly
+func TestLoadBehaviorProfile_DellXR8720t(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+	loader := NewBoardLabelMapLoader(fakeClient, "default")
+
+	template, err := LoadBehaviorProfile("dell/XR8720t", "T-BC", loader)
+	assert.NoError(t, err, "Should load dell/XR8720t T-BC behavior profile")
+	assert.NotNil(t, template, "Behavior template should not be nil")
+	if template == nil {
+		t.Fatal("template is nil")
+	}
+
+	// Verify pin roles
+	assert.NotEmpty(t, template.PinRoles, "PinRoles should not be empty")
+	assert.Equal(t, "ETH01_SDP_TIMESYNC_0", template.PinRoles["ptpInputPin"],
+		"ptpInputPin should be ETH01_SDP_TIMESYNC_0 for Dell XR8720t")
+	assert.Equal(t, "GNSS_1PPS_IN", template.PinRoles["gnssInputPin"],
+		"gnssInputPin should be GNSS_1PPS_IN for Dell XR8720t")
+
+	// Verify sources template
+	assert.NotEmpty(t, template.Sources, "Sources should not be empty")
+	assert.Equal(t, "PTP", template.Sources[0].Name, "First source should be PTP")
+	assert.Equal(t, "ptpTimeReceiver", template.Sources[0].SourceType)
+
+	// Verify conditions template
+	assert.NotEmpty(t, template.Conditions, "Conditions should not be empty")
+
+	expectedConditions := []string{"Initialize T-BC", "PTP Source Locked", "PTP Source Lost - Leader Holdover"}
+	for _, expectedName := range expectedConditions {
+		found := false
+		for _, condition := range template.Conditions {
+			if condition.Name == expectedName {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Condition '%s' should be present", expectedName)
+		if found {
+			t.Logf("  ✓ Found condition: %s", expectedName)
+		}
+	}
+
+	t.Logf("✓ Dell XR8720t behavior profile loaded: %d sources, %d conditions",
+		len(template.Sources), len(template.Conditions))
+}
+
+// TestLoadBehaviorProfile_MultiVendor tests behavior profile loading for multiple vendors
+func TestLoadBehaviorProfile_MultiVendor(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+	loader := NewBoardLabelMapLoader(fakeClient, "default")
+
+	vendors := []struct {
+		hwDefPath         string
+		clockType         string
+		expectedPtpInput  string
+		expectedGnssInput string
+	}{
+		{
+			hwDefPath:         "intel/e825",
+			clockType:         "T-BC",
+			expectedPtpInput:  "GNR-D_SDP0",
+			expectedGnssInput: "GNSS_1PPS_IN",
+		},
+		{
+			hwDefPath:         "dell/XR8720t",
+			clockType:         "T-BC",
+			expectedPtpInput:  "ETH01_SDP_TIMESYNC_0",
+			expectedGnssInput: "GNSS_1PPS_IN",
+		},
+	}
+
+	for _, v := range vendors {
+		t.Run(v.hwDefPath, func(t *testing.T) {
+			template, err := LoadBehaviorProfile(v.hwDefPath, v.clockType, loader)
+			assert.NoError(t, err, "Should load %s %s behavior profile", v.hwDefPath, v.clockType)
+			if !assert.NotNil(t, template, "Behavior template should not be nil") {
+				return
+			}
+
+			assert.Equal(t, v.expectedPtpInput, template.PinRoles["ptpInputPin"],
+				"ptpInputPin mismatch for %s", v.hwDefPath)
+			assert.Equal(t, v.expectedGnssInput, template.PinRoles["gnssInputPin"],
+				"gnssInputPin mismatch for %s", v.hwDefPath)
+
+			// Both vendors should have the same condition names
+			expectedConditions := []string{"Initialize T-BC", "PTP Source Locked", "PTP Source Lost - Leader Holdover"}
+			for _, name := range expectedConditions {
+				found := false
+				for _, c := range template.Conditions {
+					if c.Name == name {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "%s: condition '%s' should be present", v.hwDefPath, name)
+			}
+
+			t.Logf("✓ %s: ptpInputPin=%s, gnssInputPin=%s, conditions=%d",
+				v.hwDefPath, template.PinRoles["ptpInputPin"], template.PinRoles["gnssInputPin"], len(template.Conditions))
+		})
+	}
+}
+
+// TestLoadHardwareDefaults_MultiVendor validates that LoadHardwareDefaults succeeds for
+// every embedded vendor, catching YAML parse errors (such as indentation issues) in
+// defaults.yaml and delays.yaml.
+func TestLoadHardwareDefaults_MultiVendor(t *testing.T) {
+	vendors := []struct {
+		hwDefPath       string
+		expectDefaults  bool // true if defaults.yaml exists
+		expectDelays    bool // true if delays.yaml exists
+		expectedPinDefs int  // minimum number of pin defaults (0 means unchecked)
+	}{
+		{
+			hwDefPath:       "intel/e825",
+			expectDefaults:  true,
+			expectDelays:    true,
+			expectedPinDefs: 1,
+		},
+		{
+			hwDefPath:      "dell/XR8720t",
+			expectDefaults: false, // no defaults.yaml for this hardware
+			expectDelays:   true,
+		},
+	}
+
+	for _, v := range vendors {
+		t.Run(v.hwDefPath, func(t *testing.T) {
+			hwSpec, err := LoadHardwareDefaults(v.hwDefPath, nil)
+			assert.NoError(t, err, "LoadHardwareDefaults should not return error for %s", v.hwDefPath)
+
+			if v.expectDefaults {
+				assert.NotNil(t, hwSpec, "Hardware spec should not be nil for %s", v.hwDefPath)
+				if hwSpec != nil && v.expectedPinDefs > 0 {
+					assert.GreaterOrEqual(t, len(hwSpec.PinDefaults), v.expectedPinDefs,
+						"%s: should have at least %d pin defaults", v.hwDefPath, v.expectedPinDefs)
+				}
+			}
+
+			if v.expectDelays {
+				// Delays are loaded as part of LoadHardwareDefaults; if YAML is malformed
+				// the call above will have returned an error, so reaching here proves
+				// the delays.yaml parsed successfully.
+				t.Logf("✓ %s: delays.yaml parsed successfully", v.hwDefPath)
+			}
+
+			if hwSpec != nil {
+				t.Logf("✓ %s: loaded (pinDefaults=%d, hasDelayCompensation=%v)",
+					v.hwDefPath, len(hwSpec.PinDefaults), hwSpec.DelayCompensation != nil)
+			} else {
+				t.Logf("✓ %s: empty defaults (expected)", v.hwDefPath)
+			}
+		})
 	}
 }
 

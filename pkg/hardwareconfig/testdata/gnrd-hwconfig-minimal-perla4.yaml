@@ -1,0 +1,21 @@
+apiVersion: ptp.openshift.io/v2alpha1
+kind: HardwareConfig
+metadata:
+  name: t-bc-minimal
+spec:
+  profile:
+    name: GNR-D-T-BC-MINIMAL
+    clockType: T-BC
+    clockChain:
+      structure:
+      - name: leader
+        hardwareSpecificDefinitions: dell/XR8720t
+        # the override to holdover parameters below is added for development purposes
+        # it can be removed to use the default holdover parameters 
+        # (localMaxHoldoverOffSet=1500, localHoldoverTimeout=14400, maxInSpecOffset=1500)
+        dpll:
+          holdoverParameters:
+            maxInSpecOffset: 20
+            localMaxHoldoverOffset: 30
+            localHoldoverTimeout: 288
+  relatedPtpProfileName: 01-tbc-tr
