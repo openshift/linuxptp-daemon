@@ -1,0 +1,95 @@
+# Delay Compensation Model for Intel E825 (GNR-D)
+# This file defines the three-layer model: Topology (components), Physics (connections), and Intent (routes)
+#
+# NOTE: Delay values (delayPs) are specified with the correct sign for the target DPLL hardware.
+# Different DPLL implementations may treat phase adjustment direction differently.
+# The system sums these values directly without negation and passes them to the DPLL.
+
+# 1. Inventory - static phase transfer nodes
+components:
+# NAC-DPLL phase transfer nodes
+  - id: "NAC0 phase out 1kHz"
+  - id: "NAC0 phase out 1Hz"
+
+  - id: "NAC0 phase in 1kHz"
+  - id: "NAC0 phase in 1Hz"
+  
+  - id: "DPLL phase in 1kHz"
+    description: "DPLL phase reference input from NAC0, REF0P, Frequency - 1kHz"
+    compensationPoint:
+      name: "ETH01_SDP_TIMESYNC_2"
+      type: dpll
+  - id: "DPLL phase in 1Hz"
+    description: "DPLL phase reference input from NAC0, REF0N, Frequency - 1Hz"
+    compensationPoint:
+      name: "ETH01_SDP_TIMESYNC_0"
+      type: dpll
+
+  - id: "DPLL phase out 1Hz"
+    description: "DPLL phase signal output to NAC0, Frequency - 1Hz, OUT8N"
+    compensationPoint:
+      name: "ETH01_SDP_TIMESYNC_1"
+      type: dpll  
+  - id: "DPLL phase out 1kHz"
+    description: "DPLL phase signal output to NAC0, Frequency - 1kHz, OUT8P"
+    compensationPoint:
+      name: "ETH01_SDP_TIMESYNC_3"
+      type: dpll
+
+# DPLL to CF - ESync transfer nodes
+  - id: "DPLL ESync out"
+    description: "DPLL ESync output pin to CF, OUT2N"
+    compensationPoint:
+      name: "EPPS_10M_ADD_IN_CARD_SYNC"
+      type: dpll
+
+  - id: "CF ESync in"
+
+
+# 2. Topology: Physical connections (graph edges)
+# Each connection defines a delay segment in the signal path
+connections:
+  # NAC to Timing Module routing/wiring
+  - from: "NAC0 phase out 1kHz"
+    to: "DPLL phase in 1kHz"
+    delayPs: -4000
+  - from: "NAC0 phase out 1Hz"
+    to: "DPLL phase in 1Hz"
+    delayPs: -4000
+
+
+  # DPLL to NAC (during holdover)
+  - from: "DPLL phase out 1kHz"
+    to: "NAC0 phase in 1kHz"
+    delayPs: 5000
+  - from: "DPLL phase out 1Hz"
+    to: "NAC0 phase in 1Hz"
+    delayPs: 5000
+
+
+  - from: "DPLL ESync out"
+    to: "CF ESync in"
+    delayPs: 40000
+
+
+# 3. Logic: Where do we compensate for the delay
+# Routes define compensation strategies for specific signal paths
+# One route to many segments, one route to one compensator
+routes:
+  - name: "NAC phase out to DPLL phase in 1kHz"
+    sequence: ["NAC0 phase out 1kHz", "DPLL phase in 1kHz"]
+    compensator: "DPLL phase in 1kHz"
+  - name: "NAC phase out to DPLL phase in 1Hz"
+    sequence: ["NAC0 phase out 1Hz", "DPLL phase in 1Hz"]
+    compensator: "DPLL phase in 1Hz"
+  
+  - name: "DPLL phase out 1kHz to NAC phase in 1kHz"
+    sequence: ["DPLL phase out 1kHz", "NAC0 phase in 1kHz"]
+    compensator: "DPLL phase out 1kHz"
+  - name: "DPLL phase out 1Hz to NAC phase in 1Hz"
+    sequence: ["DPLL phase out 1Hz", "NAC0 phase in 1Hz"]
+    compensator: "DPLL phase out 1Hz"
+    
+  - name: "DPLL ESync out to CF ESync in"
+    sequence: ["DPLL ESync out", "CF ESync in"]
+    compensator: "DPLL ESync out"
