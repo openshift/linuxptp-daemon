@@ -173,8 +173,8 @@ type EventHandler struct {
 	offsetMetric       *prometheus.GaugeVec
 	clockMetric        *prometheus.GaugeVec
 	clockClassMetric   *prometheus.GaugeVec
-	clockClass         fbprotocol.ClockClass
-	clockAccuracy      fbprotocol.ClockAccuracy
+	clockClass         map[string]fbprotocol.ClockClass
+	clockAccuracy      map[string]fbprotocol.ClockAccuracy
 	clkSyncState       map[string]*clockSyncState
 	outOfSpec          bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
 	frequencyTraceable bool // will be tru if synce is traceable
@@ -222,7 +222,8 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		clockMetric:        clockMetric,
 		offsetMetric:       offsetMetric,
 		clockClassMetric:   clockClassMetric,
-		clockClass:         protocol.ClockClassUninitialized,
+		clockClass:         map[string]fbprotocol.ClockClass{},
+		clockAccuracy:      map[string]fbprotocol.ClockAccuracy{},
 		clkSyncState:       map[string]*clockSyncState{},
 		outOfSpec:          false,
 		frequencyTraceable: false,
@@ -577,10 +578,10 @@ func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, cloc
 }
 
 func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn) {
-	e.clockClass = clockClass
-	e.clockAccuracy = clockAcc
+	e.clockClass[cfgName] = clockClass
+	e.clockAccuracy[cfgName] = clockAcc
 
-	utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+	utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass[cfgName])
 	if !e.stdoutToSocket && e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
 			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
@@ -637,8 +638,8 @@ connect:
 					if clk.clockType != BC { // This is because this produces the wrong value for BC at the moment this needs looking into.
 						e.UpdateClockClass(c, clk)
 					} else {
-						e.clockClass = clk.clockClass
-						e.clockAccuracy = clk.clockAccuracy
+						e.clockClass[clk.cfgName] = clk.clockClass
+						e.clockAccuracy[clk.cfgName] = clk.clockAccuracy
 					}
 
 				case <-e.closeCh:
@@ -665,7 +666,7 @@ connect:
 						if len(parts) >= 2 {
 							cfgName = "ptp4l." + strings.Join(parts[1:], ".")
 						}
-						utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+						utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass[cfgName])
 					}
 				}
 			}
@@ -697,8 +698,8 @@ connect:
 				if event.ProcessName == TS2PHC {
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName) // this will delete all index
-					e.clockClass = protocol.ClockClassUninitialized
-					e.clockAccuracy = fbprotocol.ClockAccuracyUnknown
+					delete(e.clockClass, event.CfgName)
+					delete(e.clockAccuracy, event.CfgName)
 				} else {
 					// Check if the index is within the slice bounds
 					for indexToRemove, d := range e.data[event.CfgName] {
@@ -787,7 +788,7 @@ connect:
 				if event.ClockType == GM {
 					// Default Assignment: The clockAccuracy of clockState is initially set to the clockAccuracy of the event
 					//This serves as a default value.
-					clockState.clockAccuracy = e.clockAccuracy
+					clockState.clockAccuracy = e.clockAccuracy[event.CfgName]
 
 					// Conditional Update: Check if the clockClass of clockState is either fbprotocol.ClockClass7 or protocol.ClockClassOutOfSpec
 					// and if the ProcessName of the event is DPLL.
@@ -810,9 +811,9 @@ connect:
 					// If the clockClass of clockState is not protocol.ClockClassUninitialized and there is a change in clockClass or clockAccuracy,
 					// log the change and update the clock class.
 					if clockState.clockClass != protocol.ClockClassUninitialized &&
-						(clockState.clockClass != e.clockClass || clockState.clockAccuracy != e.clockAccuracy) {
+						(clockState.clockClass != e.clockClass[event.CfgName] || clockState.clockAccuracy != e.clockAccuracy[event.CfgName]) {
 						glog.Infof("clock class change request from %d to %d with clock accuracy from %d to %d",
-							uint8(e.clockClass), uint8(clockState.clockClass), uint8(e.clockAccuracy), uint8(clockState.clockAccuracy))
+							uint8(e.clockClass[event.CfgName]), uint8(clockState.clockClass), uint8(e.clockAccuracy[event.CfgName]), uint8(clockState.clockAccuracy))
 						debug.UpdateClockClass(uint8(clockState.clockClass))
 						go func() {
 							select {
@@ -1090,8 +1091,8 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 		glog.Errorf("error updating clock class %s", classErr)
 	} else {
 		glog.Infof("updated clock class for last clock class %d to %d with clock accuracy %d", clk.clockClass, clockClass, clockAccuracy)
-		e.clockClass = clockClass
-		e.clockAccuracy = clockAccuracy
+		e.clockClass[clk.cfgName] = clockClass
+		e.clockAccuracy[clk.cfgName] = clockAccuracy
 		clockClassOut := utils.GetClockClassLogMessage(PTP4lProcessName, clk.cfgName, clockClass)
 		if e.stdoutToSocket {
 			if c != nil {
