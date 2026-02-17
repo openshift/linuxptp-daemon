@@ -126,6 +126,9 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 			e.clkSyncState[cfgName].state)
 		return *e.clkSyncState[cfgName]
 	}
+
+	isTTSC := (e.LeadingClockData.clockID != "" && e.LeadingClockData.controlledPortsConfig == "")
+
 	glog.Info("current BC state: ", e.clkSyncState[cfgName].state)
 	switch e.clkSyncState[cfgName].state {
 	case PTP_NOTSET, PTP_FREERUN:
@@ -156,7 +159,9 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 				e.LeadingClockData.downstreamParentDataSet = e.LeadingClockData.upstreamParentDataSet
 				updateDownstreamData = true
 			}
-			if e.clkSyncState[cfgName].clockClass != fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass) {
+			if e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass == uint8(protocol.ClockClassFreerun) {
+				updateDownstreamData = false // Don't propagate uptream free run and instead let future call move to holdover/freerun
+			} else if e.clkSyncState[cfgName].clockClass != fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass) && !isTTSC {
 				e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass)
 				e.clkSyncState[cfgName].clockAccuracy = fbprotocol.ClockAccuracy(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockAccuracy)
 			}
@@ -214,8 +219,15 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 		e.clkSyncState[cfgName].clockOffset = e.getLargestOffset(cfgName)
 	}
 
-	if updateDownstreamData {
-		go e.updateDownstreamData(cfgName, c)
+	if isTTSC && e.clkSyncState[cfgName].clockClass != fbprotocol.ClockClassSlaveOnly {
+		e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClassSlaveOnly
+	}
+	if updateDownstreamData && e.clkSyncState[cfgName].clockClass != protocol.ClockClassUninitialized {
+		if isTTSC {
+			e.announceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
+		} else {
+			go e.updateDownstreamData(cfgName, c)
+		}
 	}
 	// this will reduce log noise and prints 1 per sec
 	logTime := time.Now().Unix()
@@ -426,6 +438,10 @@ func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 				// Skip stale data for all offsets, including the first one
 				if dd.time < staleTime {
 					continue
+				}
+				if !d.window.IsFull() {
+					glog.Info("Largest offset ", FaultyPhaseOffset)
+					return FaultyPhaseOffset
 				}
 				if worstOffset == FaultyPhaseOffset {
 					if dd.IFace == e.clkSyncState[cfgName].leadingIFace {
