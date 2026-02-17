@@ -43,8 +43,9 @@ var bcDpllPeriods = frqSet{
 // E825Opts is the options structure for e825 plugin
 type E825Opts struct {
 	PluginOpts
-	UblxCmds UblxCmdList `json:"ublxCmds"`
-	Gnss     GnssOptions `json:"gnss"`
+	EnableDefaultConfig bool        `json:"enableDefaultConfig"`
+	UblxCmds            UblxCmdList `json:"ublxCmds"`
+	Gnss                GnssOptions `json:"gnss"`
 }
 
 // E825PluginData is the data structure for e825 plugin
@@ -79,9 +80,15 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 		if name == pluginNameE825 {
 			// Parse user-specified config
 			optsByteArray, _ = json.Marshal(opts)
+
+			// Validate configuration before applying
+			if validationErrors := ValidateE825Opts(optsByteArray); len(validationErrors) > 0 {
+				return fmt.Errorf("e825 plugin configuration errors: %s", strings.Join(validationErrors, "; "))
+			}
+
 			err = json.Unmarshal(optsByteArray, &e825Opts)
 			if err != nil {
-				glog.Error("e825 failed to unmarshal opts: " + err.Error())
+				return fmt.Errorf("e825 failed to unmarshal opts: %w", err)
 			}
 
 			allDevices := e825Opts.allDevices()
@@ -239,7 +246,7 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			optsByteArray, _ = json.Marshal(opts)
 			err = json.Unmarshal(optsByteArray, &e825Opts)
 			if err != nil {
-				glog.Error("e825 failed to unmarshal opts: " + err.Error())
+				return fmt.Errorf("e825 failed to unmarshal opts: %w", err)
 			}
 			switch command {
 			// "gpspipe" is called once the gpspipe process is running (and we can send ublx commands)

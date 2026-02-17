@@ -61,9 +61,15 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	for name, opts := range (*nodeProfile).Plugins {
 		if name == pluginNameE810 {
 			optsByteArray, _ := json.Marshal(opts)
+
+			// Validate configuration before applying
+			if validationErrors := ValidateE810Opts(optsByteArray); len(validationErrors) > 0 {
+				return fmt.Errorf("e810 plugin configuration errors: %s", strings.Join(validationErrors, "; "))
+			}
+
 			err = json.Unmarshal(optsByteArray, &e810Opts)
 			if err != nil {
-				glog.Error("e810 failed to unmarshal opts: " + err.Error())
+				return fmt.Errorf("e810 failed to unmarshal opts: %w", err)
 			}
 
 			allDevices := e810Opts.allDevices()
@@ -88,7 +94,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			for device, frequencies := range e810Opts.DeviceFreqencies {
 				err = pinConfig.applyPinFrq(device, frequencies)
 				if err != nil {
-					glog.Errorf("e825 failed to set PHC frequencies for %s: %s", device, err)
+					return fmt.Errorf("e810 failed to set PHC frequencies for %s: %w", device, err)
 				}
 			}
 
@@ -119,7 +125,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				glog.Infof("No clock chain set: Restoring any previous pin state changes")
 				err = clockChain.SetPinDefaults()
 				if err != nil {
-					glog.Errorf("Could not restore clockChain pin defaults: %s", err)
+					return fmt.Errorf("could not restore clockChain pin defaults: %s", err)
 				}
 				clockChain = &ClockChain{DpllPins: DpllPins}
 				err = DpllPins.FetchPins()
@@ -185,7 +191,7 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			optsByteArray, _ := json.Marshal(opts)
 			err = json.Unmarshal(optsByteArray, &e810Opts)
 			if err != nil {
-				glog.Error("e810 failed to unmarshal opts: " + err.Error())
+				return fmt.Errorf("e810 failed to unmarshal opts: %w", err)
 			}
 			switch command {
 			case "gpspipe":

@@ -80,6 +80,8 @@ func Test_ProcessProfileTGMNew(t *testing.T) {
 	defer restorePins()
 	restoreDelay := setupMockDelayCompensation()
 	defer restoreDelay()
+	restoreDiscovery := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
+	defer restoreDiscovery()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 	profile, err := loadProfile("./testdata/profile-tgm.yaml")
@@ -101,6 +103,8 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 	defer restoreDPLLPins()
 	restoreDelay := setupMockDelayCompensation()
 	defer restoreDelay()
+	restoreDiscovery := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
+	defer restoreDiscovery()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 
@@ -146,8 +150,16 @@ func Test_ProcessProfileTGMOld(t *testing.T) {
 	defer restorePins()
 	restoreDelay := setupMockDelayCompensation()
 	defer restoreDelay()
+	restoreDiscovery := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
+	defer restoreDiscovery()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
+
+	// Reset clockChain so SetPinDefaults (called via the no-PhaseInputs path) uses mock DpllPins
+	oldClockChain := clockChain
+	clockChain = &ClockChain{DpllPins: DpllPins}
+	defer func() { clockChain = oldClockChain }()
+
 	profile, err := loadProfile("./testdata/profile-tgm-old.yaml")
 	assert.NoError(t, err)
 	p, d := E810("e810")
