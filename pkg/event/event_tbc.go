@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
@@ -528,7 +528,7 @@ func (e *EventHandler) convergeConfig(event EventChannel) EventChannel {
 					continue
 				}
 				for _, dp := range item.Details {
-					if utils.GetAlias(dp.IFace) == utils.GetAlias(iface) {
+					if alias.GetAlias(dp.IFace) == alias.GetAlias(iface) {
 						// We want to process ptp4l having a separate config with ts2phc and dpll events having ts2phc config
 						// so in the rare occurrence of ptp4l state change we modify the event.CfgName
 						event.CfgName = cfg

@@ -8,10 +8,10 @@ import (
 
 	"github.com/golang/glog"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 func convertParserRoleToMetricsRole(role parserconstants.PTPPortRole) ptpPortRole {
@@ -81,19 +81,17 @@ func processWithParser(process *ptpProcess, output string) {
 
 func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	// Convert interface from possible clock id
-	ifaceRaw := process.ifaces.GetPhcID2IFace(ptpMetrics.Iface) // real interface name
-	// Use alias only for metrics/labels; keep real iface in events/logs
-	ifaceForMetrics := ifaceRaw
-	if ifaceForMetrics != clockRealTime {
-		ifaceForMetrics = utils.GetAlias(ifaceForMetrics)
+	iface := process.ifaces.GetPhcID2IFace(ptpMetrics.Iface)
+	if iface != clockRealTime {
+		iface = alias.GetAlias(iface)
 	}
 
 	// Update PTP metrics using the parsed data
-	updatePTPMetrics(ptpMetrics.Source, process.name, ifaceForMetrics, ptpMetrics.Offset, ptpMetrics.MaxOffset, ptpMetrics.FreqAdj, ptpMetrics.Delay)
+	updatePTPMetrics(ptpMetrics.Source, process.name, iface, ptpMetrics.Offset, ptpMetrics.MaxOffset, ptpMetrics.FreqAdj, ptpMetrics.Delay)
 
 	// Update clock state metrics if available
 	if ptpMetrics.ClockState != "" {
-		updateClockStateMetrics(process.name, ifaceForMetrics, string(ptpMetrics.ClockState))
+		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState))
 	}
 
 	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
@@ -133,7 +131,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			ProcessName: event.TS2PHC,
 			State:       state,
 			CfgName:     configName,
-			IFace:       ifaceRaw, // use real interface name in event/log
+			IFace:       ptpMetrics.Iface, // use real interface name in event/log
 			Values:      values,
 			ClockType:   process.clockType,
 			Time:        time.Now().UnixMilli(),

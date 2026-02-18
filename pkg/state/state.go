@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 // PtpInterface represents a PTP interface with its name and alias
@@ -160,7 +160,7 @@ func (s *SharedState) SetMasterOffsetIface(configName string, value string) erro
 	defer s.masterOffsetIface.mu.Unlock()
 	s.masterOffsetIface.iface[configName] = PtpInterface{
 		Name:  value,
-		Alias: utils.GetAlias(value),
+		Alias: alias.GetAlias(value),
 	}
 	return nil
 }

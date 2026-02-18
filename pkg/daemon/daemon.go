@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
+	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -32,7 +34,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
-	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
@@ -163,6 +164,15 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 	p.process[0].ifaces = ifaces
 	p.process[0].logParser = getParser(name)
 	p.process[0].handler = event.Init("test", false, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics)
+	// Reset aliases for each test to avoid cross-case collisions.
+	alias.ClearAliases()
+	// Calculate aliases for the test interfaces to ensure proper aliasing
+	for phc, ifNames := range ifaces.GetIfNamesGroupedByPhc() {
+		for _, ifname := range ifNames {
+			alias.AddInterface(phc, ifname)
+		}
+	}
+	alias.CalculateAliases()
 }
 
 // RunProcessPTPMetrics is used by unit tests
@@ -956,7 +966,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				if upstreamPort != "" && leadingNic == ifaces[i].Name {
 					ifaces[i].Source = event.PTP4l
 				}
-				ifaces[i].PhcId = ptpnetwork.GetPhcId(ifaces[i].Name)
 			}
 		}
 
@@ -1686,7 +1695,7 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 
 	} else {
 		if iface != "" && iface != clockRealTime {
-			iface = utils.GetAlias(iface)
+			iface = alias.GetAlias(iface)
 		}
 		if p.c != nil {
 			return // no metrics when socket is used

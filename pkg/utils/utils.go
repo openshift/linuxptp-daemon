@@ -5,7 +5,7 @@ import (
 	"regexp"
 )
 
-// GetAlias generates a PHC (PTP Hardware Clock) identifier alias from network interface names.
+// GetAliasValue generates a PHC (PTP Hardware Clock) identifier alias from network interface names.
 // It supports Intel and Mellanox naming formats with optional VLAN tags.
 //
 // Supported formats:
@@ -19,7 +19,7 @@ import (
 //
 // Returns:
 //   - Alias string for PHC identification, or original name if format is unsupported
-func GetAlias(ifname string) string {
+func GetAliasValue(ifname string) string {
 	alias := ""
 	if ifname != "" {
 		// Check if it's already an aliased interface (ends with 'x' before optional VLAN)
