@@ -62,18 +62,11 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 			glog.Infof("Initializing e830 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
 
 			// Setup clockID (prefer ice modue clock ID for e830)
-			iceClockID, iceErr := getClockIDByModule("ice")
-			if iceErr != nil {
-				glog.Errorf("e830: failed to resolve ICE DPLL clock ID via netlink: %v", iceErr)
-			}
 			for _, device := range allDevices {
+				clockID := getClockIDE810(device)
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				if iceErr == nil {
-					(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(iceClockID, 10)
-					glog.Infof("Detected %s=%d (%x)", dpllClockIDStr, iceClockID, iceClockID)
-				} else {
-					glog.Errorf("No clockID detected for %s", device)
-				}
+				nodeProfile.PtpSettings[dpllClockIDStr] = strconv.FormatUint(clockID, 10)
+				glog.Infof("e830: Detected %s=%d (%x)", dpllClockIDStr, clockID, clockID)
 			}
 
 			// Initialize all user-specified PGT pins and frequencies
@@ -99,12 +92,10 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 
 			// Copy PhaseOffsetPins settings from plugin config to PtpSettings
 			for iface, properties := range opts.PhaseOffsetPins {
+				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, iface)
+				clockIDStr := nodeProfile.PtpSettings[dpllClockIDStr]
 				for pinProperty, value := range properties {
-					var clockIDUsed uint64
-					if iceErr == nil {
-						clockIDUsed = iceClockID
-					}
-					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(clockIDUsed, 10), pinProperty}, ".")
+					key := strings.Join([]string{iface, "phaseOffsetFilter", clockIDStr, pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
 				}
 			}
@@ -118,16 +109,17 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 					// TODO: We could actually figure this out based on upstreamPort... And the fact that there's only one NAC per GNR-D
 					return errors.New("GNR-D T-BC must set leadingInterface")
 				}
-				// e830 DPLL is inaccessible to software, so ensure the daemon ignores all e830 DPLLs for now:
-				for _, device := range allDevices {
-					// Note: Only set to "true" if it's unset; This allows overriding this by explicitly setting dpll.$iface.ignore = "false" in the PtpConfig section
-					key := dpll.PtpSettingsDpllIgnoreKey(device)
-					if value, ok := nodeProfile.PtpSettings[key]; ok {
-						glog.Infof("Not setting %s (already \"%s\")", key, value)
-					} else {
-						nodeProfile.PtpSettings[key] = "true"
-						glog.Infof("Setting %s = \"true\"", key)
-					}
+			}
+
+			// e830 DPLL is inaccessible to software, so ensure the daemon ignores all e830 DPLLs for now:
+			for _, device := range allDevices {
+				// Note: Only set to "true" if it's unset; This allows overriding this by explicitly setting dpll.$iface.ignore = "false" in the PtpConfig section
+				key := dpll.PtpSettingsDpllIgnoreKey(device)
+				if value, ok := nodeProfile.PtpSettings[key]; ok {
+					glog.Infof("Not setting %s (already \"%s\")", key, value)
+				} else {
+					nodeProfile.PtpSettings[key] = "true"
+					glog.Infof("Setting %s = \"true\"", key)
 				}
 			}
 		}
