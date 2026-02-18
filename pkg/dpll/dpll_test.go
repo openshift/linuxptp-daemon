@@ -185,7 +185,7 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
-		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0)
+		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 	d.CmdInit()
 	eventChannel := make(chan event.EventChannel, 10)
 	go eventProcessor.ProcessEvents()
@@ -228,7 +228,7 @@ func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
-		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0)
+		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 	d.CmdInit()
 	eventChannel := make(chan event.EventChannel, 10)
 	go eventProcessor.ProcessEvents()
@@ -258,6 +258,51 @@ func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 		assert.Equal(t, tt.expectedInSpecState, d.InSpec(), tt.desc)
 
 	}
+	closeChn <- true
+}
+
+func TestDpllConfig_MonitorProcessPartial(t *testing.T) {
+	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
+	assert.True(t, dpll.MockDpllReplies != nil)
+	eChannel := make(chan event.EventChannel, 10)
+	closeChn := make(chan bool)
+	// event has to be running before dpll is started
+	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
+	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
+		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, dpll.FlagOnlyPhaseStatus)
+	d.CmdInit()
+	eventChannel := make(chan event.EventChannel, 10)
+	go eventProcessor.ProcessEvents()
+
+	time.Sleep(5 * time.Second)
+	if d != nil {
+		d.MonitorProcess(config.ProcessConfig{
+			ClockType:       "GM",
+			ConfigName:      "test",
+			EventChannel:    eventChannel,
+			GMThreshold:     config.Threshold{},
+			InitialPTPState: event.PTP_FREERUN,
+		})
+	}
+	fmt.Println("starting Mock replies ")
+	// Test with a state that gives PhaseStatus LHAQ
+	reply := &nl.DoDeviceGetReply{
+		ID:            id,
+		ModuleName:    moduleName,
+		Mode:          1,
+		ModeSupported: []uint32{0},
+		LockStatus:    2, // locked,
+		ClockID:       clockid,
+		Type:          1, // pps
+	}
+	d.SetSourceLost(false)
+	d.SetPhaseOffset(event.FaultyPhaseOffset) // Ignored due to flag but set anyway
+	d.SetDependsOn([]event.EventSource{event.GNSS})
+	dpll.MockDpllReplies <- reply
+	d.MonitorDpllMock()
+
+	assert.Equal(t, int64(2), d.PhaseStatus(), "phase status should be locked")
+	assert.Equal(t, event.PTP_LOCKED, d.State(), "state should be locked based only on phase status")
 	closeChn <- true
 }
 
@@ -292,7 +337,7 @@ func TestSlopeAndTimer(t *testing.T) {
 	}
 	for _, tt := range testCase {
 		d := dpll.NewDpll(100, tt.localMaxHoldoverOffSet, tt.localHoldoverTimeout, tt.maxInSpecOffset,
-			"test", []event.EventSource{}, dpll.MOCK, map[string]map[string]string{}, 0, 0)
+			"test", []event.EventSource{}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 		assert.Equal(t, tt.localMaxHoldoverOffSet, d.LocalMaxHoldoverOffSet, "localMaxHoldover offset")
 		assert.Equal(t, tt.localHoldoverTimeout, d.LocalHoldoverTimeout, "Local holdover timeout")
 		assert.Equal(t, tt.maxInSpecOffset, d.MaxInSpecOffset, "Max In Spec Offset")
