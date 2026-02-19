@@ -13,6 +13,7 @@ import (
 	"github.com/golang/glog"
 	dpllcfg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"k8s.io/client-go/kubernetes"
 
 	// loader is part of this package (vendor_loader.go)
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -213,13 +214,15 @@ type HardwareConfigManager struct {
 	clockIDCache map[string]uint64
 	// current PtpConfig used for resolving clock chains (optional)
 	ptpConfig *ptpv1.PtpConfig
-	mu        sync.RWMutex
-	cond      *sync.Cond
-	ready     bool
+	// ConfigMap loader for board label remapping (optional, can be nil)
+	configMapLoader *BoardLabelMapLoader
+	mu              sync.RWMutex
+	cond            *sync.Cond
+	ready           bool
 }
 
-// NewHardwareConfigManager creates a new hardware config manager
-func NewHardwareConfigManager() *HardwareConfigManager {
+// NewHardwareConfigManager creates a new hardware config manager.
+func NewHardwareConfigManager(kubeClient kubernetes.Interface, namespace string) *HardwareConfigManager {
 	hcm := &HardwareConfigManager{
 		hardwareConfigs: make([]enrichedHardwareConfig, 0),
 		pinApplier:      func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(&cmds) },
@@ -234,7 +237,17 @@ func NewHardwareConfigManager() *HardwareConfigManager {
 		},
 	}
 	hcm.cond = sync.NewCond(&hcm.mu)
+
+	// Set up ConfigMap loader for board label remapping
+	configMapLoader := NewBoardLabelMapLoader(kubeClient, namespace)
+	hcm.configMapLoader = configMapLoader
+
 	return hcm
+}
+
+// SetConfigMapLoader sets the ConfigMap loader for board label remapping (optional)
+func (hcm *HardwareConfigManager) SetConfigMapLoader(loader *BoardLabelMapLoader) {
+	hcm.configMapLoader = loader
 }
 
 // getClockIDCached returns the clock ID for an interface, using cache to avoid repeated resolution
@@ -306,7 +319,7 @@ func (hcm *HardwareConfigManager) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.H
 			hcm.mu.RLock()
 			ptpConfig := hcm.ptpConfig
 			hcm.mu.RUnlock()
-			resolvedConfig, err = ResolveClockChain(&hwConfig, ptpConfig)
+			resolvedConfig, err = hcm.ResolveClockChain(&hwConfig, ptpConfig)
 			if err != nil {
 				return fmt.Errorf("failed to resolve clock chain for hardware config %s: %w", hwConfig.Name, err)
 			}
@@ -717,7 +730,19 @@ func (hcm *HardwareConfigManager) getHardwareDefaults(hwDefPath string) (*Hardwa
 	if ok {
 		return spec, nil
 	}
-	loaded, err := LoadHardwareDefaults(hwDefPath)
+
+	// Load board label map if ConfigMap loader is available
+	var labelMap BoardLabelMap
+	if hcm.configMapLoader != nil {
+		var err error
+		labelMap, err = hcm.configMapLoader.LoadBoardLabelMap(hwDefPath)
+		if err != nil {
+			// Log but continue - remapping is optional (ConfigMap not found is not an error)
+			glog.Warningf("Failed to load board label map for %s: %v (using embedded defaults)", hwDefPath, err)
+		}
+	}
+
+	loaded, err := LoadHardwareDefaults(hwDefPath, labelMap)
 	if err != nil {
 		return nil, err
 	}
@@ -768,6 +793,21 @@ func (hcm *HardwareConfigManager) buildESyncPinCommands(subsystem ptpv2alpha1.Su
 	}
 
 	return commands, nil
+}
+
+// roundToGranularity rounds a phase adjustment value to the nearest multiple of granularity.
+// If gran is 0 or 1, returns the value unchanged (no rounding needed).
+func roundToGranularity(value int32, gran uint32) int32 {
+	if gran <= 1 {
+		return value
+	}
+
+	granInt32 := int32(gran)
+	// Round to nearest and return according to the sign
+	if value >= 0 {
+		return ((value + granInt32/2) / granInt32) * granInt32
+	}
+	return ((value - granInt32/2) / granInt32) * granInt32
 }
 
 // buildPhaseAdjustmentCommands builds DPLL commands for phase adjustments from populated PhaseAdjustment fields
@@ -826,6 +866,15 @@ func (hcm *HardwareConfigManager) buildPhaseAdjustmentCommands(subsystem ptpv2al
 			// Convert to int32 and validate against pin limits
 			adjustmentInt32 := int32(totalAdjustment)
 
+			// Round to granularity first (before clamping) to ensure we work with granularity-aligned values
+			originalAdjustment := adjustmentInt32
+
+			adjustmentInt32 = roundToGranularity(adjustmentInt32, pin.PhaseAdjustGran)
+			if adjustmentInt32 != originalAdjustment {
+				glog.V(3).Infof("Pin %s phase adjustment rounded from %d to %d ps (granularity: %d ps)",
+					boardLabel, originalAdjustment, adjustmentInt32, pin.PhaseAdjustGran)
+			}
+
 			// Clamp to pin's min/max range
 			if pin.PhaseAdjustMin != 0 && adjustmentInt32 < pin.PhaseAdjustMin {
 				glog.Warningf("Pin %s phase adjustment %d ps clamped to minimum %d ps", boardLabel, adjustmentInt32, pin.PhaseAdjustMin)
@@ -834,16 +883,6 @@ func (hcm *HardwareConfigManager) buildPhaseAdjustmentCommands(subsystem ptpv2al
 			if pin.PhaseAdjustMax != 0 && adjustmentInt32 > pin.PhaseAdjustMax {
 				glog.Warningf("Pin %s phase adjustment %d ps clamped to maximum %d ps", boardLabel, adjustmentInt32, pin.PhaseAdjustMax)
 				adjustmentInt32 = pin.PhaseAdjustMax
-			}
-
-			// Round to granularity if specified
-			if pin.PhaseAdjustGran > 1 {
-				rounded := (adjustmentInt32 / int32(pin.PhaseAdjustGran)) * int32(pin.PhaseAdjustGran)
-				if adjustmentInt32 != rounded {
-					glog.V(3).Infof("Pin %s phase adjustment rounded from %d to %d ps (granularity: %d ps)",
-						boardLabel, adjustmentInt32, rounded, pin.PhaseAdjustGran)
-					adjustmentInt32 = rounded
-				}
 			}
 
 			// Build command

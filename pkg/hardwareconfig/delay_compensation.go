@@ -9,8 +9,7 @@ import (
 )
 
 // ResolvePhaseAdjustments calculates phase adjustments from delay compensation model
-// and returns a map of pin board labels to their compensation adjustment values.
-// Delays from delays.yaml (positive values) are negated to get compensation adjustments.
+// and returns a map of pin board labels to their phase adjustment values.
 func ResolvePhaseAdjustments(
 	hwDefaults *HardwareDefaults,
 	networkInterface string,
@@ -46,8 +45,7 @@ func ResolvePhaseAdjustments(
 			continue
 		}
 
-		// Negate the delay to get the compensation adjustment (we compensate by adjusting in opposite direction)
-		adjustments[pinLabel] = -totalDelay
+		adjustments[pinLabel] = totalDelay
 		glog.V(4).Infof("Route %s: calculated delay %d ps for pin %s", route.Name, totalDelay, pinLabel)
 	}
 
@@ -128,8 +126,7 @@ func findComponentByID(components []Component, id string) *Component {
 
 // PopulatePhaseAdjustmentsFromDelays populates PhaseAdjustment fields in HardwareConfig
 // based on calculated delays from the delay compensation model.
-// Delays from delays.yaml are positive values that are negated to get compensation adjustments.
-// User-specified phaseAdjustment values are already adjustment values and are added directly.
+// Delays from delays.yaml are summed directly and combined with user-specified phaseAdjustment values.
 func PopulatePhaseAdjustmentsFromDelays(
 	hwConfig *ptpv2alpha1.HardwareConfig,
 	hwDefaults *HardwareDefaults,
@@ -160,14 +157,12 @@ func PopulatePhaseAdjustmentsFromDelays(
 					pinConfig := subsystem.DPLL.PhaseInputs[pinLabel]
 
 					// Get user-specified adjustment (defaults to 0 if not set)
-					// User adjustment is already an adjustment value (not a delay), so no negation needed
 					userAdjustment := int64(0)
 					if pinConfig.PhaseAdjustment != nil {
 						userAdjustment = *pinConfig.PhaseAdjustment
 					}
 
-					// Total adjustment = internal adjustment (from delays.yaml, already negated) + user adjustment
-					// This total is sent directly to DPLL without further negation
+					// Total adjustment = internal delay (from delays.yaml) + user adjustment
 					totalAdjustment := internalAdjustment + userAdjustment
 
 					// Update PhaseAdjustment with the total
@@ -176,7 +171,7 @@ func PopulatePhaseAdjustmentsFromDelays(
 					// Update the map entry with the modified pinConfig
 					subsystem.DPLL.PhaseInputs[pinLabel] = pinConfig
 
-					glog.Infof("Populated phase adjustment for pin %s: Internal adjustment=%d ps, User adjustment=%d ps, Total=%d ps",
+					glog.Infof("Populated phase adjustment for pin %s: Internal delay=%d ps, User adjustment=%d ps, Total=%d ps",
 						pinLabel, internalAdjustment, userAdjustment, totalAdjustment)
 				}
 			}
@@ -190,14 +185,11 @@ func PopulatePhaseAdjustmentsFromDelays(
 				pinConfig := subsystem.DPLL.PhaseOutputs[pinLabel]
 
 				// Get user-specified adjustment (defaults to 0 if not set)
-				// User adjustment is already an adjustment value (not a delay), so no negation needed
 				userAdjustment := int64(0)
 				if pinConfig.PhaseAdjustment != nil {
 					userAdjustment = *pinConfig.PhaseAdjustment
 				}
 
-				// Total adjustment = internal adjustment (from delays.yaml, already negated) + user adjustment
-				// This total is sent directly to DPLL without further negation
 				totalAdjustment := internalAdjustment + userAdjustment
 
 				// Update PhaseAdjustment with the total
@@ -206,7 +198,7 @@ func PopulatePhaseAdjustmentsFromDelays(
 				// Update the map entry with the modified pinConfig
 				subsystem.DPLL.PhaseOutputs[pinLabel] = pinConfig
 
-				glog.Infof("Populated phase adjustment for pin %s: Internal adjustment=%d ps, User adjustment=%d ps, Total=%d ps",
+				glog.Infof("Populated phase adjustment for pin %s: Internal delay=%d ps, User adjustment=%d ps, Total=%d ps",
 					pinLabel, internalAdjustment, userAdjustment, totalAdjustment)
 			}
 		}

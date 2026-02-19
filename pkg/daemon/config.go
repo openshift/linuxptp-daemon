@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
@@ -424,6 +426,12 @@ func (conf *Ptp4lConf) RenderSyncE4lConf(ptpSettings map[string]string) (configO
 	return
 }
 
+func getSectionName(name string) string {
+	name = strings.ReplaceAll(name, "[", "")
+	name = strings.ReplaceAll(name, "]", "")
+	return name
+}
+
 // RenderPtp4lConf outputs ptp4l config as string
 func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces) {
 	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
@@ -438,10 +446,9 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 			}
 		}
 		if section.sectionName != GlobalSectionName && section.sectionName != NmeaSectionName && section.sectionName != UnicastSectionName {
-			i := section.sectionName
-			i = strings.ReplaceAll(i, "[", "")
-			i = strings.ReplaceAll(i, "]", "")
-			iface := config.Iface{Name: i}
+			iface := config.Iface{Name: getSectionName(section.sectionName)}
+			iface.PhcId = network.GetPhcId(iface.Name)
+
 			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
 				iface.Source = getSource(source)
 			} else {
@@ -452,11 +459,8 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 				// TODO add error handling
 				iface.IsMaster, _ = strconv.ParseBool(strings.TrimSpace(masterOnly))
 			}
-			ifaces = append(ifaces, config.Iface{
-				Name:   iface.Name,
-				Source: iface.Source,
-				PhcId:  iface.PhcId,
-			})
+			ifaces = append(ifaces, iface)
+			alias.AddInterface(iface.PhcId, iface.Name)
 		}
 		for _, option := range section.options {
 			k := option.key
@@ -464,5 +468,6 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 			configOut = fmt.Sprintf("%s\n%s %s", configOut, k, v)
 		}
 	}
+	alias.CalculateAliases()
 	return configOut, ifaces
 }

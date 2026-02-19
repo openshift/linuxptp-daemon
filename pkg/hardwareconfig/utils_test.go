@@ -105,6 +105,7 @@ type PinInfoHR struct {
 	PhaseAdjustMin            int32                 `json:"phaseAdjustMin"`
 	PhaseAdjustMax            int32                 `json:"phaseAdjustMax"`
 	PhaseAdjust               int32                 `json:"phaseAdjust"`
+	PhaseAdjustGran           uint32                `json:"phaseAdjustGran,omitempty"`
 	FractionalFrequencyOffset int                   `json:"fractionalFrequencyOffset"`
 	EsyncFrequency            int64                 `json:"esyncFrequency"`
 	EsyncFrequencySupported   []dpll.FrequencyRange `json:"esyncFrequencySupported"`
@@ -209,6 +210,7 @@ func convertHRToPinInfo(hr *PinInfoHR) *dpll.PinInfo {
 		PhaseAdjustMin:            hr.PhaseAdjustMin,
 		PhaseAdjustMax:            hr.PhaseAdjustMax,
 		PhaseAdjust:               hr.PhaseAdjust,
+		PhaseAdjustGran:           hr.PhaseAdjustGran,
 		FractionalFrequencyOffset: hr.FractionalFrequencyOffset,
 		EsyncFrequency:            hr.EsyncFrequency,
 		EsyncFrequencySupported:   hr.EsyncFrequencySupported,

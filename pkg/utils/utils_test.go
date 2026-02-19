@@ -52,7 +52,7 @@ func Test_GetAlias(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(fmt.Sprintf("%s->%s", tc.ifname, tc.expectedAlias), func(t *testing.T) {
-			assert.Equal(t, tc.expectedAlias, utils.GetAlias(tc.ifname))
+			assert.Equal(t, tc.expectedAlias, utils.GetAliasValue(tc.ifname))
 		})
 	}
 }

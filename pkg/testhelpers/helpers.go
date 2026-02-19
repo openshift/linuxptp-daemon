@@ -2,6 +2,7 @@
 package testhelpers
 
 import (
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/features"
 )
 
@@ -13,7 +14,9 @@ func SetupTests() func() {
 }
 
 // TeardownTests ...
-func TeardownTests() {}
+func TeardownTests() {
+	alias.ClearAliases()
+}
 
 // SetupForTestOC ...
 func SetupForTestOC() (skip bool, teardown func()) {
