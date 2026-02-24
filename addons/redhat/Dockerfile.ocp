@@ -16,8 +16,9 @@ RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_i
   iproute \
   procps-ng \
   chrony \
-  gpsd-minimal \
-  gpsd-minimal-clients \
+  # gpsd-minimal and gpsd-minimal-clients were renamed to gpsd and gpsd-clients in RHEL 10
+  # try the old names first, fall back to new names if it fails
+  && (yum -y install gpsd-minimal gpsd-minimal-clients || yum -y install gpsd gpsd-clients) \
   && yum clean all
 
 # Create symlinks for executables to match references
