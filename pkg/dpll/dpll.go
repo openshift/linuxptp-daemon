@@ -29,9 +29,9 @@ const (
 	DPLL_LOCKED_HO_ACQ = 3
 	DPLL_HOLDOVER      = 4
 
-	LocalMaxHoldoverOffSet = 1500  //ns
-	LocalHoldoverTimeout   = 14400 //secs
-	MaxInSpecOffset        = 1500  //ns
+	LocalMaxHoldoverOffSet = 1500  // ns
+	LocalHoldoverTimeout   = 14400 // secs
+	MaxInSpecOffset        = 1500  // ns
 	monitoringInterval     = 1 * time.Second
 
 	LocalMaxHoldoverOffSetStr = "LocalMaxHoldoverOffSet"
@@ -43,6 +43,38 @@ const (
 	// The PPS pin index in the pin-parent-device structure
 	PPS_PIN_INDEX = 1
 )
+
+// Flag is a bitmask which changes the default DPLL monitoeing  behavior
+type Flag uint64
+
+const (
+	// FlagNoPhaseOffset allows skipping phase offset monitoring
+	FlagNoPhaseOffset Flag = (1 << 0)
+	// FlagNoPhaseStatus allows skipping phase status (pps lock/unlock) monitoring
+	FlagNoPhaseStatus Flag = (1 << 1)
+	// FlagNoFreqencyStatus allows skipping frequency status (eec lock/unlock) monitoring
+	FlagNoFreqencyStatus Flag = (1 << 2)
+
+	// FlagOnlyPhaseStatus represents a DPll with only phase status (pps lock/unlock)
+	FlagOnlyPhaseStatus Flag = FlagNoFreqencyStatus | FlagNoPhaseOffset
+)
+
+func stateName(state int64) string {
+	switch state {
+	case DPLL_INVALID:
+		return "INVALID"
+	case DPLL_FREERUN:
+		return "FREERUN"
+	case DPLL_LOCKED:
+		return "LOCKED"
+	case DPLL_LOCKED_HO_ACQ:
+		return "LOCKED_HO_ACQ"
+	case DPLL_HOLDOVER:
+		return "HOLDOVER"
+	default:
+		return "UNKNOWN"
+	}
+}
 
 type dpllApiType string
 
@@ -96,7 +128,7 @@ type DpllConfig struct {
 	iface                  string
 	name                   string
 	slope                  float64
-	timer                  int64 //secs
+	timer                  int64 // secs
 	inSpec                 bool
 	frequencyTraceable     bool
 	state                  event.PTPState
@@ -117,6 +149,7 @@ type DpllConfig struct {
 	phaseStatus     int64
 	frequencyStatus int64
 	phaseOffset     int64
+
 	// clockId is needed to distinguish between DPLL associated with the particular
 	// iface from other DPLL units that might be present on the system. Clock ID implementation
 	// is driver-specific and vendor-specific.
@@ -130,6 +163,9 @@ type DpllConfig struct {
 	// hardwareConfigHandler is called when device notifications are received
 	// All logic for processing device notifications is handled by the hardwareconfig layer
 	hardwareConfigHandler func(devices []*nl.DoDeviceGetReply) error
+
+	// Some DPLLs (Carter Flats, for one) do not have both pps (phase) and eec (frequency) states.
+	flags Flag
 }
 
 func (d *DpllConfig) InSpec() bool {
@@ -179,6 +215,31 @@ func (d *DpllConfig) SetHardwareConfigHandler(handler func(devices []*nl.DoDevic
 // PhaseOffset ... get phase offset
 func (d *DpllConfig) PhaseOffset() int64 {
 	return d.phaseOffset
+}
+
+func (d *DpllConfig) hasFlag(flag Flag) bool {
+	return (d.flags & flag) == flag
+}
+
+func (d *DpllConfig) flagsToStrings() []string {
+	result := make([]string, 0)
+	if d.hasFlag(FlagNoFreqencyStatus) {
+		result = append(result, "NoFrequencyStatus")
+	}
+	if d.hasFlag(FlagNoPhaseStatus) {
+		result = append(result, "NoPhaseStatus")
+	}
+	if d.hasFlag(FlagNoPhaseOffset) {
+		result = append(result, "NoPhaseOffset")
+	}
+	return result
+}
+
+func (d *DpllConfig) phaseOffsetStr() string {
+	if d.hasFlag(FlagNoPhaseOffset) {
+		return "UNKNOWN"
+	}
+	return fmt.Sprintf("%d", d.phaseOffset)
 }
 
 // FrequencyStatus ... get frequency status
@@ -239,7 +300,7 @@ func (d *DpllConfig) Name() string {
 
 // Stopped ... stopped
 func (d *DpllConfig) Stopped() bool {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -308,7 +369,8 @@ func (d *DpllConfig) unRegisterAll() {
 // NewDpll ... create new DPLL process
 func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxInSpecOffset uint64,
 	iface string, dependsOn []event.EventSource, apiType dpllApiType, phaseOffsetPinFilter map[string]map[string]string,
-	inSyncConditionTh uint64, inSyncConditionTimes uint64) *DpllConfig {
+	inSyncConditionTh uint64, inSyncConditionTimes uint64, dpllFlags Flag,
+) *DpllConfig {
 	glog.Infof("Calling NewDpll with clockId %x, localMaxHoldoverOffSet=%d, localHoldoverTimeout=%d, maxInSpecOffset=%d, iface=%s, phase offset pin filter=%v", clockId, localMaxHoldoverOffSet, localHoldoverTimeout, maxInSpecOffset, iface, phaseOffsetPinFilter)
 	d := &DpllConfig{
 		clockId:                clockId,
@@ -334,6 +396,12 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 		phaseOffset:              FaultyPhaseOffset,
 		inSyncConditionThreshold: inSyncConditionTh,
 		inSyncConditionTimes:     inSyncConditionTimes,
+		flags:                    dpllFlags,
+	}
+
+	if d.flags != 0 {
+		flagStrings := d.flagsToStrings()
+		glog.Warningf("Partial monitoring detected for %s clockId %#x: %v", iface, clockId, flagStrings)
 	}
 
 	// time to reach maxnInSpecOffset
@@ -342,6 +410,7 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 		d.slope, float64(d.MaxInSpecOffset), d.timer, int64(d.LocalHoldoverTimeout))
 	return d
 }
+
 func (d *DpllConfig) Slope() float64 {
 	return d.slope
 }
@@ -351,7 +420,6 @@ func (d *DpllConfig) Timer() int64 {
 }
 
 func (d *DpllConfig) PhaseOffsetPin(pin *nl.PinInfo) bool {
-
 	if pin.ClockID == d.clockId && len(pin.ParentDevice) > PPS_PIN_INDEX && pin.ParentDevice[PPS_PIN_INDEX].PhaseOffset != math.MaxInt64 {
 		for k, v := range d.phaseOffsetPinFilter[strconv.FormatUint(d.clockId, 10)] {
 			switch k {
@@ -387,9 +455,11 @@ func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.Pi
 			switch nl.GetDpllType(reply.Type) {
 			case "eec":
 				d.frequencyStatus = int64(reply.LockStatus)
+				glog.Infof("%s (%#x) updating eec to %s (%d)", d.iface, d.clockId, stateName(d.frequencyStatus), d.frequencyStatus)
 				valid = true
 			case "pps":
 				d.phaseStatus = int64(reply.LockStatus)
+				glog.Infof("%s (%#x) updating pps to %s (%d)", d.iface, d.clockId, stateName(d.phaseStatus), d.phaseStatus)
 				valid = true
 			}
 		}
@@ -616,7 +686,7 @@ func (d *DpllConfig) MonitorProcess(processCfg config.ProcessConfig) {
 	d.processConfig = processCfg
 	// register to event notification from other processes
 	for _, dep := range d.dependsOn {
-		if dep == event.GNSS { //TODO: fow now no subscription for pps
+		if dep == event.GNSS { // TODO: fow now no subscription for pps
 			dependingProcessStateMap.states[dep] = event.PTP_UNKNOWN
 			// register to event notification from other processes
 			d.subscriber = append(d.subscriber, &DpllSubscriber{source: dep, dpll: d, id: fmt.Sprintf("%s-%x", event.DPLL, d.clockId)})
@@ -663,14 +733,7 @@ func (d *DpllConfig) MonitorDpll() {
 
 // stateDecision
 func (d *DpllConfig) stateDecision() {
-	var dpllStatus int64
-	switch {
-	case d.hasPTPAsSource():
-		// For T-BC EEC DPLL state is not taken into account
-		dpllStatus = d.phaseStatus
-	default:
-		dpllStatus = d.getWorseState(d.phaseStatus, d.frequencyStatus)
-	}
+	dpllStatus := d.getDpllState()
 
 	switch dpllStatus {
 	case DPLL_FREERUN, DPLL_INVALID, DPLL_UNKNOWN:
@@ -731,14 +794,7 @@ func (d *DpllConfig) stateDecision() {
 			}
 		}
 
-	case DPLL_LOCKED_HO_ACQ:
-		if d.isOffsetInRange() {
-			d.state = event.PTP_LOCKED
-			d.inSpec = true
-		} else {
-			d.state = event.PTP_FREERUN
-			d.sourceLost = false // phase offset will be the one that was read
-		}
+	case DPLL_LOCKED_HO_ACQ, DPLL_LOCKED:
 		if d.isOffsetInRange() {
 			glog.Infof("%s dpll is locked, source is not lost, offset is in range, state is DPLL_LOCKED_HO_ACQ", d.iface)
 			if d.hasLeadingSource() && d.onHoldover {
@@ -778,9 +834,6 @@ func (d *DpllConfig) sendDpllEvent() {
 		IFace:       d.iface,
 		CfgName:     d.processConfig.ConfigName,
 		Values: map[event.ValueType]interface{}{
-			event.FREQUENCY_STATUS: d.frequencyStatus,
-			event.OFFSET:           d.phaseOffset,
-			event.PHASE_STATUS:     d.phaseStatus,
 			event.PPS_STATUS: func() int {
 				if d.sourceLost {
 					return 0
@@ -801,10 +854,19 @@ func (d *DpllConfig) sendDpllEvent() {
 		WriteToLog:         true,
 		Reset:              false,
 	}
+	if !d.hasFlag(FlagNoFreqencyStatus) {
+		eventData.Values[event.FREQUENCY_STATUS] = d.frequencyStatus
+	}
+	if !d.hasFlag(FlagNoPhaseStatus) {
+		eventData.Values[event.PHASE_STATUS] = d.phaseStatus
+	}
+	if !d.hasFlag(FlagNoPhaseOffset) {
+		eventData.Values[event.OFFSET] = d.phaseOffset
+	}
 	select {
 	case d.processConfig.EventChannel <- eventData:
-		glog.Infof("dpll event sent for (%s): state %v, Offset %d, In spec %v, Source %v lost %v, On holdover %v",
-			d.iface, d.state, d.phaseOffset, d.inSpec, d.dependsOn[0], d.sourceLost, d.onHoldover)
+		glog.Infof("dpll event sent for (%s): state %v, Offset %s, In spec %v, Source %v lost %v, On holdover %v",
+			d.iface, d.state, d.phaseOffsetStr(), d.inSpec, d.dependsOn[0], d.sourceLost, d.onHoldover)
 	default:
 		glog.Infof("failed to send dpll event, retying.(%s)", d.iface)
 	}
@@ -861,6 +923,23 @@ func (d *DpllConfig) sendDpllTerminationEvent() {
 	d.unRegisterAllSubscriber()
 }
 
+func (d *DpllConfig) getDpllState() int64 {
+	switch {
+	case d.hasPTPAsSource():
+		// For T-BC EEC DPLL state is not taken into account
+		return d.phaseStatus
+	case d.hasFlag(FlagNoPhaseStatus):
+		// Special case if there is no Phase Status (pps) for this DPLL
+		return d.frequencyStatus
+	case d.hasFlag(FlagNoFreqencyStatus):
+		// Special case if there is no Frequency Status (eec) for this DPLL
+		return d.phaseStatus
+	default:
+		// Normal case: Worst state of phase or frequency status
+		return d.getWorseState(d.phaseStatus, d.frequencyStatus)
+	}
+}
+
 // getStateQuality maps the state with relatively worse signal quality with
 // a lower number for easy comparison
 // Ref: ITU-T G.781 section 6.3.1 Auto selection operation
@@ -902,7 +981,7 @@ func (d *DpllConfig) holdover() {
 			if d.hasGNSSAsSource() {
 				//nolint:all
 				if d.frequencyTraceable {
-					//TODO:  not implemented : add when syncE is handled here
+					// TODO:  not implemented : add when syncE is handled here
 					// use  !d.isInSpecOffsetInRange()  to declare HOLDOVER with  clockClass 140
 					// !d.isMaxHoldoverOffsetInRange()  for clock class to move from 140 to 248 and event to FREERUN
 				} else if !d.isInSpecOffsetInRange() { // when holdover verify with local max holdover not with regular threshold
@@ -935,6 +1014,10 @@ func (d *DpllConfig) holdover() {
 }
 
 func (d *DpllConfig) isMaxHoldoverOffsetInRange() bool {
+	if d.hasFlag(FlagNoPhaseOffset) {
+		// Special case when the DPLL has no reported phase offset
+		return true
+	}
 	if d.phaseOffset <= int64(d.LocalMaxHoldoverOffSet) {
 		return true
 	}
@@ -942,7 +1025,12 @@ func (d *DpllConfig) isMaxHoldoverOffsetInRange() bool {
 		d.LocalMaxHoldoverOffSet, d.phaseOffset)
 	return false
 }
+
 func (d *DpllConfig) isInSpecOffsetInRange() bool {
+	if d.hasFlag(FlagNoPhaseOffset) {
+		// Special case when the DPLL has no reported phase offset
+		return true
+	}
 	if d.phaseOffset <= int64(d.MaxInSpecOffset) {
 		return true
 	}
@@ -952,6 +1040,10 @@ func (d *DpllConfig) isInSpecOffsetInRange() bool {
 }
 
 func (d *DpllConfig) isOffsetInRange() bool {
+	if d.hasFlag(FlagNoPhaseOffset) {
+		// Special case when the DPLL has no reported phase offset
+		return true
+	}
 	if d.phaseOffset <= d.processConfig.GMThreshold.Max && d.phaseOffset >= d.processConfig.GMThreshold.Min {
 		return true
 	}
@@ -1036,4 +1128,9 @@ func CalculateTimer(nodeProfile *ptpv1.PtpProfile) (int64, int64, int64, int64, 
 // PtpSettingsDpllIgnoreKey returns the PtpSettings key to ignore DPLL for the given interface name:
 func PtpSettingsDpllIgnoreKey(iface string) string {
 	return fmt.Sprintf("dpll.%s.ignore", iface)
+}
+
+// PtpSettingsDpllFlagsKey returns the PtpSettings key to set DPLL behavioral flags for the given interface name:
+func PtpSettingsDpllFlagsKey(iface string) string {
+	return fmt.Sprintf("dpll.%s.flags", iface)
 }

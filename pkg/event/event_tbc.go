@@ -215,9 +215,12 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 		leadingIFace:  gSycState.leadingIFace,
 	}
 
-	if gSycState.state == PTP_FREERUN {
+	switch gSycState.state {
+	case PTP_FREERUN:
 		e.clkSyncState[cfgName].clockOffset = FaultyPhaseOffset
-	} else {
+	case PTP_HOLDOVER:
+		e.clkSyncState[cfgName].clockOffset = e.getCalculatedHoldoverOffset(cfgName)
+	default:
 		e.clkSyncState[cfgName].clockOffset = e.getLargestOffset(cfgName)
 	}
 
@@ -466,6 +469,17 @@ func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 	}
 	glog.Info("Largest offset ", worstOffset)
 	return worstOffset
+}
+
+func (e *EventHandler) getCalculatedHoldoverOffset(cfgName string) int64 {
+	if data, ok := e.data[cfgName]; ok {
+		for _, d := range data {
+			if d.ProcessName == DPLL {
+				return int64(d.window.LastInserted())
+			}
+		}
+	}
+	return FaultyPhaseOffset // No DPLL entries yet return faulty
 }
 
 func (e *EventHandler) freeRunCondition(cfgName string) bool {
