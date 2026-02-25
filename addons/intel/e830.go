@@ -9,6 +9,7 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
+	dpll_netlink "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
@@ -38,6 +39,38 @@ type E830PluginData struct {
 	hwplugins *[]string
 }
 
+func _hasDpllForClockID(clockID uint64) bool {
+	if clockID == 0 {
+		return false
+	}
+	conn, err := dpll_netlink.Dial(nil)
+	if err != nil {
+		glog.Warningf("failed to dial DPLL: %s", err)
+		return false
+	}
+	defer conn.Close()
+
+	devices, err := conn.DumpDeviceGet()
+	if err != nil || devices == nil {
+		glog.Infof("No DPLLs found on this system")
+		return false
+	}
+	found := false
+	for _, device := range devices {
+		if device.ClockID == clockID {
+			glog.Infof("Detected %s DPLL for clock ID %#x", dpll_netlink.GetDpllType(device.Type), clockID)
+			found = true
+		}
+	}
+	if !found {
+		glog.Infof("No DPLL detected for clock ID %#x", clockID)
+	}
+	return found
+}
+
+// Function pointer for mocking
+var hasDpllForClockID = _hasDpllForClockID
+
 // OnPTPConfigChangeE830 is called on PTP config change for e830 plugin
 func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	glog.Infof("calling onPTPConfigChange for e830 plugin (%s)", *nodeProfile.Name)
@@ -62,8 +95,10 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 			glog.Infof("Initializing e830 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
 
 			// Setup clockID (prefer ice modue clock ID for e830)
+			clockIDs := make(map[string]uint64)
 			for _, device := range allDevices {
 				clockID := getClockIDE810(device)
+				clockIDs[device] = clockID
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				nodeProfile.PtpSettings[dpllClockIDStr] = strconv.FormatUint(clockID, 10)
 				glog.Infof("e830: Detected %s=%d (%x)", dpllClockIDStr, clockID, clockID)
@@ -111,15 +146,14 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 				}
 			}
 
-			// e830 DPLL is inaccessible to software, so ensure the daemon ignores all e830 DPLLs for now:
+			// Setup DPLL flags for all e830 cards
 			for _, device := range allDevices {
-				// Note: Only set to "true" if it's unset; This allows overriding this by explicitly setting dpll.$iface.ignore = "false" in the PtpConfig section
-				key := dpll.PtpSettingsDpllIgnoreKey(device)
-				if value, ok := nodeProfile.PtpSettings[key]; ok {
-					glog.Infof("Not setting %s (already \"%s\")", key, value)
+				if hasDpllForClockID(clockIDs[device]) {
+					// CF DPLL only provides PhaseStatus, not Phase Offset or Frequency Status:
+					nodeProfile.PtpSettings[dpll.PtpSettingsDpllFlagsKey(device)] = strconv.FormatUint(uint64(dpll.FlagOnlyPhaseStatus), 10)
 				} else {
-					nodeProfile.PtpSettings[key] = "true"
-					glog.Infof("Setting %s = \"true\"", key)
+					// No DPLL found: Mark this device to be ignored
+					nodeProfile.PtpSettings[dpll.PtpSettingsDpllIgnoreKey(device)] = "true"
 				}
 			}
 		}

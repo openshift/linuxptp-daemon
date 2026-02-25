@@ -22,6 +22,7 @@ func Test_OnPTPConfigChangeE830(t *testing.T) {
 	tcs := []struct {
 		name                string
 		profile             string
+		foundDpll           bool
 		editProfile         func(*ptpv1.PtpProfile)
 		expectError         bool
 		expectedPinSets     int
@@ -29,44 +30,58 @@ func Test_OnPTPConfigChangeE830(t *testing.T) {
 		expectedPtpSettings map[string]string
 	}{
 		{
-			name:    "TGM Profile",
-			profile: "./testdata/e825-tgm.yaml",
+			name:      "TGM Profile",
+			profile:   "./testdata/e825-tgm.yaml",
+			foundDpll: true,
+			expectedPtpSettings: map[string]string{
+				"dpll.enp108s0f0.ignore": "",
+				"clockId[enp108s0f0]":    "0",
+				"dpll.enp108s0f0.flags":  "5",
+			},
+		},
+		{
+			name:      "TBC Profile",
+			profile:   "./testdata/e825-tbc.yaml",
+			foundDpll: true,
+			expectedPtpSettings: map[string]string{
+				"dpll.enp108s0f0.ignore": "",
+				"clockId[enp108s0f0]":    "0",
+				"dpll.enp108s0f0.flags":  "5",
+			},
+		},
+		{
+			name:      "TGM Profile (No DPLL)",
+			profile:   "./testdata/e825-tgm.yaml",
+			foundDpll: false,
 			expectedPtpSettings: map[string]string{
 				"dpll.enp108s0f0.ignore": "true",
 				"clockId[enp108s0f0]":    "0",
+				"dpll.enp108s0f0.flags":  "",
 			},
 		},
 		{
-			name:    "TBC Profile",
-			profile: "./testdata/e825-tbc.yaml",
+			name:      "TBC Profile (No DPLL)",
+			profile:   "./testdata/e825-tbc.yaml",
+			foundDpll: false,
 			expectedPtpSettings: map[string]string{
 				"dpll.enp108s0f0.ignore": "true",
 				"clockId[enp108s0f0]":    "0",
+				"dpll.enp108s0f0.flags":  "",
 			},
 		},
 		{
-			name:    "TBC Profile with dpll-ignore-override",
-			profile: "./testdata/e825-tbc.yaml",
-			editProfile: func(p *ptpv1.PtpProfile) {
-				// Inject dpll.$iface.ignore to ensure it's not reset to "true"
-				p.PtpSettings["dpll.enp108s0f0.ignore"] = "false"
-			},
-			expectedPtpSettings: map[string]string{
-				"dpll.enp108s0f0.ignore": "false",
-				"clockId[enp108s0f0]":    "0",
-			},
-		},
-		{
-			name:    "TBC with no leadingInterface",
-			profile: "./testdata/e825-tbc.yaml",
+			name:      "TBC with no leadingInterface",
+			profile:   "./testdata/e825-tbc.yaml",
+			foundDpll: true,
 			editProfile: func(p *ptpv1.PtpProfile) {
 				delete(p.PtpSettings, "leadingInterface")
 			},
 			expectError: true,
 		},
 		{
-			name:    "TBC with no upstreamPort",
-			profile: "./testdata/e825-tbc.yaml",
+			name:      "TBC with no upstreamPort",
+			profile:   "./testdata/e825-tbc.yaml",
+			foundDpll: true,
 			editProfile: func(p *ptpv1.PtpProfile) {
 				delete(p.PtpSettings, "upstreamPort")
 			},
@@ -76,8 +91,16 @@ func Test_OnPTPConfigChangeE830(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(tt *testing.T) {
 			unitTest = true
+			// Mock pin setup
 			mockPins, restorePins := setupMockPinConfig()
 			defer restorePins()
+
+			// Mock DPLL detection
+			hasDpllForClockID = func(_ uint64) bool {
+				return tc.foundDpll
+			}
+			defer func() { hasDpllForClockID = _hasDpllForClockID }()
+
 			profile, err := loadProfile(tc.profile)
 			if tc.editProfile != nil {
 				tc.editProfile(profile)

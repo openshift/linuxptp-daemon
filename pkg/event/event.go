@@ -588,6 +588,11 @@ func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, cloc
 	}
 }
 
+// ForceMonitoringTick ... force tick event for unit testing
+func (e *EventHandler) ForceMonitoringTick() {
+	StateRegisterer.monitor()
+}
+
 // ProcessEvents ... process events to generate new events
 func (e *EventHandler) ProcessEvents() {
 	var c net.Conn
