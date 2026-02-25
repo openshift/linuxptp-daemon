@@ -1,12 +1,9 @@
 package intel
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -45,13 +42,9 @@ var bcDpllPeriods = frqSet{
 
 // E825Opts is the options structure for e825 plugin
 type E825Opts struct {
-	UblxCmds         UblxCmdList                  `json:"ublxCmds"`
-	Devices          []string                     `json:"devices"`
-	DevicePins       map[string]pinSet            `json:"pins"`
-	DeviceFreqencies map[string]frqSet            `json:"frequencies"`
-	DpllSettings     map[string]uint64            `json:"settings"`
-	PhaseOffsetPins  map[string]map[string]string `json:"phaseOffsetPins"`
-	Gnss             GnssOptions                  `json:"gnss"`
+	PluginOpts
+	UblxCmds UblxCmdList `json:"ublxCmds"`
+	Gnss     GnssOptions `json:"gnss"`
 }
 
 // GnssOptions defines GNSS-specific options for the e825
@@ -59,33 +52,14 @@ type GnssOptions struct {
 	Disabled bool `json:"disabled"`
 }
 
-// allDevices enumerates all defined devices (Devices/DevicePins/DeviceFrequencies/PhaseOffsets)
-func (opts *E825Opts) allDevices() []string {
-	// Enumerate all defined devices (Devices/DevicePins/DeviceFrequencies)
-	allDevices := opts.Devices
-	allDevices = extendWithKeys(allDevices, opts.DevicePins)
-	allDevices = extendWithKeys(allDevices, opts.DeviceFreqencies)
-	allDevices = extendWithKeys(allDevices, opts.PhaseOffsetPins)
-	return allDevices
-}
-
 // E825PluginData is the data structure for e825 plugin
 type E825PluginData struct {
-	hwplugins *[]string
-	dpllPins  []*dpll_netlink.PinInfo
+	PluginData
+	dpllPins []*dpll_netlink.PinInfo
 }
 
 func tbcConfigured(nodeProfile *ptpv1.PtpProfile) bool {
 	return nodeProfile.PtpSettings["clockType"] == "T-BC"
-}
-
-func extendWithKeys[T any](s []string, m map[string]T) []string {
-	for key := range m {
-		if !slices.Contains(s, key) {
-			s = append(s, key)
-		}
-	}
-	return s
 }
 
 // OnPTPConfigChangeE825 performs actions on PTP config change for e825 plugin
@@ -126,7 +100,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				clkID := zlClockID
 				if zlErr != nil {
-					clkID = getClockIDE825(device)
+					clkID = getPCIClockID(device)
 				}
 				(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(clkID, 10)
 				glog.Infof("Detected %s=%d (%x)", dpllClockIDStr, clkID, clkID)
@@ -160,7 +134,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					if zlErr == nil {
 						clockIDUsed = zlClockID
 					} else {
-						clockIDUsed = getClockIDE825(iface)
+						clockIDUsed = getPCIClockID(iface)
 					}
 					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(clockIDUsed, 10), pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
@@ -192,9 +166,6 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 
 // populateDpllPins creates a list of all known DPLL pins
 func (d *E825PluginData) populateDpllPins() error {
-	if unitTest {
-		return nil
-	}
 	conn, err := dpll_netlink.Dial(nil)
 	if err != nil {
 		return fmt.Errorf("failed to dial DPLL: %w", err)
@@ -277,9 +248,9 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			case "gpspipe":
 				glog.Infof("AfterRunPTPCommandE825 doing ublx config for command: %s", command)
 				// Execute user-supplied UblxCmds first:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, e825Opts.UblxCmds.runAll()...)
+				pluginData.hwplugins = append(pluginData.hwplugins, e825Opts.UblxCmds.runAll()...)
 				// Finish with the default commands:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
+				pluginData.hwplugins = append(pluginData.hwplugins, defaultUblxCmds().runAll()...)
 			// "tbc-ho-exit" is called when ptp4l sync is achieved on the T-BC upstreamPort
 			case "tbc-ho-exit":
 				if tbcConfigured(nodeProfile) {
@@ -314,100 +285,22 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 	return nil
 }
 
-// PopulateHwConfigE825 populates hwconfig for e825 plugin
-func PopulateHwConfigE825(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error {
-	if data != nil {
-		_data := *data
-		pluginData := _data.(*E825PluginData)
-		_pluginData := *pluginData
-		if _pluginData.hwplugins != nil {
-			for _, _hwconfig := range *_pluginData.hwplugins {
-				hwConfig := ptpv1.HwConfig{}
-				hwConfig.DeviceID = "e825"
-				hwConfig.Status = _hwconfig
-				*hwconfigs = append(*hwconfigs, hwConfig)
-			}
-		}
-	}
-	return nil
-}
-
 // E825 initializes the e825 plugin
 func E825(name string) (*plugin.Plugin, *interface{}) {
-	if name != "e825" {
+	if name != pluginNameE825 {
 		glog.Errorf("Plugin must be initialized as 'e825'")
 		return nil, nil
 	}
 	glog.Infof("registering e825 plugin")
-	hwplugins := []string{}
-	pluginData := E825PluginData{hwplugins: &hwplugins}
+	pluginData := E825PluginData{
+		PluginData: PluginData{name: pluginNameE825},
+	}
 	_plugin := plugin.Plugin{
-		Name:               "e825",
+		Name:               pluginNameE825,
 		OnPTPConfigChange:  OnPTPConfigChangeE825,
 		AfterRunPTPCommand: AfterRunPTPCommandE825,
-		PopulateHwConfig:   PopulateHwConfigE825,
+		PopulateHwConfig:   pluginData.PopulateHwConfig,
 	}
 	var iface interface{} = &pluginData
 	return &_plugin, &iface
-}
-
-func getClockIDE825(device string) uint64 {
-	const (
-		PCI_EXT_CAP_ID_DSN       = 3   //nolint
-		PCI_CFG_SPACE_SIZE       = 256 //nolint
-		PCI_EXT_CAP_NEXT_OFFSET  = 2   //nolint
-		PCI_EXT_CAP_OFFSET_SHIFT = 4   //nolint
-		PCI_EXT_CAP_DATA_OFFSET  = 4   //nolint
-	)
-	b, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/device/config", device))
-	if err != nil {
-		glog.Error(err)
-		return 0
-	}
-	// Extended capability space starts right on PCI_CFG_SPACE
-	var offset uint16 = PCI_CFG_SPACE_SIZE
-	var id uint16
-	for {
-		id = binary.LittleEndian.Uint16(b[offset:])
-		if id != PCI_EXT_CAP_ID_DSN {
-			if id == 0 {
-				glog.Errorf("can't find DSN for device %s", device)
-				return 0
-			}
-			offset = binary.LittleEndian.Uint16(b[offset+PCI_EXT_CAP_NEXT_OFFSET:]) >> PCI_EXT_CAP_OFFSET_SHIFT
-			continue
-		}
-		break
-	}
-	return binary.LittleEndian.Uint64(b[offset+PCI_EXT_CAP_DATA_OFFSET:])
-}
-
-// getClockIDByModule returns ClockID for a given DPLL module name, preferring PPS type if present
-func getClockIDByModule(module string) (uint64, error) {
-	if unitTest {
-		return 0, fmt.Errorf("netlink disabled in unit test")
-	}
-	conn, err := dpll_netlink.Dial(nil)
-	if err != nil {
-		return 0, err
-	}
-	//nolint:errcheck
-	defer conn.Close()
-	devices, err := conn.DumpDeviceGet()
-	if err != nil {
-		return 0, err
-	}
-	var anyID uint64
-	for _, d := range devices {
-		if strings.EqualFold(d.ModuleName, module) {
-			if d.Type == 1 { // PPS
-				return d.ClockID, nil
-			}
-			anyID = d.ClockID
-		}
-	}
-	if anyID != 0 {
-		return anyID, nil
-	}
-	return 0, fmt.Errorf("module %s DPLL not found", module)
 }
