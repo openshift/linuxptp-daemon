@@ -190,7 +190,7 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 	eventChannel := make(chan event.EventChannel, 10)
 	go eventProcessor.ProcessEvents()
 
-	time.Sleep(5 * time.Second)
+	eventProcessor.ForceMonitoringTick()
 	if d != nil {
 		d.MonitorProcess(config.ProcessConfig{
 			ClockType:       "GM",
@@ -233,7 +233,7 @@ func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 	eventChannel := make(chan event.EventChannel, 10)
 	go eventProcessor.ProcessEvents()
 
-	time.Sleep(5 * time.Second)
+	eventProcessor.ForceMonitoringTick()
 	if d != nil {
 		d.MonitorProcess(config.ProcessConfig{
 			ClockType:       "GM",
@@ -274,7 +274,7 @@ func TestDpllConfig_MonitorProcessPartial(t *testing.T) {
 	eventChannel := make(chan event.EventChannel, 10)
 	go eventProcessor.ProcessEvents()
 
-	time.Sleep(5 * time.Second)
+	eventProcessor.ForceMonitoringTick()
 	if d != nil {
 		d.MonitorProcess(config.ProcessConfig{
 			ClockType:       "GM",
