@@ -106,8 +106,10 @@ var ptpTmpFiles = []string{
 
 var vTbcHasHardwareConfig = false
 
+const socketDialTimeout = 5 * time.Second
+
 func dialSocket() (net.Conn, error) {
-	c, err := net.Dial("unix", eventSocket)
+	c, err := net.DialTimeout("unix", eventSocket, socketDialTimeout)
 	if err != nil {
 		glog.Errorf("error trying to connect to event socket")
 		time.Sleep(connectionRetryInterval)
@@ -204,28 +206,20 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 
 }
 
-// EmitProcessStatusLogs ...
+// EmitProcessStatusLogs emits process status logs using the EventHandler's
+// managed connection with reconnection support.
 func (p *ProcessManager) EmitProcessStatusLogs() {
 	for _, proc := range p.process {
 		status := PtpProcessUp
 		if proc.Stopped() {
 			status = PtpProcessDown
 		}
-		if proc.c == nil {
-			for {
-				var err error
-				proc.c, err = dialSocket()
-				if err == nil {
-					break
-				}
-			}
-		}
-		logProcessStatus(proc.name, proc.configName, status, proc.c)
+		p.ptpEventHandler.EmitProcessStatusLog(proc.name, proc.configName, status)
 	}
 }
 
 // EmitClockClassLogs ...
-func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
+func (p *ProcessManager) EmitClockClassLogs() {
 	for _, proc := range p.process {
 		if proc.name == ptp4lProcessName {
 			for _, dp := range proc.depProcess {
@@ -235,7 +229,7 @@ func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
 						// if parentDS is nil that means the clock class will
 						// be announced as soon as we get one
 						// therefore no need force it.
-						pmc.EmitClockClassLogs(c)
+						pmc.EmitClockClassLogs()
 					}
 				}
 			}
