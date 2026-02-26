@@ -13,8 +13,15 @@ RUN yum -y update && \
 
 RUN yum install -y procps-ng
 RUN yum install -y chrony
-RUN yum install -y gpsd-minimal
-RUN yum install -y gpsd-minimal-clients
+# gpsd has replaced gpsd-minimal and gpsd-minimal-clients in CentOS/RHEL 10
+# remove when base image is updated to rhel 10
+RUN . /etc/os-release && \
+    MAJOR_VERSION=$(echo "${VERSION_ID}" | cut -d. -f1) && \
+    if [ "${MAJOR_VERSION}" = "10" ]; then \
+        yum install -y gpsd; \
+    else \
+        yum install -y gpsd-minimal gpsd-minimal-clients; \
+    fi
 
 # Create symlinks for executables to match references
 RUN ln -s /usr/bin/gpspipe /usr/local/bin/gpspipe
