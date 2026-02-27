@@ -1,6 +1,7 @@
 package intel
 
 import (
+	"fmt"
 	"testing"
 
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -31,7 +32,8 @@ func Test_OnPTPConfigChangeE830(t *testing.T) {
 			name:    "TGM Profile",
 			profile: "./testdata/e825-tgm.yaml",
 			expectedPtpSettings: map[string]string{
-				"dpll.enp108s0f0.ignore": "",
+				"dpll.enp108s0f0.ignore": "true",
+				"clockId[enp108s0f0]":    "0",
 			},
 		},
 		{
@@ -39,6 +41,7 @@ func Test_OnPTPConfigChangeE830(t *testing.T) {
 			profile: "./testdata/e825-tbc.yaml",
 			expectedPtpSettings: map[string]string{
 				"dpll.enp108s0f0.ignore": "true",
+				"clockId[enp108s0f0]":    "0",
 			},
 		},
 		{
@@ -50,6 +53,7 @@ func Test_OnPTPConfigChangeE830(t *testing.T) {
 			},
 			expectedPtpSettings: map[string]string{
 				"dpll.enp108s0f0.ignore": "false",
+				"clockId[enp108s0f0]":    "0",
 			},
 		},
 		{
@@ -88,7 +92,7 @@ func Test_OnPTPConfigChangeE830(t *testing.T) {
 				assert.Equal(tt, tc.expectedPinSets, mockPins.actualPinSetCount)
 				assert.Equal(tt, tc.expectedPinFrqs, mockPins.actualPinFrqCount)
 				for key, value := range tc.expectedPtpSettings {
-					assert.Equal(tt, value, profile.PtpSettings[key])
+					assert.Equal(tt, value, profile.PtpSettings[key], fmt.Sprintf("PtpSettings[%s]", key))
 				}
 			}
 		})
