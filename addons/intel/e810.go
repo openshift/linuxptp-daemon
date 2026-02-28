@@ -48,6 +48,9 @@ var DpllPins = []*dpll_netlink.PinInfo{}
 
 func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	glog.Info("calling onPTPConfigChange for e810 plugin")
+
+	autoDetectGNSSSerialPort(nodeProfile)
+
 	var e810Opts E810Opts
 	var err error
 
