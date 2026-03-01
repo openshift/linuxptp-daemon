@@ -81,6 +81,7 @@ const (
 	DpllPinEsyncPulse
 	DpllPinReferenceSync
 	DpllPinPhaseAdjustGran
+	DpllPinFractionalFrequencyOffsetPPT
 )
 
 // DpllCmds defines DPLL subsystem commands encoding
@@ -288,28 +289,29 @@ func GetDpllStatusHR(reply *DoDeviceGetReply, timestamp time.Time) ([]byte, erro
 
 // PinInfoHR is used with the DoPinGet method.
 type PinInfoHR struct {
-	Timestamp                 time.Time           `json:"timestamp"`
-	ID                        uint32              `json:"id"`
-	ModuleName                string              `json:"moduleName,omitempty"`
-	ClockID                   string              `json:"clockId"`
-	BoardLabel                string              `json:"boardLabel,omitempty"`
-	PanelLabel                string              `json:"panelLabel,omitempty"`
-	PackageLabel              string              `json:"packageLabel,omitempty"`
-	Type                      string              `json:"type,omitempty"`
-	Frequency                 uint64              `json:"frequency,omitempty"`
-	FrequencySupported        []FrequencyRange    `json:"frequencySupported,omitempty"`
-	Capabilities              string              `json:"capabilities,omitempty"`
-	ParentDevice              []PinParentDeviceHR `json:"pinParentDevice,omitempty"`
-	ParentPin                 []PinParentPinHR    `json:"pinParentPin,omitempty"`
-	PhaseAdjustMin            int32               `json:"phaseAdjustMin,omitempty"`
-	PhaseAdjustMax            int32               `json:"phaseAdjustMax,omitempty"`
-	PhaseAdjust               int32               `json:"phaseAdjust"`
-	FractionalFrequencyOffset int                 `json:"fractionalFrequencyOffset,omitempty"`
-	EsyncFrequency            int64               `json:"esyncFrequency,omitempty"`
-	EsyncFrequencySupported   []FrequencyRange    `json:"esyncFrequencySupported,omitempty"`
-	EsyncPulse                int64               `json:"esyncPulse,omitempty"`
-	ReferenceSync             []ReferenceSync     `json:"referenceSync,omitempty"`
-	PhaseAdjustGran           uint32              `json:"phaseAdjustGran,omitempty"`
+	Timestamp                    time.Time           `json:"timestamp"`
+	ID                           uint32              `json:"id"`
+	ModuleName                   string              `json:"moduleName,omitempty"`
+	ClockID                      string              `json:"clockId"`
+	BoardLabel                   string              `json:"boardLabel,omitempty"`
+	PanelLabel                   string              `json:"panelLabel,omitempty"`
+	PackageLabel                 string              `json:"packageLabel,omitempty"`
+	Type                         string              `json:"type,omitempty"`
+	Frequency                    uint64              `json:"frequency,omitempty"`
+	FrequencySupported           []FrequencyRange    `json:"frequencySupported,omitempty"`
+	Capabilities                 string              `json:"capabilities,omitempty"`
+	ParentDevice                 []PinParentDeviceHR `json:"pinParentDevice,omitempty"`
+	ParentPin                    []PinParentPinHR    `json:"pinParentPin,omitempty"`
+	PhaseAdjustMin               int32               `json:"phaseAdjustMin,omitempty"`
+	PhaseAdjustMax               int32               `json:"phaseAdjustMax,omitempty"`
+	PhaseAdjust                  int32               `json:"phaseAdjust"`
+	FractionalFrequencyOffset    int                 `json:"fractionalFrequencyOffset,omitempty"`
+	EsyncFrequency               int64               `json:"esyncFrequency,omitempty"`
+	EsyncFrequencySupported      []FrequencyRange    `json:"esyncFrequencySupported,omitempty"`
+	EsyncPulse                   int64               `json:"esyncPulse,omitempty"`
+	ReferenceSync                []ReferenceSync     `json:"referenceSync,omitempty"`
+	PhaseAdjustGran              uint32              `json:"phaseAdjustGran,omitempty"`
+	FractionalFrequencyOffsetPPT int                 `json:"fractionalFrequencyOffsetPPT,omitempty"`
 }
 
 // PinParentDeviceHR contains nested netlink attributes.
@@ -465,28 +467,29 @@ func GetPinCapabilities(c uint32) string {
 // GetPinInfoHR returns human-readable pin status
 func GetPinInfoHR(reply *PinInfo, timestamp time.Time) ([]byte, error) {
 	hr := PinInfoHR{
-		Timestamp:                 timestamp,
-		ID:                        reply.ID,
-		ClockID:                   fmt.Sprintf("0x%x", reply.ClockID),
-		BoardLabel:                reply.BoardLabel,
-		PanelLabel:                reply.PanelLabel,
-		PackageLabel:              reply.PackageLabel,
-		Type:                      GetPinType(reply.Type),
-		Frequency:                 reply.Frequency,
-		FrequencySupported:        make([]FrequencyRange, 0),
-		PhaseAdjustMin:            reply.PhaseAdjustMin,
-		PhaseAdjustMax:            reply.PhaseAdjustMax,
-		PhaseAdjust:               reply.PhaseAdjust,
-		FractionalFrequencyOffset: reply.FractionalFrequencyOffset,
-		ModuleName:                reply.ModuleName,
-		ParentDevice:              make([]PinParentDeviceHR, 0),
-		ParentPin:                 make([]PinParentPinHR, 0),
-		Capabilities:              GetPinCapabilities(reply.Capabilities),
-		EsyncFrequency:            reply.EsyncFrequency,
-		EsyncFrequencySupported:   make([]FrequencyRange, 0),
-		EsyncPulse:                int64(reply.EsyncPulse),
-		ReferenceSync:             make([]ReferenceSync, 0),
-		PhaseAdjustGran:           reply.PhaseAdjustGran,
+		Timestamp:                    timestamp,
+		ID:                           reply.ID,
+		ClockID:                      fmt.Sprintf("0x%x", reply.ClockID),
+		BoardLabel:                   reply.BoardLabel,
+		PanelLabel:                   reply.PanelLabel,
+		PackageLabel:                 reply.PackageLabel,
+		Type:                         GetPinType(reply.Type),
+		Frequency:                    reply.Frequency,
+		FrequencySupported:           make([]FrequencyRange, 0),
+		PhaseAdjustMin:               reply.PhaseAdjustMin,
+		PhaseAdjustMax:               reply.PhaseAdjustMax,
+		PhaseAdjust:                  reply.PhaseAdjust,
+		FractionalFrequencyOffset:    reply.FractionalFrequencyOffset,
+		ModuleName:                   reply.ModuleName,
+		ParentDevice:                 make([]PinParentDeviceHR, 0),
+		ParentPin:                    make([]PinParentPinHR, 0),
+		Capabilities:                 GetPinCapabilities(reply.Capabilities),
+		EsyncFrequency:               reply.EsyncFrequency,
+		EsyncFrequencySupported:      make([]FrequencyRange, 0),
+		EsyncPulse:                   int64(reply.EsyncPulse),
+		ReferenceSync:                make([]ReferenceSync, 0),
+		PhaseAdjustGran:              reply.PhaseAdjustGran,
+		FractionalFrequencyOffsetPPT: reply.FractionalFrequencyOffsetPPT,
 	}
 	for i := 0; i < len(reply.ParentDevice); i++ {
 		hr.ParentDevice = append(hr.ParentDevice, PinParentDeviceHR{
