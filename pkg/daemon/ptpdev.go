@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/golang/glog"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,13 +33,11 @@ func GetDevStatusUpdate(nodePTPDev *ptpv1.NodePtpDevice) (*ptpv1.NodePtpDevice, 
 	// Build new device list with hardware info
 	newDevices := make([]ptpv1.PtpDevice, 0)
 	for _, hostDev := range hostDevs {
-		hwInfo, hwErr := getHardwareInfo(hostDev)
+		hwInfo, hwErr := ptpnetwork.GetHardwareInfo(hostDev)
 		if hwErr != nil {
 			glog.Warningf("Failed to get hardware info for device %s: %v", hostDev, hwErr)
 			continue
 		}
-		logStructuredHardwareInfo(hostDev, hwInfo)
-
 		newDevices = append(newDevices, ptpv1.PtpDevice{
 			Name:         hostDev,
 			Profile:      "",
@@ -45,8 +45,40 @@ func GetDevStatusUpdate(nodePTPDev *ptpv1.NodePtpDevice) (*ptpv1.NodePtpDevice, 
 		})
 	}
 
+	// Log hardware info deduplicated by NIC: full details only for the port that exposes a PTP device
+	nicDefaultPort := make(map[string]string)
+	for _, dev := range newDevices {
+		if dev.HardwareInfo == nil {
+			continue
+		}
+		nicBase := dev.HardwareInfo.PCIAddress
+		if idx := strings.LastIndex(nicBase, "."); idx != -1 {
+			nicBase = nicBase[:idx]
+		}
+		if _, exists := nicDefaultPort[nicBase]; !exists {
+			nicDefaultPort[nicBase] = dev.Name
+		}
+		if exposesPTPDevice(dev.Name) {
+			nicDefaultPort[nicBase] = dev.Name
+		}
+	}
+	for _, dev := range newDevices {
+		if dev.HardwareInfo == nil {
+			continue
+		}
+		nicBase := dev.HardwareInfo.PCIAddress
+		if idx := strings.LastIndex(nicBase, "."); idx != -1 {
+			nicBase = nicBase[:idx]
+		}
+		if dev.Name == nicDefaultPort[nicBase] {
+			ptpnetwork.LogStructuredHardwareInfo(dev.Name, dev.HardwareInfo)
+		} else {
+			glog.Infof("PTP Device: %s (PCI: %s, same NIC as %s)", dev.Name, dev.HardwareInfo.PCIAddress, nicDefaultPort[nicBase])
+		}
+	}
+
 	// Log device changes (additions and removals)
-	logDeviceChanges(nodePTPDev.Status.Devices, newDevices)
+	ptpnetwork.LogDeviceChanges(nodePTPDev.Status.Devices, newDevices)
 
 	nodePTPDev.Status.Devices = newDevices
 	return nodePTPDev, nil
@@ -90,4 +122,11 @@ func runDeviceStatusUpdate(ptpClient *ptpclient.Clientset, nodeName string, hwco
 func RunDeviceStatusUpdate(ptpClient *ptpclient.Clientset, nodeName string, hwconfigs *[]ptpv1.HwConfig) {
 	glog.Info("run device status update function")
 	runDeviceStatusUpdate(ptpClient, nodeName, hwconfigs)
+}
+
+// return true if the network device exposes a PTP clock device
+func exposesPTPDevice(deviceName string) bool {
+	ptpDir := fmt.Sprintf("/sys/class/net/%s/device/ptp", deviceName)
+	entries, err := os.ReadDir(ptpDir)
+	return err == nil && len(entries) > 0
 }
