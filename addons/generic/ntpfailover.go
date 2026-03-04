@@ -46,7 +46,7 @@ const (
 )
 
 var (
-	ts2phcOffsetRegex  = regexp.MustCompile("offset .*s[23] freq")
+	ts2phcOffsetRegex  = regexp.MustCompile("offset .*s3 freq")
 	chronydOnlineRegex = regexp.MustCompile("chronyd .* starting")
 )
 
