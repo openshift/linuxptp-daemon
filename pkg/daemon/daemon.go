@@ -117,6 +117,26 @@ func dialSocket() (net.Conn, error) {
 	return c, err
 }
 
+// sendSidecarRestart sends the CMD RESTART control command to the cloud-event-proxy sidecar
+// over a short-lived dedicated connection to the event socket. The sidecar will exec itself
+// for a clean restart, then re-read all configuration from disk (ConfigMap + ptp4l config files).
+//
+// This must be called after applyNodePTPProfiles() has written all config files and started
+// all PTP processes, so that the sidecar restarts into a consistent state.
+func sendSidecarRestart() error {
+	c, err := net.Dial("unix", eventSocket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	if _, err = fmt.Fprintf(c, "CMD RESTART\n"); err != nil {
+		return err
+	}
+	glog.Infof("sendSidecarRestart: sent CMD RESTART to sidecar via %s", eventSocket)
+	return nil
+}
+
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
 // Processes in ProcessManager will be started
@@ -726,7 +746,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
 	*dn.refreshNodePtpDevice = true
 	dn.readyTracker.setConfig(true)
-	return nil
+	return sendSidecarRestart()
 }
 
 func reconcileRelatedProfiles(profiles []ptpv1.PtpProfile) map[string]int {
