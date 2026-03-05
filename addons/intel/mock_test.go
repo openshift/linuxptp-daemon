@@ -16,20 +16,16 @@ import (
 
 // mockBatchPinSet is a simple mock to unit-test pin set operations
 type mockBatchPinSet struct {
-	commands *[]dpll.PinParentDeviceCtl
+	commands []dpll.PinParentDeviceCtl
 }
 
-func (m *mockBatchPinSet) mock(commands *[]dpll.PinParentDeviceCtl) error {
-	if m.commands == nil {
-		cmds := make([]dpll.PinParentDeviceCtl, 0)
-		m.commands = &cmds
-	}
-	*m.commands = append(*m.commands, *commands...)
+func (m *mockBatchPinSet) mock(commands []dpll.PinParentDeviceCtl) error {
+	m.commands = append(m.commands, commands...)
 	return nil
 }
 
 func (m *mockBatchPinSet) reset() {
-	m.commands = nil
+	m.commands = m.commands[:0]
 }
 
 func setupBatchPinSetMock() (*mockBatchPinSet, func()) {
@@ -356,7 +352,7 @@ func (m *mockedDPLLPins) GetCommandsForPluginPinSet(clockID uint64, pinset pinSe
 }
 
 func (m *mockedDPLLPins) ApplyPinCommands(commands []dpll.PinParentDeviceCtl) error {
-	return BatchPinSet(&commands)
+	return BatchPinSet(commands)
 }
 
 func setupMockDPLLPins(pins ...*dpll.PinInfo) (*mockedDPLLPins, func()) {
