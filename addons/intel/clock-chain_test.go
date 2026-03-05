@@ -44,19 +44,19 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 	assert.Equal(t, 0, mockPinConfig.actualPinSetCount)
 	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 	assert.NotNil(t, mockPinSet.commands, "DPLL commands should have been issued")
-	assert.Greater(t, len(*mockPinSet.commands), 0, "should have DPLL pin commands")
+	assert.Greater(t, len(mockPinSet.commands), 0, "should have DPLL pin commands")
 
 	// Test holdover entry
 	mockPinSet.reset()
 	err = clockChain.EnterHoldoverTBC()
 	assert.NoError(t, err)
-	assert.Equal(t, 2, len(*mockPinSet.commands))
+	assert.Equal(t, 2, len(mockPinSet.commands))
 
 	// Test holdover exit
 	mockPinSet.reset()
 	err = clockChain.EnterNormalTBC()
 	assert.NoError(t, err)
-	assert.Equal(t, 2, len(*mockPinSet.commands))
+	assert.Equal(t, 2, len(mockPinSet.commands))
 
 	// Ensure switching back to TGM resets any pins
 	mockPinSet.reset()
@@ -109,13 +109,13 @@ func Test_ProcessProfileTtscClockChain(t *testing.T) {
 	mockPinSet.reset()
 	err = clockChain.EnterHoldoverTBC()
 	assert.NoError(t, err)
-	assert.Equal(t, 2, len(*mockPinSet.commands))
+	assert.Equal(t, 2, len(mockPinSet.commands))
 
 	// Test holdover exit
 	mockPinSet.reset()
 	err = clockChain.EnterNormalTBC()
 	assert.NoError(t, err)
-	assert.Equal(t, 2, len(*mockPinSet.commands))
+	assert.Equal(t, 2, len(mockPinSet.commands))
 }
 
 func Test_SetPinDefaults_AllNICs(t *testing.T) {
@@ -163,14 +163,14 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 
 	// SetPinDefaults configures 9 different pin types, and we have 3 NICs total
 	// Each pin type should have a command for each NIC that has that pin
-	assert.Equal(t, len(*mockPinSet.commands), 27, "should have exactly 27 pin commands")
+	assert.Equal(t, len(mockPinSet.commands), 27, "should have exactly 27 pin commands")
 
 	// Verify that commands include pins from multiple clock IDs
 	clockIDsSeen := make(map[uint64]bool)
 	pinLabelsSeen := make(map[string]bool)
 
 	mockPins := ccData.DpllPins.(*mockedDPLLPins)
-	for _, cmd := range *mockPinSet.commands {
+	for _, cmd := range mockPinSet.commands {
 		// Find which pin this command refers to by searching all pins
 		for _, pin := range mockPins.pins {
 			if pin.ID == cmd.ID {

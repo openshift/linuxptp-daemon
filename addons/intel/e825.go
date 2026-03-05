@@ -225,7 +225,7 @@ func (d *E825PluginData) setupGnss(gnss GnssOptions) error {
 		return errors.New("no GNSS pins found")
 	}
 	glog.Infof("Will %s %d GNSS pins: %v", action, len(commands), affectedPins)
-	return BatchPinSet(&commands)
+	return BatchPinSet(commands)
 }
 
 // AfterRunPTPCommandE825 performs actions after certain PTP commands for e825 plugin
