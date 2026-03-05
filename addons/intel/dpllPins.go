@@ -136,7 +136,7 @@ func (d *dpllPins) GetCommandsForPluginPinSet(clockID uint64, pinset pinSet) []d
 }
 
 func (d *dpllPins) ApplyPinCommands(commands []dpll.PinParentDeviceCtl) error {
-	err := BatchPinSet(&commands)
+	err := BatchPinSet(commands)
 	// event if there was an error we still need to refresh the pin state.
 	fetchErr := d.FetchPins()
 	return errors.Join(err, fetchErr)

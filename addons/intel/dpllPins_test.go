@@ -459,5 +459,5 @@ func TestApplyPinCommands(t *testing.T) {
 	err := DpllPins.ApplyPinCommands(cmds)
 	assert.NoError(t, err)
 	assert.NotNil(t, mockPinSet.commands)
-	assert.Len(t, *mockPinSet.commands, 1)
+	assert.Len(t, mockPinSet.commands, 1)
 }
