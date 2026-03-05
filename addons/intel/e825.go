@@ -100,7 +100,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				clkID := zlClockID
 				if zlErr != nil {
-					clkID = getPCIClockID(device)
+					clkID = getClockID(device)
 				}
 				(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(clkID, 10)
 				glog.Infof("Detected %s=%d (%x)", dpllClockIDStr, clkID, clkID)
@@ -134,7 +134,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					if zlErr == nil {
 						clockIDUsed = zlClockID
 					} else {
-						clockIDUsed = getPCIClockID(iface)
+						clockIDUsed = getClockID(iface)
 					}
 					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(clockIDUsed, 10), pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
