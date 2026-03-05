@@ -1,6 +1,7 @@
 package event
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sort"
@@ -149,7 +150,12 @@ const (
 	PTP_NOTSET PTPState = "-2"
 )
 
-const connectionRetryInterval = 1 * time.Second
+const (
+	// socketDialTimeout is the maximum time to wait for a single dial attempt to the event socket.
+	socketDialTimeout = 5 * time.Second
+	// socketWriteTimeout is the maximum time to wait for a write to the event socket.
+	socketWriteTimeout = 5 * time.Second
+)
 
 type clockSyncState struct {
 	state          PTPState
@@ -170,6 +176,10 @@ type EventHandler struct {
 	stdoutToSocket     bool
 	processChannel     <-chan EventChannel
 	closeCh            chan bool
+	brokenPipeCh       chan struct{} // signals broken pipe from background goroutines to trigger reconnection
+	conn               net.Conn      // event socket connection, guarded by connMu
+	connMu             sync.Mutex    // separate mutex for conn to avoid deadlocks with embedded sync.Mutex
+	reconnectMu        sync.Mutex    // serializes reconnection attempts to prevent leaked connections
 	data               map[string][]*Data
 	offsetMetric       *prometheus.GaugeVec
 	clockMetric        *prometheus.GaugeVec
@@ -182,6 +192,26 @@ type EventHandler struct {
 	ReduceLog          bool // reduce logs for every announce
 	LeadingClockData   *LeadingClockParams
 	portRole           map[string]map[string]*parser.PTPEvent
+}
+
+// getConn returns the current event socket connection under lock.
+func (e *EventHandler) getConn() net.Conn {
+	e.connMu.Lock()
+	defer e.connMu.Unlock()
+	return e.conn
+}
+
+// setConn replaces the current event socket connection under lock, closing the previous one if it exists.
+func (e *EventHandler) setConn(c net.Conn) {
+	e.connMu.Lock()
+	oldConn := e.conn
+	e.conn = c
+	e.connMu.Unlock()
+	if oldConn != nil && oldConn != c {
+		if err := oldConn.Close(); err != nil {
+			glog.Warningf("failed to close old event handler connection: %v", err)
+		}
+	}
 }
 
 // EventChannel .. event channel to subscriber to events
@@ -218,6 +248,7 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		stdoutSocket:       socketName,
 		stdoutToSocket:     stdOutToSocket,
 		closeCh:            closeCh,
+		brokenPipeCh:       make(chan struct{}, 1),
 		processChannel:     processChannel,
 		data:               map[string][]*Data{},
 		clockMetric:        clockMetric,
@@ -567,25 +598,139 @@ func (e *EventHandler) hasMetric(name string) (*prometheus.GaugeVec, bool) {
 }
 
 // AnnounceClockClass announces clock class changes to the event handler and writes to the connection.
-func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn, clockType ClockType) {
-	e.announceClockClass(clockClass, clockAcc, cfgName, c)
-	clockClassRequestCh <- ClockClassRequest{
+// Broken pipe errors are handled internally via signalBrokenPipe.
+// It also sends a non-blocking clock class update request to the ProcessEvents goroutine,
+// which calls UpdateClockClass to read the local GRANDMASTER_SETTINGS_NP and determine
+// the correct clock class for the local clock (e.g., 255 for OC slave).
+func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, clockType ClockType) {
+	e.announceClockClass(clockClass, clockAcc, cfgName)
+	// Non-blocking send to trigger UpdateClockClass in the ProcessEvents goroutine.
+	// For non-GM clock types (OC/BC), UpdateClockClass reads the local GRANDMASTER_SETTINGS_NP
+	// to determine the correct clock class (e.g., 255 for OC slave).
+	select {
+	case clockClassRequestCh <- ClockClassRequest{
 		cfgName:       cfgName,
 		clockClass:    clockClass,
 		clockType:     clockType,
 		clockAccuracy: clockAcc,
+	}:
+	default:
+		glog.Warning("clock class request busy updating previous request, will try on next event")
 	}
 }
 
-func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn) {
+func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string) {
+	e.Lock()
+	e.setClockClassLocked(clockClass, clockAcc)
+	e.Unlock()
+
+	e.emitClockClass(clockClass, cfgName)
+}
+
+// setClockClassLocked updates the clock class and accuracy fields.
+// Caller must hold e.Lock().
+func (e *EventHandler) setClockClassLocked(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy) {
 	e.clockClass = clockClass
 	e.clockAccuracy = clockAcc
+}
 
-	utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+// emitClockClass writes the clock class to the socket and updates the metric.
+// It uses e.getConn() to obtain the current connection and signals broken pipe internally.
+// Must NOT be called while holding e.Lock().
+func (e *EventHandler) emitClockClass(clockClass fbprotocol.ClockClass, cfgName string) {
+	brokenPipe := utils.EmitClockClass(e.getConn(), PTP4lProcessName, cfgName, clockClass)
 	if !e.stdoutToSocket && e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
 			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
 	}
+	if brokenPipe {
+		e.signalBrokenPipe()
+	}
+}
+
+// signalBrokenPipe sends a non-blocking signal on brokenPipeCh to notify
+// the ProcessEvents loop that the socket connection needs reconnection.
+func (e *EventHandler) signalBrokenPipe() {
+	select {
+	case e.brokenPipeCh <- struct{}{}:
+	default:
+		// Channel already has a pending signal; no need to duplicate.
+	}
+}
+
+// reconnectEventSocket closes the current connection and dials a new one using
+// the shared reconnection utility with exponential backoff.
+// Serialized via reconnectMu to prevent concurrent reconnection attempts from leaking connections.
+// On success, stores the new connection via e.setConn and returns true.
+// Returns false if the handler is shutting down or all retries are exhausted.
+func (e *EventHandler) reconnectEventSocket() bool {
+	e.reconnectMu.Lock()
+	defer e.reconnectMu.Unlock()
+
+	// Another goroutine may have already reconnected while we were waiting for the lock.
+	if e.getConn() != nil {
+		return true
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-e.closeCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	defer cancel()
+	dialer := net.Dialer{Timeout: socketDialTimeout}
+	newConn := utils.ReconnectWithBackoff(ctx,
+		func() (net.Conn, error) { return dialer.DialContext(ctx, "unix", e.stdoutSocket) },
+		utils.DefaultReconnectConfig(),
+	)
+	if newConn != nil {
+		e.setConn(newConn)
+		return true
+	}
+	return false
+}
+
+// writeLogToSocket writes a single log line to the event socket.
+// If the write fails, it attempts to reconnect and retry once.
+// Returns true if the connection is still usable for subsequent writes,
+// false if the connection is unavailable and remaining writes should be skipped.
+func (e *EventHandler) writeLogToSocket(l string) bool {
+	conn := e.getConn()
+	if conn == nil {
+		return false
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(socketWriteTimeout)); err != nil {
+		glog.Warningf("Failed to set write deadline: %v", err)
+	}
+	if _, err := conn.Write([]byte(l)); err != nil {
+		glog.Errorf("Write error for %q: %v", l, err)
+		// Clear the broken connection before reconnecting so that
+		// concurrent callers waiting on reconnectMu see conn==nil
+		// and don't mistakenly return the broken connection.
+		e.setConn(nil)
+		if !e.reconnectEventSocket() {
+			glog.Warning("Reconnect failed after write error, skipping remaining socket writes; will retry on next event")
+			return false
+		}
+		// Retry write on the new connection
+		retryConn := e.getConn()
+		if retryConn == nil {
+			glog.Warning("Connection is nil after reconnect, skipping retry")
+			return false
+		}
+		if deadlineErr := retryConn.SetWriteDeadline(time.Now().Add(socketWriteTimeout)); deadlineErr != nil {
+			glog.Warningf("Failed to set write deadline on retry: %v", deadlineErr)
+		}
+		if _, retryErr := retryConn.Write([]byte(l)); retryErr != nil {
+			glog.Errorf("Write failed again after reconnect for %q: %v", l, retryErr)
+			e.setConn(nil)
+			return false
+		}
+	}
+	return true
 }
 
 // ForceMonitoringTick ... force tick event for unit testing
@@ -595,35 +740,28 @@ func (e *EventHandler) ForceMonitoringTick() {
 
 // ProcessEvents ... process events to generate new events
 func (e *EventHandler) ProcessEvents() {
-	var c net.Conn
-	var err error
 	redialClockClass := true
-	retryCount := 0
+
 	defer func() {
-		if e.stdoutToSocket && c != nil {
-			if err = c.Close(); err != nil {
-				glog.Errorf("closing connection returned error %s", err)
-			}
+		if e.stdoutToSocket {
+			e.setConn(nil) // closes the connection if present
 		}
 	}()
 	var lastClockState PTPState
-connect:
-	select {
-	case <-e.closeCh:
-		return
-	default:
-		if e.stdoutToSocket {
-			c, err = net.Dial("unix", e.stdoutSocket)
-			if err != nil {
-				// reduce log spam
-				if retryCount == 0 || retryCount%5 == 0 {
-					glog.Errorf("waiting for event socket, retrying %s", err)
-				}
-				retryCount = (retryCount + 1) % 6
-				time.Sleep(connectionRetryInterval)
-				goto connect
+
+	// Establish initial connection to the event socket using exponential backoff.
+	// Retries indefinitely until connected or the handler is shutting down.
+	if e.stdoutToSocket {
+		for !e.reconnectEventSocket() {
+			// reconnectEventSocket returns false on shutdown or exhausted retries;
+			// check for shutdown before retrying
+			select {
+			case <-e.closeCh:
+				return
+			default:
+				glog.Warning("Initial connection to event socket failed, retrying in 1 second...")
+				time.Sleep(1 * time.Second)
 			}
-			retryCount = 0
 		}
 	}
 
@@ -640,18 +778,27 @@ connect:
 				select {
 				case clk := <-clockClassRequestCh:
 					cfgName = clk.cfgName
-					if clk.clockType != BC { // This is because this produces the wrong value for BC at the moment this needs looking into.
-						e.UpdateClockClass(c, clk)
+					// TODO: UpdateClockClass produces the wrong value for BC, investigate and fix.
+					if clk.clockType != BC {
+						e.UpdateClockClass(clk)
 					} else {
+						e.Lock()
 						e.clockClass = clk.clockClass
 						e.clockAccuracy = clk.clockAccuracy
+						e.Unlock()
 					}
 
 				case <-e.closeCh:
 					return
 				case <-classTicker.C: // send clock class event 60 secs interval
-					for clkCfgName, data := range e.clkSyncState {
-						clockClass := data.clockClass
+					// Snapshot the clock sync state under lock to avoid concurrent map access
+					e.Lock()
+					clkSnapshot := make(map[string]fbprotocol.ClockClass, len(e.clkSyncState))
+					for k, v := range e.clkSyncState {
+						clkSnapshot[k] = v.clockClass
+					}
+					e.Unlock()
+					for clkCfgName, clockClass := range clkSnapshot {
 						parts := strings.SplitN(clkCfgName, ".", 2)
 						if len(parts) >= 2 {
 							clkCfgName = "ptp4l." + strings.Join(parts[1:], ".")
@@ -663,7 +810,11 @@ connect:
 							// Stop double emmit
 							cfgName = ""
 						}
-						utils.EmitClockClass(c, PTP4lProcessName, clkCfgName, clockClass)
+						if brokenPipe := utils.EmitClockClass(e.getConn(), PTP4lProcessName, clkCfgName, clockClass); brokenPipe {
+							glog.Warning("Broken pipe detected in clock class ticker, signaling reconnection")
+							e.signalBrokenPipe()
+							break
+						}
 					}
 
 					if cfgName != "" {
@@ -671,7 +822,13 @@ connect:
 						if len(parts) >= 2 {
 							cfgName = "ptp4l." + strings.Join(parts[1:], ".")
 						}
-						utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+						e.Lock()
+						currentClockClass := e.clockClass
+						e.Unlock()
+						if brokenPipe := utils.EmitClockClass(e.getConn(), PTP4lProcessName, cfgName, currentClockClass); brokenPipe {
+							glog.Warning("Broken pipe detected in clock class ticker, signaling reconnection")
+							e.signalBrokenPipe()
+						}
 					}
 				}
 			}
@@ -715,7 +872,9 @@ connect:
 							}
 						}
 					}
+					e.Lock()
 					delete(e.clkSyncState, event.CfgName) // delete the clkSyncState
+					e.Unlock()
 					e.outOfSpec = false
 					e.frequencyTraceable = false
 				}
@@ -741,20 +900,29 @@ connect:
 				if event.ClockType == GM {
 					dataDetails = e.addEvent(event)
 					// Computes GM state
+					e.Lock()
 					clockState = e.updateGMState(event.CfgName)
 					// right now if GPS offset || mode is bad then consider source lost
 					if e.clkSyncState[event.CfgName] != nil {
 						e.clkSyncState[event.CfgName].sourceLost = event.OutOfSpec
 					}
+					e.Unlock()
 					if clockState.state != PTP_LOCKED { // here update nmea status
 						if _, ok := event.Values[NMEA_STATUS]; ok {
 							event.Values[NMEA_STATUS] = 0
 						}
 					}
 				} else { // T-BC or T-TSC
+					e.Lock()
 					event = e.convergeConfig(event)
 					dataDetails = e.addEvent(event)
-					clockState = e.updateBCState(event, c)
+					var needsTTSCAnnounce bool
+					clockState, needsTTSCAnnounce = e.updateBCState(event)
+					e.Unlock()
+					// Perform TTSC clock class announcement I/O after releasing the lock
+					if needsTTSCAnnounce {
+						e.emitClockClass(clockState.clockClass, event.CfgName)
+					}
 				}
 				logDataValues = dataDetails.logData
 				if event.WriteToLog && logDataValues != "" {
@@ -842,20 +1010,31 @@ connect:
 			} // Not SYNC-E
 
 			if len(logOut) > 0 {
+				// Always print all logs to stdout regardless of socket state
+				for _, l := range logOut {
+					fmt.Printf("%s", l)
+				}
 				if e.stdoutToSocket {
-					for _, l := range logOut {
-						fmt.Printf("%s", l)
-						_, err = c.Write([]byte(l))
-						if err != nil {
-							glog.Errorf("Write %s error %s:", l, err)
-							goto connect
+					if e.getConn() == nil {
+						glog.Error("No connection available, attempting reconnect")
+						if !e.reconnectEventSocket() {
+							glog.Warning("Reconnect failed, skipping socket writes; will retry on next event")
 						}
 					}
-				} else {
 					for _, l := range logOut {
-						fmt.Printf("%s", l)
+						if !e.writeLogToSocket(l) {
+							break
+						}
 					}
 				}
+			}
+		case <-e.brokenPipeCh:
+			// A background goroutine detected a broken pipe on the event socket.
+			// Clear the broken connection and reconnect.
+			glog.Info("Broken pipe signal received, reconnecting event socket")
+			e.setConn(nil)
+			if !e.reconnectEventSocket() {
+				glog.Warning("Reconnect failed after broken pipe signal; will retry on next event")
 			}
 		case <-e.closeCh:
 			return
@@ -1088,7 +1267,7 @@ func (e *EventHandler) addEvent(event EventChannel) *DataDetails {
 }
 
 // UpdateClockClass ... update clock class
-func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
+func (e *EventHandler) UpdateClockClass(clk ClockClassRequest) {
 	classErr, clockClass, clockAccuracy := e.updateClockClass(clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy,
 		PMCGMGetter, PMCGMSetter)
 	glog.Infof("received %s,%v,%s,%v", clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy)
@@ -1096,14 +1275,19 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 		glog.Errorf("error updating clock class %s", classErr)
 	} else {
 		glog.Infof("updated clock class for last clock class %d to %d with clock accuracy %d", clk.clockClass, clockClass, clockAccuracy)
+		e.Lock()
 		e.clockClass = clockClass
 		e.clockAccuracy = clockAccuracy
+		e.Unlock()
 		clockClassOut := utils.GetClockClassLogMessage(PTP4lProcessName, clk.cfgName, clockClass)
 		if e.stdoutToSocket {
+			c := e.getConn()
 			if c != nil {
-				_, err := c.Write([]byte(clockClassOut))
-				if err != nil {
+				if _, err := c.Write([]byte(clockClassOut)); err != nil {
 					glog.Errorf("failed to write class change event %s", err.Error())
+					if utils.IsBrokenPipe(err) {
+						e.signalBrokenPipe()
+					}
 				}
 			} else {
 				glog.Errorf("failed to write class change event, connection is nil")
@@ -1135,37 +1319,74 @@ func (e *EventHandler) SetPortRole(cfgName, portNane string, event *parser.PTPEv
 }
 
 // EmitClockSyncLogs emits the clock sync state logs
-func (e *EventHandler) EmitClockSyncLogs(c net.Conn) {
+func (e *EventHandler) EmitClockSyncLogs() {
 	glog.Info("Re-emitting metrics logs for event-proxy as requested")
 
+	if e.getConn() == nil {
+		glog.Warning("Connection is nil, attempting to reconnect before emitting clock sync logs")
+		if !e.reconnectEventSocket() {
+			glog.Error("Failed to emit clock sync logs, reconnect failed")
+			return
+		}
+	}
+	// Snapshot clkSyncState logs under lock to avoid concurrent map access
+	e.Lock()
+	logs := make([]string, 0, len(e.clkSyncState))
 	for _, syncState := range e.clkSyncState {
 		if syncState.clkLog != "" {
-			_, err := c.Write([]byte(syncState.clkLog))
-			glog.Info(syncState.clkLog)
-			if err != nil {
-				glog.Errorf("Write error sending syncState metric update: %s", err)
-			}
+			logs = append(logs, syncState.clkLog)
+		}
+	}
+	e.Unlock()
+
+	for _, l := range logs {
+		glog.Info(l)
+		if !e.writeLogToSocket(l) {
+			glog.Warning("Broken pipe detected while emitting clock sync logs, stopping.")
+			break
 		}
 	}
 }
 
 // EmitPortRoleLogs emits the port role logs
-func (e *EventHandler) EmitPortRoleLogs(c net.Conn) {
-	if c == nil {
-		glog.Error("Failed to emit port state logs connection provided is nil")
-		return
+func (e *EventHandler) EmitPortRoleLogs() {
+	if e.getConn() == nil {
+		glog.Warning("Connection is nil, attempting to reconnect before emitting port role logs")
+		if !e.reconnectEventSocket() {
+			glog.Error("Failed to emit port state logs, reconnect failed")
+			return
+		}
 	}
 	glog.Info("Re-emitting metrics logs for event-proxy as requested")
+
+	// Snapshot port role data under lock to avoid concurrent map access
+	e.Lock()
+	type portRoleEntry struct {
+		raw string
+	}
+	var entries []portRoleEntry
 	for _, ports := range e.portRole {
 		for _, portEvent := range ports {
-			if portEvent == nil {
-				continue
-			}
-			glog.Info("Conn ", c, "\nPort Event ", portEvent)
-			_, err := c.Write([]byte(portEvent.Raw))
-			if err != nil {
-				glog.Errorf("Write error sending port role: %s", err)
+			if portEvent != nil {
+				entries = append(entries, portRoleEntry{raw: portEvent.Raw})
 			}
 		}
 	}
+	e.Unlock()
+
+	for _, entry := range entries {
+		glog.Infof("Port Event %s", entry.raw)
+		if !e.writeLogToSocket(entry.raw) {
+			glog.Warning("Broken pipe detected while emitting port role logs, stopping.")
+			break
+		}
+	}
+}
+
+// EmitProcessStatusLog writes a process status log entry to the event socket
+// using the EventHandler's managed connection with reconnection support.
+func (e *EventHandler) EmitProcessStatusLog(processName, cfgName string, status int64) {
+	message := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d", processName, time.Now().Unix(), cfgName, status)
+	glog.Info(message)
+	e.writeLogToSocket(message + "\n")
 }

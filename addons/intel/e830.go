@@ -18,25 +18,12 @@ var pluginNameE830 = "e830"
 
 // E830Opts is the options for e830 plugin
 type E830Opts struct {
-	Devices          []string                     `json:"devices"`
-	DevicePins       map[string]pinSet            `json:"pins"`
-	DeviceFreqencies map[string]frqSet            `json:"frequencies"`
-	DpllSettings     map[string]uint64            `json:"settings"`
-	PhaseOffsetPins  map[string]map[string]string `json:"phaseOffsetPins"`
-}
-
-// allDevices enumerates all defined devices (Devices/DevicePins/DeviceFrequencies/PhaseOffsets)
-func (opts *E830Opts) allDevices() []string {
-	allDevices := opts.Devices
-	allDevices = extendWithKeys(allDevices, opts.DevicePins)
-	allDevices = extendWithKeys(allDevices, opts.DeviceFreqencies)
-	allDevices = extendWithKeys(allDevices, opts.PhaseOffsetPins)
-	return allDevices
+	PluginOpts
 }
 
 // E830PluginData is the plugin data for e830 plugin
 type E830PluginData struct {
-	hwplugins *[]string
+	PluginData
 }
 
 func _hasDpllForClockID(clockID uint64) bool {
@@ -97,7 +84,7 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 			// Setup clockID (prefer ice modue clock ID for e830)
 			clockIDs := make(map[string]uint64)
 			for _, device := range allDevices {
-				clockID := getClockIDE810(device)
+				clockID := getPCIClockID(device)
 				clockIDs[device] = clockID
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				nodeProfile.PtpSettings[dpllClockIDStr] = strconv.FormatUint(clockID, 10)
@@ -164,9 +151,6 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 // AfterRunPTPCommandE830 is called after running ptp command for e830 plugin
 func AfterRunPTPCommandE830(_ *interface{}, _ *ptpv1.PtpProfile, _ string) error { return nil }
 
-// PopulateHwConfigE830 populates hwconfig for e830 plugin
-func PopulateHwConfigE830(_ *interface{}, _ *[]ptpv1.HwConfig) error { return nil }
-
 // E830 initializes the e830 plugin
 func E830(name string) (*plugin.Plugin, *interface{}) {
 	if name != pluginNameE830 {
@@ -174,13 +158,14 @@ func E830(name string) (*plugin.Plugin, *interface{}) {
 		return nil, nil
 	}
 	glog.Infof("registering e830 plugin")
-	hwplugins := []string{}
-	pluginData := E830PluginData{hwplugins: &hwplugins}
+	pluginData := E830PluginData{
+		PluginData: PluginData{name: pluginNameE830},
+	}
 	_plugin := plugin.Plugin{
 		Name:               pluginNameE830,
 		OnPTPConfigChange:  OnPTPConfigChangeE830,
 		AfterRunPTPCommand: AfterRunPTPCommandE830,
-		PopulateHwConfig:   PopulateHwConfigE830,
+		PopulateHwConfig:   pluginData.PopulateHwConfig,
 	}
 	var iface interface{} = &pluginData
 	return &_plugin, &iface

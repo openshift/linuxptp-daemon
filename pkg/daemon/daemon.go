@@ -106,13 +106,35 @@ var ptpTmpFiles = []string{
 
 var vTbcHasHardwareConfig = false
 
+const socketDialTimeout = 5 * time.Second
+
 func dialSocket() (net.Conn, error) {
-	c, err := net.Dial("unix", eventSocket)
+	c, err := net.DialTimeout("unix", eventSocket, socketDialTimeout)
 	if err != nil {
 		glog.Errorf("error trying to connect to event socket")
 		time.Sleep(connectionRetryInterval)
 	}
 	return c, err
+}
+
+// sendSidecarRestart sends the CMD RESTART control command to the cloud-event-proxy sidecar
+// over a short-lived dedicated connection to the event socket. The sidecar will exec itself
+// for a clean restart, then re-read all configuration from disk (ConfigMap + ptp4l config files).
+//
+// This must be called after applyNodePTPProfiles() has written all config files and started
+// all PTP processes, so that the sidecar restarts into a consistent state.
+func sendSidecarRestart() error {
+	c, err := net.Dial("unix", eventSocket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	if _, err = fmt.Fprintf(c, "CMD RESTART\n"); err != nil {
+		return err
+	}
+	glog.Infof("sendSidecarRestart: sent CMD RESTART to sidecar via %s", eventSocket)
+	return nil
 }
 
 // ProcessManager manages a set of ptpProcess
@@ -204,28 +226,20 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 
 }
 
-// EmitProcessStatusLogs ...
+// EmitProcessStatusLogs emits process status logs using the EventHandler's
+// managed connection with reconnection support.
 func (p *ProcessManager) EmitProcessStatusLogs() {
 	for _, proc := range p.process {
 		status := PtpProcessUp
 		if proc.Stopped() {
 			status = PtpProcessDown
 		}
-		if proc.c == nil {
-			for {
-				var err error
-				proc.c, err = dialSocket()
-				if err == nil {
-					break
-				}
-			}
-		}
-		logProcessStatus(proc.name, proc.configName, status, proc.c)
+		p.ptpEventHandler.EmitProcessStatusLog(proc.name, proc.configName, status)
 	}
 }
 
 // EmitClockClassLogs ...
-func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
+func (p *ProcessManager) EmitClockClassLogs() {
 	for _, proc := range p.process {
 		if proc.name == ptp4lProcessName {
 			for _, dp := range proc.depProcess {
@@ -235,7 +249,7 @@ func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
 						// if parentDS is nil that means the clock class will
 						// be announced as soon as we get one
 						// therefore no need force it.
-						pmc.EmitClockClassLogs(c)
+						pmc.EmitClockClassLogs()
 					}
 				}
 			}
@@ -732,7 +746,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
 	*dn.refreshNodePtpDevice = true
 	dn.readyTracker.setConfig(true)
-	return nil
+	return sendSidecarRestart()
 }
 
 func reconcileRelatedProfiles(profiles []ptpv1.PtpProfile) map[string]int {

@@ -90,7 +90,6 @@ func Test_OnPTPConfigChangeE830(t *testing.T) {
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(tt *testing.T) {
-			unitTest = true
 			// Mock pin setup
 			mockPins, restorePins := setupMockPinConfig()
 			defer restorePins()

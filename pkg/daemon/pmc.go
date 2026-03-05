@@ -20,6 +20,7 @@ import (
 const (
 	// PMCProcessName is the name identifier for PMC processes
 	PMCProcessName = "pmc"
+	pollTimeout    = 5 * time.Minute
 )
 
 // NewPMCProcess creates a new PMC process instance for monitoring PTP events.
@@ -47,9 +48,29 @@ type PMCProcess struct {
 	parentDSCh        chan protocol.ParentDataSet
 	exitCh            chan struct{}
 	clockType         string
-	c                 net.Conn
+	c                 net.Conn // guarded by lock
 	messageTag        string
 	eventHandler      *event.EventHandler
+}
+
+// getConn returns the current socket connection under lock.
+func (pmc *PMCProcess) getConn() net.Conn {
+	pmc.lock.Lock()
+	defer pmc.lock.Unlock()
+	return pmc.c
+}
+
+// setConn sets the socket connection under lock, closing the previous one if it exists.
+func (pmc *PMCProcess) setConn(c net.Conn) {
+	pmc.lock.Lock()
+	oldConn := pmc.c
+	pmc.c = c
+	pmc.lock.Unlock()
+	if oldConn != nil && oldConn != c {
+		if err := oldConn.Close(); err != nil {
+			glog.Warningf("failed to close old pmc connection: %v", err)
+		}
+	}
 }
 
 // Name returns the process name.
@@ -89,9 +110,9 @@ func (pmc *PMCProcess) CmdInit() {
 // ProcessStatus processes status updates for the PMC process.
 func (pmc *PMCProcess) ProcessStatus(c net.Conn, status int64) {
 	if c != nil {
-		pmc.c = c
+		pmc.setConn(c)
 	}
-	processStatus(pmc.c, PMCProcessName, pmc.messageTag, status)
+	processStatus(pmc.getConn(), PMCProcessName, pmc.messageTag, status)
 }
 
 func btof(b bool) string {
@@ -115,16 +136,9 @@ func (pmc *PMCProcess) getMonitorSubcribeCommand() string {
 	)
 }
 
-const (
-	pollTimeout = 5 * time.Minute
-)
-
-// EmitClockClassLogs emits clock class change logs to the provided connection.
-func (pmc *PMCProcess) EmitClockClassLogs(c net.Conn) {
-	if c != nil {
-		pmc.c = c
-	}
-	go pmc.eventHandler.EmitClockClass(pmc.configFileName, pmc.c)
+// EmitClockClassLogs emits clock class change logs via the EventHandler's connection.
+func (pmc *PMCProcess) EmitClockClassLogs() {
+	go pmc.eventHandler.EmitClockClass(pmc.configFileName)
 }
 
 // CmdRun starts the PMC monitoring process.
@@ -182,7 +196,7 @@ func (pmc *PMCProcess) Poll() {
 
 func (pmc *PMCProcess) monitor(conn net.Conn) error {
 	if conn != nil {
-		pmc.c = conn
+		pmc.setConn(conn)
 	}
 
 	exp, r, err := pmcPkg.GetPMCMontior(pmc.configFileName)
@@ -269,7 +283,7 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 		pmc.eventHandler.AnnounceClockClass(
 			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
 			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockClass),
-			pmc.configFileName, pmc.c,
+			pmc.configFileName,
 			event.ClockType(pmc.clockType),
 		)
 	}
