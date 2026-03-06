@@ -159,7 +159,7 @@ func main() {
 		daemon.StartMetricsServer("0.0.0.0:9091")
 	}
 
-	daemon.StartReadyServer("0.0.0.0:8081", tracker)
+	daemon.StartReadyServer("0.0.0.0:8081", tracker, stdoutToSocket)
 
 	// Wait for one ticker interval before loading the profile
 	// This allows linuxptp-daemon connection to the cloud-event-proxy container to
