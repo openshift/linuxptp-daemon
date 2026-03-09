@@ -329,49 +329,54 @@ func TestDetectStateChange(t *testing.T) {
 
 	t.Run("individual_test_cases", func(t *testing.T) {
 		testCases := []struct {
-			name     string
-			logLine  string
-			expected string
+			name              string
+			logLine           string
+			expectedPort      string
+			expectedCondition string
 		}{
 			{
-				name:     "locked condition",
-				logLine:  "ptp4l[1716691.337]: [ptp4l.1.config:5] port 1 (ens4f1): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
-				expected: "locked",
+				name:              "locked condition",
+				logLine:           "ptp4l[1716691.337]: [ptp4l.1.config:5] port 1 (ens4f1): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
+				expectedPort:      "ens4f1",
+				expectedCondition: "locked",
 			},
 			{
-				name:     "lost condition",
-				logLine:  "ptp4l[1031716.424]: [ptp4l.0.config:5] port 1 (ens4f1): SLAVE to FAULT_DETECTED on FAULT_DETECTED",
-				expected: "lost",
+				name:              "lost condition",
+				logLine:           "ptp4l[1031716.424]: [ptp4l.0.config:5] port 1 (ens4f1): SLAVE to FAULT_DETECTED on FAULT_DETECTED",
+				expectedPort:      "ens4f1",
+				expectedCondition: "lost",
 			},
 			{
-				name:     "non-monitored port - should return empty",
-				logLine:  "ptp4l[1031716.424]: [ptp4l.0.config:5] port 2 (ens8f0): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
-				expected: "", // ens8f0 is not in PTPTimeReceivers for the test data
+				name:              "non-monitored port - should return empty",
+				logLine:           "ptp4l[1031716.424]: [ptp4l.0.config:5] port 2 (ens8f0): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
+				expectedPort:      "",
+				expectedCondition: "", // ens8f0 is not in PTPTimeReceivers for the test data
 			},
 			{
-				name:     "non-ptp4l log - should return empty",
-				logLine:  "some other log message",
-				expected: "",
+				name:              "non-ptp4l log - should return empty",
+				logLine:           "some other log message",
+				expectedPort:      "",
+				expectedCondition: "",
 			},
 			{
-				name:     "irrelevant ptp4l transition - should return empty",
-				logLine:  "[ptp4l.0.config:5] port 1 (ens4f1): LISTENING to MASTER on INITIALIZATION",
-				expected: "",
+				name:              "irrelevant ptp4l transition - should return empty",
+				logLine:           "[ptp4l.0.config:5] port 1 (ens4f1): LISTENING to MASTER on INITIALIZATION",
+				expectedPort:      "",
+				expectedCondition: "",
 			},
 			{
-				name:     "user reported failing case - should work now",
-				logLine:  "ptp4l[1720295.764]: [ptp4l.1.config:5] port 1 (ens4f1): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
-				expected: "locked",
+				name:              "user reported failing case - should work now",
+				logLine:           "ptp4l[1720295.764]: [ptp4l.1.config:5] port 1 (ens4f1): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
+				expectedPort:      "ens4f1",
+				expectedCondition: "locked",
 			},
 		}
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				result := psd.DetectStateChange(tc.logLine)
-				assert.Equal(t, tc.expected, result, "State change detection should match expected result")
-				if result != "" {
-					t.Logf("✅ Detected %s condition from log line", result)
-				}
+				portName, conditionType := psd.DetectStateChange(tc.logLine)
+				assert.Equal(t, tc.expectedCondition, conditionType, "Condition type should match")
+				assert.Equal(t, tc.expectedPort, portName, "Port name should match")
 			})
 		}
 	})
@@ -397,15 +402,15 @@ func TestDetectStateChange(t *testing.T) {
 				continue
 			}
 
-			result := psd.DetectStateChange(line)
-			if result != "" {
+			_, conditionType := psd.DetectStateChange(line)
+			if conditionType != "" {
 				detectedChanges = append(detectedChanges, struct {
 					lineNum   int
 					condition string
 					logLine   string
 				}{
 					lineNum:   i + 1, // 1-based line numbers
-					condition: result,
+					condition: conditionType,
 					logLine:   line,
 				})
 			}

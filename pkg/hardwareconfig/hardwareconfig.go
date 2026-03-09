@@ -511,20 +511,18 @@ func (hcm *HardwareConfigManager) populatePtpSettingsFromHardware(nodeProfile *p
 
 	// 2) Derive leadingInterface and upstreamPort for T-BC-like configurations
 	if cc.Behavior != nil {
-		upstreamPort := ""
+		var allUpstreamPorts []string
 		for _, source := range cc.Behavior.Sources {
 			if source.SourceType == "ptpTimeReceiver" && len(source.PTPTimeReceivers) > 0 {
-				upstreamPort = source.PTPTimeReceivers[0]
+				allUpstreamPorts = source.PTPTimeReceivers
 				break
 			}
 		}
-		if upstreamPort != "" {
-			// Set upstreamPort if not present
+		if len(allUpstreamPorts) > 0 {
 			if _, ok := nodeProfile.PtpSettings["upstreamPort"]; !ok {
-				nodeProfile.PtpSettings["upstreamPort"] = upstreamPort
-				glog.Infof("populatePtpSettings: set upstreamPort=%s", upstreamPort)
+				nodeProfile.PtpSettings["upstreamPort"] = strings.Join(allUpstreamPorts, ",")
+				glog.Infof("populatePtpSettings: set upstreamPort=%s", nodeProfile.PtpSettings["upstreamPort"])
 			}
-			// Resolve leadingInterface based on subsystem containing the upstreamPort
 			if _, ok := nodeProfile.PtpSettings["leadingInterface"]; !ok {
 				iface, err := hcm.getInterfaceNameFromSources("", cc)
 				if err == nil && iface != nil && *iface != "" {
