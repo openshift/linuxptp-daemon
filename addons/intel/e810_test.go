@@ -470,6 +470,116 @@ func TestDevicePins_DPLL_NoSMAInput_NoGNSSCommand(t *testing.T) {
 	}
 }
 
+func Test_checkPinIndex(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+
+	tests := []struct {
+		name         string
+		ts2phcConf   *string
+		setupMock    func(*MockFileSystem)
+		expectedConf *string
+	}{
+		{
+			name:         "nil Ts2PhcConf is a no-op",
+			ts2phcConf:   nil,
+			expectedConf: nil,
+		},
+		{
+			name:       "interface section without pin_index and no SMA pins gets pin_index added",
+			ts2phcConf: strPtr("[global]\nts2phc.nmea_serialport /dev/gnss0\n[ens4f0]\nts2phc.extts_polarity rising"),
+			setupMock: func(m *MockFileSystem) {
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}, nil)
+				m.AllowReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
+			},
+			expectedConf: strPtr("[global]\nts2phc.nmea_serialport /dev/gnss0\n[ens4f0]\nts2phc.extts_polarity rising\nts2phc.pin_index 1"),
+		},
+		{
+			name:       "interface section with existing pin_index is not duplicated",
+			ts2phcConf: strPtr("[global]\n[ens4f0]\nts2phc.pin_index 0\nts2phc.extts_polarity rising"),
+			setupMock: func(m *MockFileSystem) {
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}, nil)
+				m.AllowReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
+			},
+			expectedConf: strPtr("[global]\n[ens4f0]\nts2phc.pin_index 0\nts2phc.extts_polarity rising"),
+		},
+		{
+			name:         "global section does not get pin_index",
+			ts2phcConf:   strPtr("[global]\nts2phc.nmea_serialport /dev/gnss0"),
+			expectedConf: strPtr("[global]\nts2phc.nmea_serialport /dev/gnss0"),
+		},
+		{
+			name:         "nmea section does not get pin_index",
+			ts2phcConf:   strPtr("[nmea]\nts2phc.master 1"),
+			expectedConf: strPtr("[nmea]\nts2phc.master 1"),
+		},
+		{
+			name:       "interface with SMA pins does not get pin_index",
+			ts2phcConf: strPtr("[ens4f0]\nts2phc.extts_polarity rising"),
+			setupMock: func(m *MockFileSystem) {
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}, nil)
+				m.AllowReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", []byte("0 1"), nil)
+			},
+			expectedConf: strPtr("[ens4f0]\nts2phc.extts_polarity rising"),
+		},
+		{
+			name:       "multiple interfaces - pin_index added only where needed",
+			ts2phcConf: strPtr("[global]\nts2phc.nmea_serialport /dev/gnss0\n[ens4f0]\nts2phc.extts_polarity rising\n[ens4f1]\nts2phc.pin_index 0\nts2phc.extts_polarity rising"),
+			setupMock: func(m *MockFileSystem) {
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}, nil)
+				m.AllowReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
+				m.AllowReadDir("/sys/class/net/ens4f1/device/ptp/", []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}, nil)
+				m.AllowReadFile("/sys/class/net/ens4f1/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
+			},
+			expectedConf: strPtr("[global]\nts2phc.nmea_serialport /dev/gnss0\n[ens4f0]\nts2phc.extts_polarity rising\nts2phc.pin_index 1\n[ens4f1]\nts2phc.pin_index 0\nts2phc.extts_polarity rising"),
+		},
+		{
+			name:         "empty config string is unchanged",
+			ts2phcConf:   strPtr(""),
+			expectedConf: strPtr(""),
+		},
+		{
+			name:       "pin_index added to last section when at end of file",
+			ts2phcConf: strPtr("[global]\n[ens4f0]\nts2phc.extts_polarity rising"),
+			setupMock: func(m *MockFileSystem) {
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}, nil)
+				m.AllowReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
+			},
+			expectedConf: strPtr("[global]\n[ens4f0]\nts2phc.extts_polarity rising\nts2phc.pin_index 1"),
+		},
+		{
+			name:       "hasSysfsSMAPins returns false when ReadDir fails",
+			ts2phcConf: strPtr("[ens4f0]\nts2phc.extts_polarity rising"),
+			setupMock: func(m *MockFileSystem) {
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", nil, fmt.Errorf("no such directory"))
+			},
+			expectedConf: strPtr("[ens4f0]\nts2phc.extts_polarity rising\nts2phc.pin_index 1"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockFS, restoreFs := setupMockFS()
+			defer restoreFs()
+			if tt.setupMock != nil {
+				tt.setupMock(mockFS)
+			}
+
+			profile := &ptpv1.PtpProfile{
+				Ts2PhcConf: tt.ts2phcConf,
+			}
+
+			checkPinIndex(profile)
+
+			if tt.expectedConf == nil {
+				assert.Nil(t, profile.Ts2PhcConf)
+			} else {
+				assert.NotNil(t, profile.Ts2PhcConf)
+				assert.Equal(t, *tt.expectedConf, *profile.Ts2PhcConf)
+			}
+		})
+	}
+}
+
 func Test_PopulateHwConfdigE810(t *testing.T) {
 	p, d := E810("e810")
 	data := (*d).(*E810PluginData)
