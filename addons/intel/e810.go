@@ -44,6 +44,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	glog.Info("calling onPTPConfigChange for e810 plugin")
 
 	autoDetectGNSSSerialPort(nodeProfile)
+	checkPinIndex(nodeProfile)
 
 	var e810Opts E810Opts
 	var err error
@@ -242,4 +243,46 @@ func pinSetHasSMAInput(pins pinSet) bool {
 		}
 	}
 	return false
+}
+
+func checkPinIndex(nodeProfile *ptpv1.PtpProfile) {
+	if nodeProfile.Ts2PhcConf == nil {
+		return
+	}
+
+	profileName := ""
+	if nodeProfile.Name != nil {
+		profileName = *nodeProfile.Name
+	}
+
+	lines := strings.Split(*nodeProfile.Ts2PhcConf, "\n")
+	result := make([]string, 0, len(lines)+1)
+	shouldAddPinIndex := false
+	for _, line := range lines {
+		trimedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimedLine, "[") && strings.HasSuffix(trimedLine, "]") {
+			// We went through the previous entry and didn't find a pin index
+			if shouldAddPinIndex {
+				glog.Infof("Adding 'ts2phc.pin_index 1' to ts2phc for profile name %s", profileName)
+				result = append(result, "ts2phc.pin_index 1")
+				shouldAddPinIndex = false
+			}
+
+			ifName := strings.TrimSpace(strings.TrimRight(strings.TrimLeft(trimedLine, "["), "]"))
+			if ifName != "global" && ifName != "nmea" && !hasSysfsSMAPins(ifName) {
+				shouldAddPinIndex = true
+			}
+		}
+		if strings.HasPrefix(trimedLine, "ts2phc.pin_index") || strings.HasPrefix(trimedLine, "ts2phc.pin_name") {
+			shouldAddPinIndex = false
+		}
+		result = append(result, line)
+	}
+	if shouldAddPinIndex {
+		glog.Infof("Adding 'ts2phc.pin_index 1' to ts2phc for profile name %s", profileName)
+		result = append(result, "ts2phc.pin_index 1")
+	}
+
+	updatedTs2phcConfig := strings.Join(result, "\n")
+	nodeProfile.Ts2PhcConf = &updatedTs2phcConfig
 }
