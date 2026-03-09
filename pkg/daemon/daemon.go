@@ -66,6 +66,11 @@ const (
 	// Offset filter size is hardcoded to 64 for now. It covers 4 seconds with reporting rate 16x/second.
 	// TODO: consider making it configurable
 	offsetFilterSize = 64
+	// defaultPtp4lOffsetEventWindowSize is the sliding window size for averaging ptp4l offsets
+	// before sending them to the T-BC state machine. The window should cover ~1 second of
+	// offset data. Set via PtpSettings["ptp4lOffsetEventWindowSize"]. Tune according to
+	// the ptp4l message rate: 16 for 8275.1 (16 msg/s), 128 for 8275.2 (128 msg/s).
+	defaultPtp4lOffsetEventWindowSize = 16
 )
 
 var (
@@ -267,6 +272,9 @@ type tBCProcessAttributes struct {
 	lastAppliedState  event.PTPState
 	offsetFilter      *utils.Window
 	offsetThreshold   float64
+	// offsetEventWindow averages ptp4l offsets and sends them to the T-BC state machine once per second
+	offsetEventWindow  *utils.Window
+	lastOffsetEventSec int64
 }
 
 func (t *tBCProcessAttributes) activeTRPort() string {
@@ -1058,6 +1066,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				} else {
 					dprocess.tBCAttributes.offsetThreshold = float64(getPTPThreshold(nodeProfile).MaxOffsetThreshold)
 				}
+				offsetEventWindowSize := defaultPtp4lOffsetEventWindowSize
+				if sWindowSize, ok := (*nodeProfile).PtpSettings["ptp4lOffsetEventWindowSize"]; ok {
+					if ws, parseErr := strconv.Atoi(sWindowSize); parseErr == nil && ws > 0 {
+						offsetEventWindowSize = ws
+					} else {
+						glog.Warningf("invalid ptp4lOffsetEventWindowSize %q, using default %d", sWindowSize, defaultPtp4lOffsetEventWindowSize)
+					}
+				}
+				dprocess.tBCAttributes.offsetEventWindow = utils.NewWindow(offsetEventWindowSize)
 				dprocess.prepareTBCResources()
 			}
 		}
@@ -1369,6 +1386,40 @@ func (p *ptpProcess) checkOffsetFilterAndTransition(transitionAction func()) {
 				p.tBCAttributes.lastAppliedState = event.PTP_LOCKED
 			}
 		}
+	}
+}
+
+// sendPtp4lOffsetEvent inserts the current ptp4l offset into a sliding window and,
+// once per second, sends the window average to the T-BC state machine via the event
+// channel. This gives event_tbc.go visibility into ptp4l-level offsets for
+// freeRunCondition and getLargestOffset calculations.
+func (p *ptpProcess) sendPtp4lOffsetEvent() {
+	if p.configName != p.tBCAttributes.trPortsConfigFile || p.tBCAttributes.offsetEventWindow == nil {
+		return
+	}
+	p.tBCAttributes.offsetEventWindow.Insert(p.offset)
+
+	nowSec := time.Now().Unix()
+	if nowSec == p.tBCAttributes.lastOffsetEventSec {
+		return
+	}
+	p.tBCAttributes.lastOffsetEventSec = nowSec
+
+	avgOffset := int64(p.tBCAttributes.offsetEventWindow.Mean())
+	glog.Infof("PTP4l offset event: %d", avgOffset)
+	select {
+	case p.eventCh <- event.EventChannel{
+		ProcessName: event.PTP4l,
+		State:       p.tBCAttributes.lastReportedState,
+		CfgName:     p.configName,
+		IFace:       p.tBCAttributes.activeTRPort(),
+		ClockType:   p.clockType,
+		Time:        time.Now().UnixMilli(),
+		Values: map[event.ValueType]any{
+			event.OFFSET: avgOffset,
+		},
+	}:
+	default:
 	}
 }
 

@@ -56,3 +56,36 @@ func Test_GetAlias(t *testing.T) {
 		})
 	}
 }
+
+func TestWindowIsEmpty(t *testing.T) {
+	t.Run("new window is empty", func(t *testing.T) {
+		w := utils.NewWindow(10)
+		assert.True(t, w.IsEmpty())
+		assert.False(t, w.IsFull())
+	})
+
+	t.Run("window with one insert is not empty", func(t *testing.T) {
+		w := utils.NewWindow(10)
+		w.Insert(1.0)
+		assert.False(t, w.IsEmpty())
+		assert.False(t, w.IsFull())
+	})
+
+	t.Run("full window is not empty", func(t *testing.T) {
+		w := utils.NewWindow(3)
+		w.Insert(1.0)
+		w.Insert(2.0)
+		w.Insert(3.0)
+		assert.False(t, w.IsEmpty())
+		assert.True(t, w.IsFull())
+	})
+
+	t.Run("window wrapping around is not empty", func(t *testing.T) {
+		w := utils.NewWindow(2)
+		w.Insert(1.0)
+		w.Insert(2.0)
+		w.Insert(3.0)
+		assert.False(t, w.IsEmpty())
+		assert.True(t, w.IsFull())
+	})
+}

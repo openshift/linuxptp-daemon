@@ -187,7 +187,8 @@ type EventHandler struct {
 	clockClass         fbprotocol.ClockClass
 	clockAccuracy      fbprotocol.ClockAccuracy
 	clkSyncState       map[string]*clockSyncState
-	outOfSpec          bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
+	downstreamCancel   map[string]context.CancelFunc // cancels in-flight downstream update goroutines per config
+	outOfSpec          bool                          // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
 	frequencyTraceable bool // will be tru if synce is traceable
 	ReduceLog          bool // reduce logs for every announce
 	LeadingClockData   *LeadingClockParams
@@ -256,6 +257,7 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		clockClassMetric:   clockClassMetric,
 		clockClass:         protocol.ClockClassUninitialized,
 		clkSyncState:       map[string]*clockSyncState{},
+		downstreamCancel:   map[string]context.CancelFunc{},
 		outOfSpec:          false,
 		frequencyTraceable: false,
 		ReduceLog:          true,
