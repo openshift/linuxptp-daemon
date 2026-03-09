@@ -187,6 +187,9 @@ const (
 	PinStateDisconnected = DPLL_PIN_STATE_DISCONNECTED
 	PinStateSelectable   = DPLL_PIN_STATE_SELECTABLE
 
+	PinDirectionInput  = DPLL_PIN_DIRECTION_INPUT
+	PinDirectionOutput = DPLL_PIN_DIRECTION_OUTPUT
+
 	DpllTypePPS uint32 = 1
 	DpllTypeEEC uint32 = 2
 )
