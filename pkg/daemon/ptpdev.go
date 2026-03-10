@@ -62,6 +62,40 @@ func GetDevStatusUpdate(nodePTPDev *ptpv1.NodePtpDevice) (*ptpv1.NodePtpDevice, 
 			nicDefaultPort[nicBase] = dev.Name
 		}
 	}
+	// Collect VPD once per NIC using the port that exposes the PTP device
+	vpdCache := make(map[string]*ptpnetwork.VPDInfo)
+	for nicBase, portName := range nicDefaultPort {
+		for _, dev := range newDevices {
+			if dev.Name == portName && dev.HardwareInfo != nil {
+				vpd, vpdErr := ptpnetwork.GetVPDInfo(dev.HardwareInfo.PCIAddress)
+				if vpdErr != nil {
+					glog.V(2).Infof("VPD for NIC %s (via %s): %v", nicBase, portName, vpdErr)
+				} else {
+					vpdCache[nicBase] = vpd
+				}
+				break
+			}
+		}
+	}
+	for i := range newDevices {
+		if newDevices[i].HardwareInfo == nil {
+			continue
+		}
+		nicBase := newDevices[i].HardwareInfo.PCIAddress
+		if idx := strings.LastIndex(nicBase, "."); idx != -1 {
+			nicBase = nicBase[:idx]
+		}
+		if vpd, ok := vpdCache[nicBase]; ok {
+			newDevices[i].HardwareInfo.VPDIdentifierString = vpd.IdentifierString
+			newDevices[i].HardwareInfo.VPDPartNumber = vpd.PartNumber
+			newDevices[i].HardwareInfo.VPDSerialNumber = vpd.SerialNumber
+			newDevices[i].HardwareInfo.VPDManufacturerID = vpd.ManufacturerID
+			newDevices[i].HardwareInfo.VPDProductName = vpd.ProductName
+			newDevices[i].HardwareInfo.VPDVendorSpecific1 = vpd.VendorSpecific1
+			newDevices[i].HardwareInfo.VPDVendorSpecific2 = vpd.VendorSpecific2
+		}
+	}
+
 	for _, dev := range newDevices {
 		if dev.HardwareInfo == nil {
 			continue

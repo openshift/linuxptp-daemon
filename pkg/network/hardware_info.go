@@ -128,20 +128,12 @@ func GetHardwareInfo(deviceName string) (*ptpv1.HardwareInfo, error) {
 		}
 		hwInfo.LinkSpeed = linkInfo.Speed
 		hwInfo.FEC = linkInfo.FEC
-	}
-
-	// Get VPD data via lspci -vvv (primary), falling back to sysfs vpd file
-	vpdData, err := GetVPDInfoForPCIDevice(hwInfo.PCIAddress, deviceName)
-	if err != nil {
-		glog.V(4).Infof("No VPD data found for device %s: %v", deviceName, err)
-	} else {
-		hwInfo.VPDIdentifierString = vpdData.IdentifierString
-		hwInfo.VPDPartNumber = vpdData.PartNumber
-		hwInfo.VPDSerialNumber = vpdData.SerialNumber
-		hwInfo.VPDManufacturerID = vpdData.ManufacturerID
-		hwInfo.VPDProductName = vpdData.ProductName
-		hwInfo.VPDVendorSpecific1 = vpdData.VendorSpecific1
-		hwInfo.VPDVendorSpecific2 = vpdData.VendorSpecific2
+		if hwInfo.LinkSpeed == "" {
+			hwInfo.LinkSpeed = "unknown"
+		}
+		if hwInfo.FEC == "" {
+			hwInfo.FEC = "unknown"
+		}
 	}
 
 	return hwInfo, nil
