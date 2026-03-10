@@ -35,36 +35,33 @@ func NewPTPStateDetector(hcm *HardwareConfigManager) *PTPStateDetector {
 	return psd
 }
 
-// DetectStateChange processes a PTP4L log line and returns state change information
-// Returns "locked", "lost", or "" (empty string for no relevant state change)
-// Only returns a result if the interface is in the monitored sources list
-// TODO: replace by pmc  state monitor
-func (psd *PTPStateDetector) DetectStateChange(logLine string) string {
-	// Use the robust PTP4L parser to extract event information
+// DetectStateChange processes a PTP4L log line and returns port-aware state change information.
+// Returns the port name and condition type ("locked", "lost") for the port that changed state.
+// Returns ("", "") when the log line contains no relevant state change or the port is not monitored.
+// TODO: replace by pmc state monitor
+func (psd *PTPStateDetector) DetectStateChange(logLine string) (portName string, conditionType string) {
 	_, event, err := psd.ptp4lExtractor.Extract(logLine)
 	if err != nil || event == nil {
-		return "" // Not a PTP4L event log line or parsing error
+		return "", ""
 	}
 
-	portName := psd.extractPortName(logLine)
+	portName = psd.extractPortName(logLine)
 	if portName == "" {
-		return "" // No interface name found
+		return "", ""
 	}
 
 	if !psd.monitoredPorts[portName] {
-		return "" // Port not in monitored sources, skip
+		return "", ""
 	}
 
 	switch event.Role {
 	case constants.PortRoleSlave:
-		return "locked"
+		return portName, ConditionTypeLocked
 	default:
-		// Only treat as 'lost' when transitioning away from SLAVE explicitly
-		// to avoid false positives on INIT/other non-loss transitions.
 		if strings.Contains(event.Raw, "SLAVE to ") {
-			return "lost"
+			return portName, ConditionTypeLost
 		}
-		return ""
+		return "", ""
 	}
 }
 

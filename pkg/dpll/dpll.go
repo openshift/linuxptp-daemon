@@ -429,7 +429,7 @@ func (d *DpllConfig) ActivePhaseOffsetPin(pin *nl.PinInfo) (int, bool) {
 		return -1, false
 	}
 	for i, p := range pin.ParentDevice {
-		if p.State != nl.PinStateConnected {
+		if p.State != nl.PinStateConnected || p.Direction != nl.PinDirectionInput {
 			continue
 		}
 		for _, dev := range d.devices {

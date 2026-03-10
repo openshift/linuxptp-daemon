@@ -292,6 +292,124 @@ func TestClockChainResolution(t *testing.T) {
 	}
 }
 
+// TestClockChainResolution_DualUpstream verifies that a minimal HardwareConfig
+// paired with a PTP config containing two masterOnly=0 ports correctly derives
+// both upstream ports into PTPTimeReceivers and Ethernet.
+func TestClockChainResolution_DualUpstream(t *testing.T) {
+	hwConfig, err := loadHardwareConfigFromFile("testdata/gnrd-hwconfig-minimal-perla4.yaml")
+	assert.NoError(t, err)
+	if !assert.NotNil(t, hwConfig) {
+		t.Fatal("hwConfig is nil")
+	}
+
+	// Verify minimal — no behavior, no ethernet, no network interface
+	assert.Nil(t, hwConfig.Spec.Profile.ClockChain.Behavior)
+	subsystem := hwConfig.Spec.Profile.ClockChain.Structure[0]
+	assert.Empty(t, subsystem.DPLL.NetworkInterface)
+	assert.Empty(t, subsystem.Ethernet)
+
+	// Load dual-upstream PTP config
+	ptpConfig, err := loadPtpConfigFromFile("testdata/tbc-gnrd-dual-upstream.yaml")
+	assert.NoError(t, err)
+	if !assert.NotNil(t, ptpConfig) {
+		t.Fatal("ptpConfig is nil")
+	}
+
+	// Find the TR profile and verify it has two upstream ports
+	var ptpProfile *ptpv1.PtpProfile
+	for i := range ptpConfig.Spec.Profile {
+		if ptpConfig.Spec.Profile[i].Name != nil &&
+			*ptpConfig.Spec.Profile[i].Name == hwConfig.Spec.RelatedPtpProfileName {
+			ptpProfile = &ptpConfig.Spec.Profile[i]
+			break
+		}
+	}
+	if !assert.NotNil(t, ptpProfile, "profile %s not found", hwConfig.Spec.RelatedPtpProfileName) {
+		t.Fatal()
+	}
+
+	upstreamPorts := extractUpstreamPortsFromPtpProfile(ptpProfile)
+	assert.Len(t, upstreamPorts, 2, "Should find exactly two upstream ports")
+	assert.Contains(t, upstreamPorts, "eno8703")
+	assert.Contains(t, upstreamPorts, "eno8903")
+
+	// Set up mock leading interface resolver:
+	// eno8703 -> PHC 0 -> PCI 0000:87:00.0 -> eno8703 (leading interface)
+	mockResolver := newMockLeadingInterfaceResolver()
+	mockResolver.phcIDs["eno8703"] = "/dev/ptp0"
+	mockResolver.symlinks["/sys/class/ptp/ptp0/device"] = "../../../0000:87:00.0"
+	mockResolver.dirEntries["/sys/bus/pci/devices/0000:87:00.0/net"] = []os.DirEntry{
+		&mockDirEntry{name: "eno8703", isDir: false},
+	}
+	SetLeadingInterfaceResolver(mockResolver)
+	defer ResetLeadingInterfaceResolver()
+
+	fakeClient := fake.NewSimpleClientset()
+	hcm := NewHardwareConfigManager(fakeClient, "default")
+	resolvedConfig, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
+	assert.NoError(t, err)
+	if !assert.NotNil(t, resolvedConfig) {
+		t.Fatal("resolvedConfig is nil")
+	}
+
+	// --- Structure assertions ---
+	resolved := resolvedConfig.Spec.Profile.ClockChain.Structure[0]
+
+	assert.Equal(t, "eno8703", resolved.DPLL.NetworkInterface,
+		"NetworkInterface should be derived from first upstream port")
+
+	assert.NotEmpty(t, resolved.DPLL.PhaseInputs)
+	ptpInputPin, exists := resolved.DPLL.PhaseInputs["ETH01_SDP_TIMESYNC_0"]
+	assert.True(t, exists, "PhaseInputs should contain ptpInputPin from dell/XR8720t template")
+	assert.NotNil(t, ptpInputPin.Frequency)
+	assert.Equal(t, int64(1), *ptpInputPin.Frequency)
+
+	assert.Len(t, resolved.Ethernet, 1)
+	assert.Equal(t, upstreamPorts, resolved.Ethernet[0].Ports,
+		"Ethernet ports should contain both upstream ports")
+
+	// --- Behavior assertions ---
+	behavior := resolvedConfig.Spec.Profile.ClockChain.Behavior
+	if !assert.NotNil(t, behavior) {
+		t.Fatal("behavior is nil")
+	}
+
+	// PTP source should have both ports as PTPTimeReceivers
+	ptpSource := findSourceByName(behavior.Sources, "PTP")
+	if !assert.NotNil(t, ptpSource, "PTP source should exist") {
+		t.Fatal()
+	}
+	assert.Equal(t, "ptpTimeReceiver", ptpSource.SourceType)
+	assert.Equal(t, "leader", ptpSource.Subsystem)
+	assert.Equal(t, "ETH01_SDP_TIMESYNC_0", ptpSource.BoardLabel)
+	assert.Equal(t, upstreamPorts, ptpSource.PTPTimeReceivers,
+		"PTPTimeReceivers should contain both upstream ports derived from PTP config")
+
+	// All three conditions should be present
+	initCond := findConditionByName(behavior.Conditions, "Initialize T-BC")
+	assert.NotNil(t, initCond, "Initialize T-BC condition should be present")
+	if initCond != nil && len(initCond.DesiredStates) > 0 && initCond.DesiredStates[0].DPLL != nil {
+		assert.Equal(t, "GNSS_1PPS_IN", initCond.DesiredStates[0].DPLL.BoardLabel)
+		assert.Equal(t, "leader", initCond.DesiredStates[0].DPLL.Subsystem)
+	}
+
+	lockedCond := findConditionByName(behavior.Conditions, "PTP Source Locked")
+	assert.NotNil(t, lockedCond, "PTP Source Locked condition should be present")
+
+	lostCond := findConditionByName(behavior.Conditions, "PTP Source Lost - Leader Holdover")
+	assert.NotNil(t, lostCond, "PTP Source Lost condition should be present")
+
+	// No unresolved template variables should remain
+	for _, condition := range behavior.Conditions {
+		for _, ds := range condition.DesiredStates {
+			if ds.DPLL != nil {
+				assert.NotContains(t, ds.DPLL.Subsystem, "{", "template variable should be resolved")
+				assert.NotContains(t, ds.DPLL.BoardLabel, "{", "template variable should be resolved")
+			}
+		}
+	}
+}
+
 // Helper functions
 
 func findSourceByName(sources []ptpv2alpha1.SourceConfig, name string) *ptpv2alpha1.SourceConfig {

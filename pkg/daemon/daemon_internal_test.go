@@ -520,7 +520,8 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 
 		process := &ptpProcess{
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceName: "ens4f0",
+				trIfaceNames: []string{"ens4f0"},
+				perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
 			},
 			nodeProfile: ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
@@ -538,7 +539,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 		// Verify that hardware config path conditions are met
 		assert.NotNil(t, process.tbcStateDetector, "PTPStateDetector should be present for hardware config path")
 		assert.True(t, vTbcHasHardwareConfig, "Hardware config should be enabled")
-		assert.Equal(t, "ens4f0", process.tBCAttributes.trIfaceName, "Interface name should be set correctly")
+		assert.Equal(t, []string{"ens4f0"}, process.tBCAttributes.trIfaceNames, "Interface names should be set correctly")
 
 		// Verify the path selection logic would choose hardware config path
 		// This tests the condition: vTbcHasHardwareConfig && p.tbcStateDetector != nil
@@ -570,10 +571,11 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 
 		process := &ptpProcess{
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceName:       "ens4f0",
-				trPortsConfigFile: "test-config",    // Must match configName for offset filter logic to run
-				lastAppliedState:  event.PTP_NOTSET, // Must not be PTP_LOCKED for event to be sent
-				offsetThreshold:   10.0,             // Set threshold > offset (5.0) to allow event to be sent
+				trIfaceNames:      []string{"ens4f0"},
+				perPortState:      map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
+				trPortsConfigFile: "test-config",
+				lastAppliedState:  event.PTP_NOTSET,
+				offsetThreshold:   10.0,
 			},
 			nodeProfile: ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
@@ -585,7 +587,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 			eventCh:          make(chan event.EventChannel, 1),
 			configName:       "test-config",
 			clockType:        event.BC,
-			offset:           5.0, // Set offset < threshold (10.0) to allow event to be sent
+			offset:           5.0,
 			tbcStateDetector: detector,
 			dn:               mockDaemon,
 		}
@@ -652,7 +654,8 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 
 		process := &ptpProcess{
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceName: "ens4f0",
+				trIfaceNames: []string{"ens4f0"},
+				perPortState: map[string]event.PTPState{"ens4f0": event.PTP_LOCKED},
 			},
 			nodeProfile: ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
@@ -723,7 +726,8 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 
 				process := &ptpProcess{
 					tBCAttributes: tBCProcessAttributes{
-						trIfaceName: "ens4f0",
+						trIfaceNames: []string{"ens4f0"},
+						perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
 					},
 				}
 
@@ -795,7 +799,8 @@ func TestTBCTransitionCheck_PathSelection(t *testing.T) {
 			// Create ptpProcess with test conditions
 			process := &ptpProcess{
 				tBCAttributes: tBCProcessAttributes{
-					trIfaceName: "ens4f0",
+					trIfaceNames: []string{"ens4f0"},
+					perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
 				},
 				nodeProfile: ptpv1.PtpProfile{
 					Name: stringPointer("test-profile"),
@@ -1030,6 +1035,10 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 
 	// Create a ptpProcess with the real hardware config setup
 	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames: []string{"ens4f1"},
+			perPortState: map[string]event.PTPState{"ens4f1": event.PTP_NOTSET},
+		},
 		nodeProfile: ptpv1.PtpProfile{
 			Name: stringPointer("01-tbc-tr"), // Matches relatedPtpProfileName from config
 			PtpSettings: map[string]string{
@@ -1147,10 +1156,11 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 
 		process := &ptpProcess{
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceName:       "ens4f0",
-				trPortsConfigFile: "test-config",    // Must match configName for offset filter logic to run
-				lastAppliedState:  event.PTP_NOTSET, // Must not be PTP_LOCKED for event to be sent
-				offsetThreshold:   10.0,             // Set threshold > offset (5.0) to allow event to be sent
+				trIfaceNames:      []string{"ens4f0"},
+				perPortState:      map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
+				trPortsConfigFile: "test-config",
+				lastAppliedState:  event.PTP_NOTSET,
+				offsetThreshold:   10.0,
 			},
 			nodeProfile: ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
@@ -1204,7 +1214,8 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 
 		process := &ptpProcess{
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceName: "ens4f0",
+				trIfaceNames: []string{"ens4f0"},
+				perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
 			},
 			nodeProfile: ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
@@ -1242,7 +1253,8 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 
 		process := &ptpProcess{
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceName: "ens4f0",
+				trIfaceNames: []string{"ens4f0"},
+				perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
 			},
 			nodeProfile: ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
@@ -1271,6 +1283,287 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 		default:
 			// No event sent, which is correct
 		}
+	})
+}
+
+// setupDualUpstreamHardwareConfig sets up a hardware config with two PTP time receiver ports on the same subsystem
+func setupDualUpstreamHardwareConfig(hcm *hardwareconfig.HardwareConfigManager, profileName, port1, port2 string) error {
+	hardwareconfig.SetDpllPinsGetter(hardwareconfig.CreateMockDpllPinsGetter(nil, nil))
+	defer hardwareconfig.ResetDpllPinsGetter()
+
+	hwConfig := ptpv2alpha1.HardwareConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-hwconfig-dual",
+		},
+		Spec: ptpv2alpha1.HardwareConfigSpec{
+			RelatedPtpProfileName: profileName,
+			Profile: ptpv2alpha1.HardwareProfile{
+				ClockChain: &ptpv2alpha1.ClockChain{
+					Behavior: &ptpv2alpha1.Behavior{
+						Sources: []ptpv2alpha1.SourceConfig{
+							{
+								Name:             "PTP",
+								SourceType:       "ptpTimeReceiver",
+								PTPTimeReceivers: []string{port1, port2},
+								Subsystem:        "leader",
+							},
+						},
+					},
+					Structure: []ptpv2alpha1.Subsystem{
+						{
+							Name: "leader",
+							Ethernet: []ptpv2alpha1.Ethernet{
+								{
+									Ports: []string{"eno5", port1, port2},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig})
+}
+
+func TestTBCDualUpstream_PortALost_PortBTakesOver(t *testing.T) {
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = true
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	fakeClient := fake.NewSimpleClientset()
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+	err := setupDualUpstreamHardwareConfig(hcm, "test-profile", "eno2", "eno3")
+	assert.NoError(t, err)
+	mockDaemon := &Daemon{hardwareConfigManager: hcm}
+	detector := hardwareconfig.NewPTPStateDetector(hcm)
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{"eno2", "eno3"},
+			perPortState:      map[string]event.PTPState{"eno2": event.PTP_NOTSET, "eno3": event.PTP_NOTSET},
+			trPortsConfigFile: "test-config",
+			lastAppliedState:  event.PTP_NOTSET,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": "eno5", "clockId[eno5]": "123456789"},
+		},
+		eventCh:          make(chan event.EventChannel, 10),
+		configName:       "test-config",
+		clockType:        event.BC,
+		offset:           5.0,
+		tbcStateDetector: detector,
+		dn:               mockDaemon,
+	}
+
+	pmStruct := registerPlugins([]string{})
+	pm := &pmStruct
+
+	// Port eno2 becomes SLAVE
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 (eno2): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.perPortState["eno2"])
+	assert.Equal(t, "eno2", process.tBCAttributes.activePort)
+
+	// Port eno2 loses SLAVE — but eno3 is not SLAVE yet, so all ports are lost → holdover
+	process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config] port 1 (eno2): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+	assert.Equal(t, "", process.tBCAttributes.activePort)
+
+	// Drain event channel
+	for len(process.eventCh) > 0 {
+		<-process.eventCh
+	}
+
+	// Port eno3 takes over — BMCA first transitions MASTER -> UNCALIBRATED
+	process.tBCTransitionCheck("ptp4l[300]: [test-config.0.config] port 2 (eno3): MASTER to UNCALIBRATED on RS_SLAVE", pm)
+	// No change yet — UNCALIBRATED is not SLAVE
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
+
+	// Then UNCALIBRATED -> SLAVE
+	process.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
+	process.tBCTransitionCheck("ptp4l[300]: [test-config.0.config] port 2 (eno3): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.perPortState["eno3"])
+	assert.Equal(t, "eno3", process.tBCAttributes.activePort)
+}
+
+func TestTBCDualUpstream_BothPortsLost(t *testing.T) {
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = true
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	fakeClient := fake.NewSimpleClientset()
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+	err := setupDualUpstreamHardwareConfig(hcm, "test-profile", "eno2", "eno3")
+	assert.NoError(t, err)
+	mockDaemon := &Daemon{hardwareConfigManager: hcm}
+	detector := hardwareconfig.NewPTPStateDetector(hcm)
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{"eno2", "eno3"},
+			perPortState:      map[string]event.PTPState{"eno2": event.PTP_LOCKED, "eno3": event.PTP_LOCKED},
+			activePort:        "eno2",
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": "eno5", "clockId[eno5]": "123456789"},
+		},
+		eventCh:          make(chan event.EventChannel, 10),
+		configName:       "test-config",
+		clockType:        event.BC,
+		tbcStateDetector: detector,
+		dn:               mockDaemon,
+	}
+
+	pmStruct := registerPlugins([]string{})
+	pm := &pmStruct
+
+	// Port eno2 loses SLAVE — eno3 still LOCKED, no aggregate change
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 (eno2): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.perPortState["eno2"])
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.perPortState["eno3"])
+	// Aggregate should still be LOCKED because eno3 is still up
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+
+	// Port eno3 also loses SLAVE — now all ports lost → holdover
+	process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config] port 2 (eno3): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.perPortState["eno3"])
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+	assert.Equal(t, "", process.tBCAttributes.activePort)
+}
+
+func TestTBCDualUpstream_RecoveryAfterBothLost(t *testing.T) {
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = true
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	fakeClient := fake.NewSimpleClientset()
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+	err := setupDualUpstreamHardwareConfig(hcm, "test-profile", "eno2", "eno3")
+	assert.NoError(t, err)
+	mockDaemon := &Daemon{hardwareConfigManager: hcm}
+	detector := hardwareconfig.NewPTPStateDetector(hcm)
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{"eno2", "eno3"},
+			perPortState:      map[string]event.PTPState{"eno2": event.PTP_FREERUN, "eno3": event.PTP_FREERUN},
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_FREERUN,
+			lastAppliedState:  event.PTP_HOLDOVER,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": "eno5", "clockId[eno5]": "123456789"},
+		},
+		eventCh:          make(chan event.EventChannel, 10),
+		configName:       "test-config",
+		clockType:        event.BC,
+		offset:           5.0,
+		tbcStateDetector: detector,
+		dn:               mockDaemon,
+	}
+
+	pmStruct := registerPlugins([]string{})
+	pm := &pmStruct
+
+	// Port eno2 recovers to SLAVE
+	process.tBCTransitionCheck("ptp4l[300]: [test-config.0.config] port 1 (eno2): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.perPortState["eno2"])
+	assert.Equal(t, "eno2", process.tBCAttributes.activePort)
+	assert.NotNil(t, process.tBCAttributes.offsetFilter, "Offset filter should be created on recovery")
+
+	// Fill offset filter to complete transition
+	for i := 0; i < 64; i++ {
+		process.tBCTransitionCheck("ptp4l[300]: [test-config.0.config] master offset 5 s2 freq 0 path delay 100", pm)
+	}
+
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastAppliedState)
+}
+
+func TestTBCDualUpstream_AllPortsLost_Helper(t *testing.T) {
+	t.Run("both ports FREERUN", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			perPortState: map[string]event.PTPState{
+				"eno2": event.PTP_FREERUN,
+				"eno3": event.PTP_FREERUN,
+			},
+		}
+		assert.True(t, attrs.allPortsLost())
+	})
+
+	t.Run("one port LOCKED", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			perPortState: map[string]event.PTPState{
+				"eno2": event.PTP_FREERUN,
+				"eno3": event.PTP_LOCKED,
+			},
+		}
+		assert.False(t, attrs.allPortsLost())
+	})
+
+	t.Run("both ports LOCKED", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			perPortState: map[string]event.PTPState{
+				"eno2": event.PTP_LOCKED,
+				"eno3": event.PTP_LOCKED,
+			},
+		}
+		assert.False(t, attrs.allPortsLost())
+	})
+
+	t.Run("both ports NOTSET", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			perPortState: map[string]event.PTPState{
+				"eno2": event.PTP_NOTSET,
+				"eno3": event.PTP_NOTSET,
+			},
+		}
+		assert.True(t, attrs.allPortsLost())
+	})
+
+	t.Run("single port LOCKED", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			perPortState: map[string]event.PTPState{
+				"eno2": event.PTP_LOCKED,
+			},
+		}
+		assert.False(t, attrs.allPortsLost())
+	})
+}
+
+func TestTBCDualUpstream_ActiveTRPort_Helper(t *testing.T) {
+	t.Run("returns active port when set", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			activePort:   "eno3",
+			trIfaceNames: []string{"eno2", "eno3"},
+		}
+		assert.Equal(t, "eno3", attrs.activeTRPort())
+	})
+
+	t.Run("falls back to first port when no active", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			trIfaceNames: []string{"eno2", "eno3"},
+		}
+		assert.Equal(t, "eno2", attrs.activeTRPort())
+	})
+
+	t.Run("returns empty when no ports", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{}
+		assert.Equal(t, "", attrs.activeTRPort())
 	})
 }
 
