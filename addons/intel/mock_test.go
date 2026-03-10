@@ -1,6 +1,7 @@
 package intel
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -15,16 +16,16 @@ import (
 
 // mockBatchPinSet is a simple mock to unit-test pin set operations
 type mockBatchPinSet struct {
-	commands *[]dpll.PinParentDeviceCtl
+	commands []dpll.PinParentDeviceCtl
 }
 
-func (m *mockBatchPinSet) mock(commands *[]dpll.PinParentDeviceCtl) error {
-	m.commands = commands
+func (m *mockBatchPinSet) mock(commands []dpll.PinParentDeviceCtl) error {
+	m.commands = append(m.commands, commands...)
 	return nil
 }
 
 func (m *mockBatchPinSet) reset() {
-	m.commands = nil
+	m.commands = m.commands[:0]
 }
 
 func setupBatchPinSetMock() (*mockBatchPinSet, func()) {
@@ -37,16 +38,20 @@ func setupBatchPinSetMock() (*mockBatchPinSet, func()) {
 // MockFileSystem is a simple mock implementation of FileSystemInterface
 type MockFileSystem struct {
 	// Expected calls and responses
-	readDirCalls     []ReadDirCall
-	writeFileCalls   []WriteFileCall
-	readFileCalls    []ReadFileCall
+	readDirCalls   []ReadDirCall
+	writeFileCalls []WriteFileCall
+	readFileCalls  []ReadFileCall
+	readLinkCalls  []ReadLinkCall
+
 	currentReadDir   int
 	currentWriteFile int
 	currentReadFile  int
+	currentReadLink  int
 	// Allowed (but not verified) calls and responses
 	allowedReadDir   map[string]ReadDirCall
-	allowedReadFile  map[string]ReadFileCall
 	allowedWriteFile map[string]WriteFileCall
+	allowedReadFile  map[string]ReadFileCall
+	allowedReadLink  map[string]ReadLinkCall
 }
 
 func setupMockFS() (*MockFileSystem, func()) {
@@ -72,6 +77,12 @@ type WriteFileCall struct {
 type ReadFileCall struct {
 	expectedPath string
 	returnData   []byte
+	returnError  error
+}
+
+type ReadLinkCall struct {
+	expectedPath string
+	returnData   string
 	returnError  error
 }
 
@@ -131,6 +142,25 @@ func (m *MockFileSystem) AllowReadFile(path string, data []byte, err error) {
 	}
 }
 
+func (m *MockFileSystem) ExpectReadLink(path string, data string, err error) {
+	m.readLinkCalls = append(m.readLinkCalls, ReadLinkCall{
+		expectedPath: path,
+		returnData:   data,
+		returnError:  err,
+	})
+}
+
+func (m *MockFileSystem) AllowReadLink(path string, data string, err error) {
+	if m.allowedReadLink == nil {
+		m.allowedReadLink = make(map[string]ReadLinkCall)
+	}
+	m.allowedReadLink[path] = ReadLinkCall{
+		expectedPath: path,
+		returnData:   data,
+		returnError:  err,
+	}
+}
+
 func (m *MockFileSystem) ReadDir(dirname string) ([]os.DirEntry, error) {
 	if allowed, ok := m.allowedReadDir[dirname]; ok {
 		return allowed.returnDirs, allowed.returnError
@@ -178,10 +208,26 @@ func (m *MockFileSystem) ReadFile(filename string) ([]byte, error) {
 	return call.returnData, call.returnError
 }
 
+func (m *MockFileSystem) ReadLink(filename string) (string, error) {
+	if allowed, ok := m.allowedReadLink[filename]; ok {
+		return allowed.returnData, allowed.returnError
+	}
+	if m.currentReadLink >= len(m.readLinkCalls) {
+		return "", fmt.Errorf("Unexpected ReadLink call (%s)", filename)
+	}
+	call := m.readLinkCalls[m.currentReadLink]
+	m.currentReadLink++
+	if call.expectedPath != "" && call.expectedPath != filename {
+		return "", fmt.Errorf("ReadLink called with unexpected filename (%s), was expecting %s", filename, call.expectedPath)
+	}
+	return call.returnData, call.returnError
+}
+
 func (m *MockFileSystem) VerifyAllCalls(t *testing.T) {
 	assert.Equal(t, len(m.readDirCalls), m.currentReadDir, "Not all expected ReadDir calls were made")
 	assert.Equal(t, len(m.writeFileCalls), m.currentWriteFile, "Not all expected WriteFile calls were made")
 	assert.Equal(t, len(m.readFileCalls), m.currentReadFile, "Not all expected ReadFile calls were made")
+	assert.Equal(t, len(m.readLinkCalls), m.currentReadLink, "Not all expected ReadLink calls were made")
 }
 
 // MockDirEntry implements os.DirEntry for testing
@@ -285,4 +331,57 @@ func setupGNSSMocks(data *E825PluginData) (*mockBatchPinSet, func()) {
 	}
 	// Mock pin-set logic
 	return setupBatchPinSetMock()
+}
+
+type mockedDPLLPins struct {
+	pins dpllPins
+}
+
+func (m *mockedDPLLPins) FetchPins() error { return nil }
+
+func (m *mockedDPLLPins) GetByLabel(label string, clockID uint64) *dpll.PinInfo {
+	return m.pins.GetByLabel(label, clockID)
+}
+
+func (m *mockedDPLLPins) GetAllPinsByLabel(label string) []*dpll.PinInfo {
+	return m.pins.GetAllPinsByLabel(label)
+}
+
+func (m *mockedDPLLPins) GetCommandsForPluginPinSet(clockID uint64, pinset pinSet) []dpll.PinParentDeviceCtl {
+	return m.pins.GetCommandsForPluginPinSet(clockID, pinset)
+}
+
+func (m *mockedDPLLPins) ApplyPinCommands(commands []dpll.PinParentDeviceCtl) error {
+	return BatchPinSet(commands)
+}
+
+func setupMockDPLLPins(pins ...*dpll.PinInfo) (*mockedDPLLPins, func()) {
+	orig := DpllPins
+	mock := &mockedDPLLPins{pins: dpllPins(pins)}
+	DpllPins = mock
+	return mock, func() { DpllPins = orig }
+}
+
+func setupMockDPLLPinsFromJSON(path string) (*mockedDPLLPins, func()) { //nolint: unparam // it may be used for other pin files in the future it doesn't make the code overly complex
+	pins := []dpll.PinInfo{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		panic(fmt.Sprintf("failed to read pins from %s: %v", path, err))
+	}
+	if err = json.Unmarshal(data, &pins); err != nil {
+		panic(fmt.Sprintf("failed to unmarshal pins from %s: %v", path, err))
+	}
+	ptrs := make([]*dpll.PinInfo, len(pins))
+	for i := range pins {
+		ptrs[i] = &pins[i]
+	}
+	return setupMockDPLLPins(ptrs...)
+}
+
+func setupMockDelayCompensation() func() {
+	orig := SendDelayCompensation
+	SendDelayCompensation = func(_ *[]delayCompensation, _ DPLLPins) error {
+		return nil
+	}
+	return func() { SendDelayCompensation = orig }
 }

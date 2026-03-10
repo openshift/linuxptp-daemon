@@ -319,7 +319,8 @@ func ParsePinReplies(msgs []genetlink.Message) ([]*PinInfo, error) {
 						case DpllPinDirection:
 							temp.Direction = ad.Uint32()
 						case DpllPinPrio:
-							temp.Prio = ad.Uint32()
+							v := ad.Uint32()
+							temp.Prio = &v
 						case DpllPinState:
 							temp.State = ad.Uint32()
 						case DpllPinPhaseOffset:
@@ -508,7 +509,7 @@ type ReferenceSync struct {
 type PinParentDevice struct {
 	ParentID    uint32
 	Direction   uint32
-	Prio        uint32
+	Prio        *uint32
 	State       uint32
 	PhaseOffset int64
 }

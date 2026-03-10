@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
 )
@@ -22,7 +23,6 @@ func Test_E810(t *testing.T) {
 }
 
 func Test_AfterRunPTPCommandE810(t *testing.T) {
-	unitTest = true
 	profile, err := loadProfile("./testdata/profile-tgm.yaml")
 	assert.NoError(t, err)
 	p, d := E810("e810")
@@ -75,7 +75,10 @@ func Test_initInternalDelays_BadPart(t *testing.T) {
 }
 
 func Test_ProcessProfileTGMNew(t *testing.T) {
-	unitTest = true
+	_, restorePins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
+	defer restorePins()
+	restoreDelay := setupMockDelayCompensation()
+	defer restoreDelay()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 	profile, err := loadProfile("./testdata/profile-tgm.yaml")
@@ -93,6 +96,10 @@ func Test_ProcessProfileTGMNew(t *testing.T) {
 
 // Test that the profile with no phase inputs is processed correctly
 func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
+	_, restoreDPLLPins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
+	defer restoreDPLLPins()
+	restoreDelay := setupMockDelayCompensation()
+	defer restoreDelay()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 
@@ -106,9 +113,9 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 
 	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
 
-	// EnableE810Outputs reads the ptp directory and writes to SMA2 and period
-	mockFS.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
-	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte("2 2"), os.FileMode(0o666), nil)
+	// EnableE810Outputs reads the ptp directory and writes period (SMA2 is now via DPLL)
+	mockFS.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+	mockFS.AllowReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
 	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0o666), nil)
 
 	profile, err := loadProfile("./testdata/profile-tbc-no-input-delays.yaml")
@@ -119,7 +126,7 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
-	assert.Equal(t, 12, mockPinConfig.actualPinSetCount)
+	assert.Equal(t, 0, mockPinConfig.actualPinSetCount)
 	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 
 	// Verify that clockChain was initialized (SetPinDefaults is called as part of InitClockChain)
@@ -134,9 +141,12 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 }
 
 func Test_ProcessProfileTGMOld(t *testing.T) {
+	_, restorePins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
+	defer restorePins()
+	restoreDelay := setupMockDelayCompensation()
+	defer restoreDelay()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
-	unitTest = true
 	profile, err := loadProfile("./testdata/profile-tgm-old.yaml")
 	assert.NoError(t, err)
 	p, d := E810("e810")
@@ -151,6 +161,21 @@ func Test_ProcessProfileTGMOld(t *testing.T) {
 }
 
 func TestEnableE810Outputs(t *testing.T) {
+	mockPinSet, restorePinSet := setupBatchPinSetMock()
+	defer restorePinSet()
+
+	sma2Pin := dpll.PinInfo{
+		ID:           10,
+		ClockID:      1000,
+		BoardLabel:   "SMA2",
+		Type:         dpll.PinTypeEXT,
+		Capabilities: dpll.PinCapDir | dpll.PinCapPrio | dpll.PinCapState,
+		ParentDevice: []dpll.PinParentDevice{
+			{ParentID: 1, Direction: dpll.PinDirectionOutput},
+			{ParentID: 2, Direction: dpll.PinDirectionOutput},
+		},
+	}
+
 	tests := []struct {
 		name          string
 		setupMock     func(*MockFileSystem)
@@ -158,16 +183,45 @@ func TestEnableE810Outputs(t *testing.T) {
 		expectedError string
 	}{
 		{
-			name: "Successful execution - single PHC",
+			name: "DPLL path - no sysfs SMA pins",
 			clockChain: &ClockChain{
-				LeadingNIC: CardInfo{Name: "ens4f0"},
+				LeadingNIC: CardInfo{Name: "ens4f0", DpllClockID: 1000},
+				DpllPins:   &mockedDPLLPins{pins: dpllPins{&sma2Pin}},
 			},
 			setupMock: func(m *MockFileSystem) {
-				phcEntries := []os.DirEntry{
-					MockDirEntry{name: "ptp0", isDir: true},
-				}
-				m.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
-				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte("2 2"), os.FileMode(0o666), nil)
+				phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+				m.ExpectReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
+				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0o666), nil)
+			},
+			expectedError: "",
+		},
+		{
+			name: "Sysfs path - SMA pins available",
+			clockChain: &ClockChain{
+				LeadingNIC: CardInfo{Name: "ens4f0", DpllClockID: 1000},
+				DpllPins:   &mockedDPLLPins{pins: dpllPins{&sma2Pin}},
+			},
+			setupMock: func(m *MockFileSystem) {
+				phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+				m.ExpectReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", []byte("0 1"), nil)
+				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte{}, os.FileMode(0o666), nil)
+				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0o666), nil)
+			},
+			expectedError: "",
+		},
+		{
+			name: "Sysfs path - SMA2 write fails",
+			clockChain: &ClockChain{
+				LeadingNIC: CardInfo{Name: "ens4f0", DpllClockID: 1000},
+				DpllPins:   &mockedDPLLPins{pins: dpllPins{&sma2Pin}},
+			},
+			setupMock: func(m *MockFileSystem) {
+				phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+				m.ExpectReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", []byte("0 1"), nil)
+				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte{}, os.FileMode(0o666), errors.New("SMA2 write failed"))
 				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0o666), nil)
 			},
 			expectedError: "",
@@ -175,7 +229,8 @@ func TestEnableE810Outputs(t *testing.T) {
 		{
 			name: "ReadDir fails",
 			clockChain: &ClockChain{
-				LeadingNIC: CardInfo{Name: "ens4f0"},
+				LeadingNIC: CardInfo{Name: "ens4f0", DpllClockID: 1000},
+				DpllPins:   &mockedDPLLPins{pins: dpllPins{&sma2Pin}},
 			},
 			setupMock: func(m *MockFileSystem) {
 				m.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", []os.DirEntry{}, errors.New("permission denied"))
@@ -185,7 +240,8 @@ func TestEnableE810Outputs(t *testing.T) {
 		{
 			name: "No PHC directories found",
 			clockChain: &ClockChain{
-				LeadingNIC: CardInfo{Name: "ens4f0"},
+				LeadingNIC: CardInfo{Name: "ens4f0", DpllClockID: 1000},
+				DpllPins:   &mockedDPLLPins{pins: dpllPins{&sma2Pin}},
 			},
 			setupMock: func(m *MockFileSystem) {
 				m.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", []os.DirEntry{}, nil)
@@ -193,54 +249,43 @@ func TestEnableE810Outputs(t *testing.T) {
 			expectedError: "e810 cards should have one PHC per NIC, but ens4f0 has 0",
 		},
 		{
-			name: "Multiple PHC directories found (warning case)",
+			name: "Multiple PHC directories (warning case)",
 			clockChain: &ClockChain{
-				LeadingNIC: CardInfo{Name: "ens4f0"},
+				LeadingNIC: CardInfo{Name: "ens4f0", DpllClockID: 1000},
+				DpllPins:   &mockedDPLLPins{pins: dpllPins{&sma2Pin}},
 			},
 			setupMock: func(m *MockFileSystem) {
 				phcEntries := []os.DirEntry{
 					MockDirEntry{name: "ptp0", isDir: true},
 					MockDirEntry{name: "ptp1", isDir: true},
 				}
-				m.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
-				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte("2 2"), os.FileMode(0o666), nil)
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+				m.ExpectReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
 				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0o666), nil)
 			},
 			expectedError: "",
 		},
 		{
-			name: "SMA2 write fails",
-			clockChain: &ClockChain{
-				LeadingNIC: CardInfo{Name: "ens4f0"},
-			},
-			setupMock: func(m *MockFileSystem) {
-				phcEntries := []os.DirEntry{
-					MockDirEntry{name: "ptp0", isDir: true},
-				}
-				m.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
-				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte("2 2"), os.FileMode(0o666), errors.New("write failed"))
-			},
-			expectedError: "e810 failed to write 2 2 to /sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2: write failed",
-		},
-		{
 			name: "Period write fails - should not return error but log",
 			clockChain: &ClockChain{
-				LeadingNIC: CardInfo{Name: "ens4f0"},
+				LeadingNIC: CardInfo{Name: "ens4f0", DpllClockID: 1000},
+				DpllPins:   &mockedDPLLPins{pins: dpllPins{&sma2Pin}},
 			},
 			setupMock: func(m *MockFileSystem) {
-				phcEntries := []os.DirEntry{
-					MockDirEntry{name: "ptp0", isDir: true},
-				}
-				m.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
-				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte("2 2"), os.FileMode(0o666), nil)
+				phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+				m.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+				m.ExpectReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
 				m.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0o666), errors.New("period write failed"))
 			},
-			expectedError: "", // Function doesn't return error for period write failure
+			expectedError: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			mockPinSet.reset()
+			DpllPins = &mockedDPLLPins{pins: dpllPins{&sma2Pin}}
+
 			// Setup mock filesystem
 			mockFS, restoreFs := setupMockFS()
 			defer restoreFs()
@@ -264,7 +309,6 @@ func TestEnableE810Outputs(t *testing.T) {
 }
 
 func Test_AfterRunPTPCommandE810ClockChain(t *testing.T) {
-	unitTest = true
 	profile, err := loadProfile("./testdata/profile-tgm.yaml")
 	assert.NoError(t, err)
 	p, d := E810("e810")
@@ -302,6 +346,128 @@ func Test_AfterRunPTPCommandE810ClockChain(t *testing.T) {
 	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-exit")
 	assert.Error(t, err)
 	mClockChain.assertCallCounts(t, 2, 0, 0)
+}
+
+func TestPinSetHasSMAInput(t *testing.T) {
+	tests := []struct {
+		name     string
+		pins     pinSet
+		expected bool
+	}{
+		{
+			name:     "SMA1 input",
+			pins:     pinSet{"SMA1": "1 1"},
+			expected: true,
+		},
+		{
+			name:     "SMA2 input",
+			pins:     pinSet{"SMA2": "1 2"},
+			expected: true,
+		},
+		{
+			name:     "SMA1 input with leading spaces",
+			pins:     pinSet{"SMA1": "  1 1  "},
+			expected: true,
+		},
+		{
+			name:     "SMA1 disabled",
+			pins:     pinSet{"SMA1": "0 1"},
+			expected: false,
+		},
+		{
+			name:     "SMA2 output",
+			pins:     pinSet{"SMA2": "2 2"},
+			expected: false,
+		},
+		{
+			name:     "no SMA pins",
+			pins:     pinSet{"U.FL1": "1 1"},
+			expected: false,
+		},
+		{
+			name:     "empty pinset",
+			pins:     pinSet{},
+			expected: false,
+		},
+		{
+			name:     "both SMA disabled",
+			pins:     pinSet{"SMA1": "0 1", "SMA2": "0 2"},
+			expected: false,
+		},
+		{
+			name:     "SMA1 disabled but SMA2 input",
+			pins:     pinSet{"SMA1": "0 1", "SMA2": "1 2"},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, pinSetHasSMAInput(tt.pins))
+		})
+	}
+}
+
+func TestDevicePins_DPLL_SMAInput_SetsGNSSPriority(t *testing.T) {
+	sma1Pin := makeTwoParentPin(1, "SMA1", 1000,
+		dpll.PinDirectionInput, dpll.PinDirectionInput)
+	gnssPin := makeTwoParentPin(2, "GNSS-1PPS", 1000,
+		dpll.PinDirectionInput, dpll.PinDirectionInput)
+	pins := makePins(sma1Pin, gnssPin)
+
+	ps := pinSet{"SMA1": "1 1"}
+	commands := pins.GetCommandsForPluginPinSet(1000, ps)
+
+	if pinSetHasSMAInput(ps) {
+		gnssPinInfo := pins.GetByLabel("GNSS-1PPS", 1000)
+		if gnssPinInfo != nil {
+			gnssCommands := SetPinControlData(*gnssPinInfo, PinParentControl{
+				EecPriority: 4,
+				PpsPriority: 4,
+			})
+			commands = append(commands, gnssCommands...)
+		}
+	}
+
+	gnssFound := false
+	for _, cmd := range commands {
+		if cmd.ID == 2 {
+			gnssFound = true
+			assert.Len(t, cmd.PinParentCtl, 2)
+			for _, pc := range cmd.PinParentCtl {
+				assert.NotNil(t, pc.Prio)
+				assert.Equal(t, uint32(4), *pc.Prio)
+			}
+		}
+	}
+	assert.True(t, gnssFound, "GNSS-1PPS command should be present")
+}
+
+func TestDevicePins_DPLL_NoSMAInput_NoGNSSCommand(t *testing.T) {
+	sma2Pin := makeTwoParentPin(1, "SMA2", 1000,
+		dpll.PinDirectionOutput, dpll.PinDirectionOutput)
+	gnssPin := makeTwoParentPin(2, "GNSS-1PPS", 1000,
+		dpll.PinDirectionInput, dpll.PinDirectionInput)
+	pins := makePins(sma2Pin, gnssPin)
+
+	ps := pinSet{"SMA2": "2 2"}
+	commands := pins.GetCommandsForPluginPinSet(1000, ps)
+
+	if pinSetHasSMAInput(ps) {
+		gnssPinInfo := pins.GetByLabel("GNSS-1PPS", 1000)
+		if gnssPinInfo != nil {
+			gnssCommands := SetPinControlData(*gnssPinInfo, PinParentControl{
+				EecPriority: 4,
+				PpsPriority: 4,
+			})
+			commands = append(commands, gnssCommands...)
+		}
+	}
+
+	for _, cmd := range commands {
+		assert.NotEqual(t, uint32(2), cmd.ID,
+			"GNSS-1PPS command should NOT be present when SMA is output")
+	}
 }
 
 func Test_PopulateHwConfdigE810(t *testing.T) {

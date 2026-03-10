@@ -116,7 +116,7 @@ type PinInfoHR struct {
 type PinParentDeviceHR struct {
 	ParentID      uint32  `json:"parentID"`
 	Direction     string  `json:"direction"`
-	Prio          uint32  `json:"prio"`
+	Prio          *uint32 `json:"prio,omitempty"`
 	State         string  `json:"state"`
 	PhaseOffsetPs float64 `json:"phaseOffsetPs"`
 }

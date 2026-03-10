@@ -225,7 +225,7 @@ type HardwareConfigManager struct {
 func NewHardwareConfigManager(kubeClient kubernetes.Interface, namespace string) *HardwareConfigManager {
 	hcm := &HardwareConfigManager{
 		hardwareConfigs: make([]enrichedHardwareConfig, 0),
-		pinApplier:      func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(&cmds) },
+		pinApplier:      func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(cmds) },
 		hwDefaultsCache: make(map[string]*HardwareDefaults),
 		clockIDCache:    make(map[string]uint64),
 		sysfsWriter: func(path, value string) error {
@@ -1828,7 +1828,7 @@ func (hcm *HardwareConfigManager) overrideExecutors(pin func([]dpll.PinParentDev
 }
 
 func (hcm *HardwareConfigManager) resetExecutors() {
-	hcm.pinApplier = func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(&cmds) }
+	hcm.pinApplier = func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(cmds) }
 	hcm.sysfsWriter = func(path, value string) error { return os.WriteFile(path, []byte(value), 0o644) }
 }
 

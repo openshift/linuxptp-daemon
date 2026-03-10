@@ -1,6 +1,5 @@
 name: grandmaster
 ptpSettings:
-  unitTest: /tmp/test
 phc2sysOpts: -a -r -n 24 -N 8 -R 16 -u 0
 plugins:
   e810:

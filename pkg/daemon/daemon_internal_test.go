@@ -67,10 +67,10 @@ type hrPin struct {
 }
 
 type hrParentDev struct {
-	ParentID  uint32 `json:"parentID"`
-	Direction string `json:"direction"`
-	Prio      uint32 `json:"prio"`
-	State     string `json:"state"`
+	ParentID  uint32  `json:"parentID"`
+	Direction string  `json:"direction"`
+	Prio      *uint32 `json:"prio,omitempty"`
+	State     string  `json:"state"`
 }
 
 // ParseClockIDHex parses a hex clock ID string (e.g., "0x507c6f...") into uint64.
