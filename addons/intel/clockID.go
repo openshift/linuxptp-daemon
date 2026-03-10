@@ -38,8 +38,7 @@ func getPCIClockID(device string) uint64 {
 	var offset uint16 = pciConfigSpaceSize
 	var id uint16
 	for {
-		// TODO: Add test for == case
-		if len(b) <= int(offset) {
+		if len(b) < int(offset)+pciExtendedCapabilityDataOffset {
 			glog.Errorf("PCI config space too short (%d bytes) for device %s", len(b), device)
 			return 0
 		}
