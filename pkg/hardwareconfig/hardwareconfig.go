@@ -225,7 +225,7 @@ type HardwareConfigManager struct {
 func NewHardwareConfigManager(kubeClient kubernetes.Interface, namespace string) *HardwareConfigManager {
 	hcm := &HardwareConfigManager{
 		hardwareConfigs: make([]enrichedHardwareConfig, 0),
-		pinApplier:      func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(&cmds) },
+		pinApplier:      func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(cmds) },
 		hwDefaultsCache: make(map[string]*HardwareDefaults),
 		clockIDCache:    make(map[string]uint64),
 		sysfsWriter: func(path, value string) error {
@@ -511,20 +511,18 @@ func (hcm *HardwareConfigManager) populatePtpSettingsFromHardware(nodeProfile *p
 
 	// 2) Derive leadingInterface and upstreamPort for T-BC-like configurations
 	if cc.Behavior != nil {
-		upstreamPort := ""
+		var allUpstreamPorts []string
 		for _, source := range cc.Behavior.Sources {
 			if source.SourceType == "ptpTimeReceiver" && len(source.PTPTimeReceivers) > 0 {
-				upstreamPort = source.PTPTimeReceivers[0]
+				allUpstreamPorts = source.PTPTimeReceivers
 				break
 			}
 		}
-		if upstreamPort != "" {
-			// Set upstreamPort if not present
+		if len(allUpstreamPorts) > 0 {
 			if _, ok := nodeProfile.PtpSettings["upstreamPort"]; !ok {
-				nodeProfile.PtpSettings["upstreamPort"] = upstreamPort
-				glog.Infof("populatePtpSettings: set upstreamPort=%s", upstreamPort)
+				nodeProfile.PtpSettings["upstreamPort"] = strings.Join(allUpstreamPorts, ",")
+				glog.Infof("populatePtpSettings: set upstreamPort=%s", nodeProfile.PtpSettings["upstreamPort"])
 			}
-			// Resolve leadingInterface based on subsystem containing the upstreamPort
 			if _, ok := nodeProfile.PtpSettings["leadingInterface"]; !ok {
 				iface, err := hcm.getInterfaceNameFromSources("", cc)
 				if err == nil && iface != nil && *iface != "" {
@@ -1830,7 +1828,7 @@ func (hcm *HardwareConfigManager) overrideExecutors(pin func([]dpll.PinParentDev
 }
 
 func (hcm *HardwareConfigManager) resetExecutors() {
-	hcm.pinApplier = func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(&cmds) }
+	hcm.pinApplier = func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(cmds) }
 	hcm.sysfsWriter = func(path, value string) error { return os.WriteFile(path, []byte(value), 0o644) }
 }
 

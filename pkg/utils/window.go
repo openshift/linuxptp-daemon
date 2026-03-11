@@ -141,6 +141,11 @@ func (w *Window) IsFull() bool {
 	return w.full
 }
 
+// IsEmpty returns true if no values have been inserted into the window
+func (w *Window) IsEmpty() bool {
+	return w.nextIndex == 0 && !w.full
+}
+
 // SetWeights sets the weights for the window values.
 // Returns an error if the weights slice is larger than the window size.
 func (w *Window) SetWeights(weights []float64) error {

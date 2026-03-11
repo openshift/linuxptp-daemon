@@ -58,6 +58,7 @@ type FileSystemInterface interface {
 	ReadDir(dirname string) ([]os.DirEntry, error)
 	WriteFile(filename string, data []byte, perm os.FileMode) error
 	ReadFile(filename string) ([]byte, error)
+	ReadLink(filename string) (string, error)
 }
 
 // RealFileSystem implements FileSystemInterface using real OS operations
@@ -76,6 +77,11 @@ func (fs *RealFileSystem) WriteFile(filename string, data []byte, perm os.FileMo
 // ReadFile reads the data from the file specified by the filename
 func (fs *RealFileSystem) ReadFile(filename string) ([]byte, error) {
 	return os.ReadFile(filename)
+}
+
+// ReadLink returns the destination of a symbolic link.
+func (fs *RealFileSystem) ReadLink(filename string) (string, error) {
+	return os.Readlink(filename)
 }
 
 // Default filesystem implementation

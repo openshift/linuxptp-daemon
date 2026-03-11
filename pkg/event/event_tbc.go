@@ -1,6 +1,7 @@
 package event
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -269,9 +270,19 @@ func (e *EventHandler) updateDownstreamData(cfgName string) {
 		return
 	}
 	state := data.state
+
+	// Cancel any in-flight downstream update for this config before launching
+	// a new one. This prevents stale goroutines from overwriting state that a
+	// newer transition has already set.
+	if cancel, exists := e.downstreamCancel[cfgName]; exists {
+		cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	e.downstreamCancel[cfgName] = cancel
 	e.Unlock()
+
 	if state == PTP_LOCKED {
-		go e.downstreamAnnounceIWF(cfgName)
+		go e.downstreamAnnounceIWF(ctx, cfgName)
 	} else {
 		go e.announceLocalData(cfgName)
 	}
@@ -373,8 +384,27 @@ func (e *EventHandler) announceLocalData(cfgName string) {
 	}()
 }
 
+// applyIfLockedBC acquires the lock, checks that the BC state is still
+// PTP_LOCKED, and if so runs fn under the lock. Returns false if the state
+// is no longer LOCKED (fn is not called). The lock is always released via defer.
+func (e *EventHandler) applyIfLockedBC(cfgName, context string, fn func()) bool {
+	e.Lock()
+	defer e.Unlock()
+	stateData, ok := e.clkSyncState[cfgName]
+	if !ok || stateData.state != PTP_LOCKED {
+		state := PTP_NOTSET
+		if ok {
+			state = stateData.state
+		}
+		glog.Infof("downstreamAnnounceIWF: BC state is %s (not LOCKED) %s, aborting", state, context)
+		return false
+	}
+	fn()
+	return true
+}
+
 // this function runs in a goroutine
-func (e *EventHandler) downstreamAnnounceIWF(cfgName string) {
+func (e *EventHandler) downstreamAnnounceIWF(ctx context.Context, cfgName string) {
 	ptpCfgName := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
 	glog.Infof("downstreamAnnounceIWF: %s", ptpCfgName)
 
@@ -389,12 +419,23 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string) {
 		return
 	}
 
-	// Update LeadingClockData upstream fields under lock
-	e.Lock()
-	e.LeadingClockData.upstreamParentDataSet = &upsteamData.ParentDataSet
-	e.LeadingClockData.upstreamTimeProperties = &upsteamData.TimePropertiesDS
-	e.LeadingClockData.upstreamCurrentDSStepsRemoved = upsteamData.CurrentDS.StepsRemoved
-	e.Unlock()
+	if ctx.Err() != nil {
+		glog.Info("downstreamAnnounceIWF: cancelled after PMC fetch")
+		return
+	}
+
+	if !e.applyIfLockedBC(cfgName, "after PMC fetch", func() {
+		e.LeadingClockData.upstreamParentDataSet = &upsteamData.ParentDataSet
+		e.LeadingClockData.upstreamTimeProperties = &upsteamData.TimePropertiesDS
+		e.LeadingClockData.upstreamCurrentDSStepsRemoved = upsteamData.CurrentDS.StepsRemoved
+	}) {
+		return
+	}
+
+	if ctx.Err() != nil {
+		glog.Info("downstreamAnnounceIWF: cancelled before announce")
+		return
+	}
 
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
@@ -419,11 +460,15 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string) {
 	}
 	glog.Infof("%++v", es)
 
-	// Update LeadingClockData downstream fields under lock
-	e.Lock()
-	e.LeadingClockData.downstreamParentDataSet = &upsteamData.ParentDataSet
-	e.LeadingClockData.downstreamTimeProperties = &upsteamData.TimePropertiesDS
-	e.Unlock()
+	if ctx.Err() != nil {
+		glog.Info("downstreamAnnounceIWF: cancelled before downstream update")
+		return
+	}
+
+	e.applyIfLockedBC(cfgName, "after downstream announce", func() {
+		e.LeadingClockData.downstreamParentDataSet = &upsteamData.ParentDataSet
+		e.LeadingClockData.downstreamTimeProperties = &upsteamData.TimePropertiesDS
+	})
 }
 
 func (e *EventHandler) inSyncCondition(cfgName string) bool {
@@ -487,14 +532,16 @@ func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 	staleTime := time.Now().UnixMilli() - StaleEventAfter
 	if data, ok := e.data[cfgName]; ok {
 		for _, d := range data {
+			if d.window.IsEmpty() {
+				continue
+			}
+			if !d.window.IsFull() {
+				glog.Infof("Largest offset %d (window not full for %s)", FaultyPhaseOffset, d.ProcessName)
+				return FaultyPhaseOffset
+			}
 			for _, dd := range d.Details {
-				// Skip stale data for all offsets, including the first one
 				if dd.time < staleTime {
 					continue
-				}
-				if !d.window.IsFull() {
-					glog.Info("Largest offset ", FaultyPhaseOffset)
-					return FaultyPhaseOffset
 				}
 				if worstOffset == FaultyPhaseOffset {
 					if dd.IFace == e.clkSyncState[cfgName].leadingIFace {
@@ -532,14 +579,27 @@ func (e *EventHandler) freeRunCondition(cfgName string) bool {
 	}
 	if data, ok := e.data[cfgName]; ok {
 		for _, d := range data {
-			if d.ProcessName == DPLL {
+			switch d.ProcessName {
+			case DPLL:
 				for _, dd := range d.Details {
 					if dd.IFace == e.clkSyncState[cfgName].leadingIFace {
 						if math.Abs(float64(dd.Offset)) > float64(e.LeadingClockData.toFreeRunThreshold) {
-							glog.Infof("free-run condition on DPLL ", dd.IFace)
+							glog.Infof("free-run condition on DPLL %s", dd.IFace)
 							return true
 						}
 					}
+				}
+			case PTP4l:
+				if d.window.IsEmpty() {
+					continue
+				}
+				// Use the window mean rather than per-detail offsets: the active TR port
+				// (which feeds the window via sendPtp4lOffsetEvent) may have a different
+				// interface name than the DPLL leading interface on the same NIC.
+				ptp4lAvgOffset := int64(d.window.Mean())
+				if math.Abs(float64(ptp4lAvgOffset)) > float64(e.LeadingClockData.toFreeRunThreshold) {
+					glog.Infof("free-run condition on PTP4l, avg offset %d", ptp4lAvgOffset)
+					return true
 				}
 			}
 		}

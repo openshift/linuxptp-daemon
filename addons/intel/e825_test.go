@@ -264,12 +264,12 @@ func Test_setupGnss(t *testing.T) {
 				assert.Error(tt, err)
 			} else {
 				assert.NoError(tt, err)
-				assert.Equal(tt, tc.expectedCmdCount, len(*mockPinSet.commands))
+				assert.Equal(tt, tc.expectedCmdCount, len(mockPinSet.commands))
 				expectedState := uint32(dpll.PinStateSelectable)
 				if tc.gnss.Disabled {
 					expectedState = uint32(dpll.PinStateDisconnected)
 				}
-				for _, cmd := range *mockPinSet.commands {
+				for _, cmd := range mockPinSet.commands {
 					for _, ctrl := range cmd.PinParentCtl {
 						assert.Equal(tt, expectedState, *ctrl.State)
 					}
@@ -334,7 +334,7 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 				assert.NoError(tt, err)
 				assert.Equal(tt, tc.expectedPinSets, mockPins.actualPinSetCount)
 				assert.Equal(tt, tc.expectedPinFrqs, mockPins.actualPinFrqCount)
-				assert.Equal(tt, 1, len(*mockDpllPinset.commands))
+				assert.Equal(tt, 1, len(mockDpllPinset.commands))
 			}
 		})
 	}

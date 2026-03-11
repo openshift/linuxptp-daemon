@@ -461,14 +461,14 @@ func GetPinStateUint32(s string) (uint32, error) {
 }
 
 // BatchPinSet applies a batch of DPLL pin commands
-func BatchPinSet(commands *[]dpll.PinParentDeviceCtl) error {
+func BatchPinSet(commands []dpll.PinParentDeviceCtl) error {
 	conn, err := dpll.Dial(nil)
 	if err != nil {
 		return fmt.Errorf("failed to dial DPLL: %v", err)
 	}
 	//nolint:errcheck
 	defer conn.Close()
-	for _, command := range *commands {
+	for _, command := range commands {
 		glog.Infof("DPLL pin command %s", formatDpllPinCommand(command))
 		b, encodeErr := dpll.EncodePinControl(command)
 		if encodeErr != nil {

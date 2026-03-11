@@ -76,6 +76,20 @@ func (d *Data) GetDataDetails(iface string) *DataDetails {
 }
 
 func (d *Data) AddEvent(event EventChannel) {
+	// When a source-lost event arrives, propagate to all details that still
+	// show LOCKED. The active TR port may differ from ports that received
+	// earlier offset events, leaving stale LOCKED states on inactive details
+	// that would otherwise fool isSourceLostBC.
+	if event.SourceLost {
+		for _, dd := range d.Details {
+			if dd.IFace != event.IFace && dd.State == PTP_LOCKED {
+				dd.State = event.State
+				dd.sourceLost = true
+				dd.time = event.Time
+			}
+		}
+	}
+
 	for _, dd := range d.Details {
 		if dd.IFace == event.IFace {
 			if dd.time <= event.Time {

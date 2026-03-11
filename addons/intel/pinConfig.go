@@ -42,6 +42,17 @@ func (r realPinConfig) applyPinSet(device string, pins pinSet) error {
 	return errors.Join(errList...)
 }
 
+func hasSysfsSMAPins(device string) bool {
+	deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
+	phcs, err := filesystem.ReadDir(deviceDir)
+	if err != nil || len(phcs) == 0 {
+		return false
+	}
+	sma1Path := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/SMA1", device, phcs[0].Name())
+	_, err = filesystem.ReadFile(sma1Path)
+	return err == nil
+}
+
 func (r realPinConfig) applyPinFrq(device string, values frqSet) error {
 	deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
 	phcs, err := filesystem.ReadDir(deviceDir)
