@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -462,4 +463,144 @@ func TestEmitProcessStatusLog_FormatIsCorrect(t *testing.T) {
 	}
 
 	e2.setConn(nil) // cleanup
+}
+
+// --- EmitPortRoleLogs ---
+
+func TestEmitPortRoleLogs_AppendsNewline(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// Set port role events without trailing newlines (as parser produces them)
+	e.SetPortRole("ptp4l.0.config", "ens3f2", &parser.PTPEvent{
+		Raw: "ptp4l[137078.691]: [ptp4l.0.config:5] port 1 (ens3f2): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
+	})
+	e.SetPortRole("ptp4l.0.config", "ens3f1", &parser.PTPEvent{
+		Raw: "ptp4l[137078.515]: [ptp4l.0.config:5] port 2 (ens3f1): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+	})
+
+	e.EmitPortRoleLogs()
+
+	// Collect all data from the socket (may arrive in one or multiple reads)
+	var allData strings.Builder
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case got := <-received:
+			allData.WriteString(got)
+			// Check if we have all expected lines
+			lines := strings.Split(strings.TrimSuffix(allData.String(), "\n"), "\n")
+			if len(lines) >= 2 {
+				goto done
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for port role messages, got: %q", allData.String())
+		}
+	}
+done:
+
+	// Split by newline and verify each line is a separate, parseable log entry
+	combined := allData.String()
+	assert.True(t, strings.HasSuffix(combined, "\n"), "combined output should end with newline")
+	lines := strings.Split(strings.TrimSuffix(combined, "\n"), "\n")
+	assert.Equal(t, 2, len(lines), "should have exactly 2 newline-separated lines")
+	for i, line := range lines {
+		assert.Contains(t, line, "ptp4l.0.config", "line %d should contain config name", i)
+		assert.NotEmpty(t, line, "line %d should not be empty", i)
+	}
+
+	e.setConn(nil) // cleanup
+}
+
+func TestEmitPortRoleLogs_PreservesExistingNewline(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// Set a port role event that already has a trailing newline
+	e.SetPortRole("ptp4l.0.config", "ens3f2", &parser.PTPEvent{
+		Raw: "ptp4l[137078.691]: [ptp4l.0.config:5] port 1 (ens3f2): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED\n",
+	})
+
+	e.EmitPortRoleLogs()
+
+	select {
+	case got := <-received:
+		// Should have exactly one trailing newline, not double
+		assert.True(t, strings.HasSuffix(got, "\n"), "message should end with newline")
+		assert.False(t, strings.HasSuffix(got, "\n\n"), "message should not have double newline")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for port role message")
+	}
+
+	e.setConn(nil) // cleanup
+}
+
+// --- EmitClockSyncLogs ---
+
+func TestEmitClockSyncLogs_WritesWithNewline(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// Set clock sync state with logs that already have trailing newlines (as GetLogData produces)
+	e.Lock()
+	e.clkSyncState["ptp4l.0.config"] = &clockSyncState{
+		clkLog: "GM[1710000000]:[ptp4l.0.config] ens3f2 T-GM-STATUS s2\n",
+	}
+	e.clkSyncState["ptp4l.1.config"] = &clockSyncState{
+		clkLog: "GM[1710000001]:[ptp4l.1.config] ens2f0 T-GM-STATUS s2\n",
+	}
+	e.Unlock()
+
+	e.EmitClockSyncLogs()
+
+	// Collect all data from the socket
+	var allData strings.Builder
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case got := <-received:
+			allData.WriteString(got)
+			lines := strings.Split(strings.TrimSuffix(allData.String(), "\n"), "\n")
+			if len(lines) >= 2 {
+				goto done
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for clock sync messages, got: %q", allData.String())
+		}
+	}
+done:
+
+	combined := allData.String()
+	assert.True(t, strings.HasSuffix(combined, "\n"), "combined output should end with newline")
+	lines := strings.Split(strings.TrimSuffix(combined, "\n"), "\n")
+	assert.Equal(t, 2, len(lines), "should have exactly 2 newline-separated lines")
+	for i, line := range lines {
+		assert.Contains(t, line, "T-GM-STATUS", "line %d should contain T-GM-STATUS", i)
+	}
+
+	e.setConn(nil) // cleanup
 }
