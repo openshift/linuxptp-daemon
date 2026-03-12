@@ -367,6 +367,16 @@ func ExtractNavStatus(output string) int64 {
 	return -1
 }
 
+// UBX-NAV-TIMELS SrcOfCurrLs / SrcOfLsChange source identifiers
+const (
+	LeapSourceGPS     uint8 = 2
+	LeapSourceSBAS    uint8 = 3
+	LeapSourceBeiDou  uint8 = 4
+	LeapSourceGalileo uint8 = 5
+	LeapSourceGLONASS uint8 = 6
+	LeapSourceNavIC   uint8 = 7
+)
+
 type TimeLs struct {
 	//Information source for the current number
 	// of leap seconds

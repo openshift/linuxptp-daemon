@@ -29,7 +29,6 @@ const (
 	gpsToTaiDiff           = 19
 	curreLsValidMask       = 0x1
 	timeToLsEventValidMask = 0x2
-	leapSourceGps          = 2
 	leapConfigMapName      = "leap-configmap"
 	MaintenancePeriod      = time.Minute * 1
 	pmcWindowStartHours    = 12
@@ -54,10 +53,11 @@ type LeapManager struct {
 	leapFilePath string
 	leapFileName string
 	// UTC offset and its validity time
-	utcOffset       int
-	utcOffsetTime   time.Time
-	ptp4lConfigPath string
-	pmcLeapSent     bool
+	utcOffset          int
+	utcOffsetTime      time.Time
+	ptp4lConfigPath    string
+	pmcLeapSent        bool
+	allowedLeapSources map[uint8]bool
 }
 
 type LeapEvent struct {
@@ -82,13 +82,14 @@ func New(kubeclient kubernetes.Interface, namespace string) (*LeapManager, error
 		defer lock.Unlock()
 		if LeapMgr == nil {
 			lm := &LeapManager{
-				UbloxLsInd:   make(chan ublox.TimeLs, 2),
-				Close:        make(chan bool),
-				client:       kubeclient,
-				namespace:    namespace,
-				leapFile:     LeapFile{},
-				leapFilePath: defaultLeapFilePath,
-				leapFileName: defaultLeapFileName,
+				UbloxLsInd:         make(chan ublox.TimeLs, 2),
+				Close:              make(chan bool),
+				client:             kubeclient,
+				namespace:          namespace,
+				leapFile:           LeapFile{},
+				leapFilePath:       defaultLeapFilePath,
+				leapFileName:       defaultLeapFileName,
+				allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true},
 			}
 			err := lm.populateLeapData()
 			if err != nil {
@@ -161,6 +162,13 @@ func parseLeapFile(b []byte) (*LeapFile, error) {
 func (l *LeapManager) SetPtp4lConfigPath(path string) {
 	glog.Info("set Leap manager ptp4l config file name to ", path)
 	l.ptp4lConfigPath = path
+}
+
+// SetAllowedLeapSources configures which GNSS leap second sources
+// are accepted by processLeapIndication. Keys are ublox.LeapSourceXxx constants.
+func (l *LeapManager) SetAllowedLeapSources(sources map[uint8]bool) {
+	glog.Infof("set Leap manager allowed leap sources to %v", sources)
+	l.allowedLeapSources = sources
 }
 
 func (l *LeapManager) renderLeapData() (*bytes.Buffer, error) {
@@ -375,8 +383,8 @@ type leapIndResult struct {
 func (l *LeapManager) processLeapIndication(data *ublox.TimeLs) (*leapIndResult, error) {
 
 	glog.Infof("Leap indication: %+v", data)
-	if data.SrcOfCurrLs != leapSourceGps {
-		glog.Info("Discarding Leap event not originating from GPS")
+	if !l.allowedLeapSources[data.SrcOfCurrLs] {
+		glog.Infof("Discarding Leap event from source %d (allowed: %v)", data.SrcOfCurrLs, l.allowedLeapSources)
 		return nil, nil
 	}
 	result := &leapIndResult{}
