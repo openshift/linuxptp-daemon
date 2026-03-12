@@ -47,11 +47,6 @@ type E825Opts struct {
 	Gnss     GnssOptions `json:"gnss"`
 }
 
-// GnssOptions defines GNSS-specific options for the e825
-type GnssOptions struct {
-	Disabled bool `json:"disabled"`
-}
-
 // E825PluginData is the data structure for e825 plugin
 type E825PluginData struct {
 	PluginData
@@ -67,6 +62,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	pluginData := (*data).(*E825PluginData)
 	glog.Infof("calling onPTPConfigChange for e825 plugin (%s)", *nodeProfile.Name)
 	var e825Opts E825Opts
+	e825Opts.Gnss.LeapSources = defaultLeapSourceOptions()
 	var err error
 	var optsByteArray []byte
 
@@ -143,6 +139,8 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 
 			// Always enforce GNSS setting (default = enabled)
 			pluginData.setupGnss(e825Opts.Gnss)
+
+			updateLeapManagerSources(e825Opts.Gnss.LeapSources)
 
 			// BC sanity check and pin setup
 			if tbcConfigured(nodeProfile) {
