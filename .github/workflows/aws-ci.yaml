@@ -112,6 +112,27 @@ jobs:
             rsync -r -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ptp-operator fedora@"$public_ip":~/.
             ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null fedora@"$public_ip" sudo ./ptp-operator/scripts/run-on-vm.sh "$private_ip"
 
+      - name: Collect artifacts from VM
+        if: always() && env.public_ip != ''
+        run: |
+            mkdir -p artifacts
+            ssh -i temp_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=10 \
+              fedora@"$public_ip" "sudo chmod -R a+r /tmp/artifacts/ 2>/dev/null" || true
+            rsync -r \
+              -e "ssh -i temp_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10" \
+              fedora@"$public_ip":/tmp/artifacts/ artifacts/ || true
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-pr${{ github.event.number }}-${{ github.run_id }}
+          path: artifacts/
+          retention-days: 7
+          if-no-files-found: warn
+
+
       - name: Cleanup - Delete EC2 instance
         if: always()  # Ensure cleanup runs even if previous steps fail
         run: |
