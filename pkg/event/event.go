@@ -1378,7 +1378,11 @@ func (e *EventHandler) EmitPortRoleLogs() {
 
 	for _, entry := range entries {
 		glog.Infof("Port Event %s", entry.raw)
-		if !e.writeLogToSocket(entry.raw) {
+		raw := entry.raw
+		if !strings.HasSuffix(raw, "\n") {
+			raw += "\n"
+		}
+		if !e.writeLogToSocket(raw) {
 			glog.Warning("Broken pipe detected while emitting port role logs, stopping.")
 			break
 		}
