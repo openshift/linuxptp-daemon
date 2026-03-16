@@ -32,6 +32,20 @@ var (
 			`\s+offset\s+(?P<offset>-?\d+)` +
 			`\s+(?P<servo_state>s\d+)?`,
 	)
+
+	// ts2phc[20748687.391]: [ts2phc.0.config:3] source ts not valid
+	noSourceTSRegex = regexp.MustCompile(
+		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s*\[(?P<config_name>.*\.\d+\.c.*g):?(?P<severity>\d*)\]` +
+			`\s*source ts not valid$`,
+	)
+	// NoSourceTSCount is reset to 0 with each valid timestamp(TS).
+	// Only will reach 2 with multiple logs in a row without valid TS.
+	// If it reaches 2, then ts2phc should leave holdover.
+	// This is required because ts2phc doesn't emit log specifically for
+	// exiting holdover.
+	// Not concerned about concurrency; will get to 2 even with race condition
+	NoSourceTSCount = 0
 )
 
 type ts2phcParsed struct {
@@ -120,6 +134,13 @@ func NewTS2PHCExtractor() *BaseMetricsExtractor[*ts2phcParsed] {
 					return metric, nil, err
 				},
 			},
+			{
+				Regex: noSourceTSRegex,
+				Extractor: func(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
+					extractNoSourceTS(parsed)
+					return nil, nil, nil
+				},
+			},
 		},
 	}
 }
@@ -141,6 +162,8 @@ func extractTS2PHCOffset(parsed *ts2phcParsed) (*Metrics, error) {
 	if parsed.Holdover != "" {
 		clockState = constants.ClockStateHoldover
 	}
+
+	NoSourceTSCount = 0
 
 	return &Metrics{
 		From:       constants.TS2PHC,
@@ -182,4 +205,10 @@ func extractTS2PHCnmeaStatus(parsed *ts2phcParsed) (*Metrics, error) {
 		Source:     constants.NmeaStatus,
 		Status:     statusMetrics,
 	}, nil
+}
+
+func extractNoSourceTS(*ts2phcParsed) {
+	if NoSourceTSCount < 2 {
+		NoSourceTSCount++
+	}
 }

@@ -389,6 +389,9 @@ func (e *EventHandler) updateGMState(cfgName string) clockSyncState {
 				// expecting to have at least one interface
 			case TS2PHCProcessName:
 				ts2phcState = d.State
+				if parser.NoSourceTSCount == 2 {
+					ts2phcState = PTP_FREERUN
+				}
 			}
 		}
 	} else {
@@ -439,7 +442,9 @@ func (e *EventHandler) updateGMState(cfgName string) clockSyncState {
 		case PTP_FREERUN:
 			if syncSrcLost {
 				switch ts2phcState {
-				case PTP_LOCKED, PTP_FREERUN:
+				case PTP_LOCKED:
+				case PTP_FREERUN:
+					e.clkSyncState[cfgName].state = PTP_FREERUN
 				// stay with last GM state and wait for DPLL to move to HOLDOVER
 				case PTP_HOLDOVER:
 					e.clkSyncState[cfgName].state = PTP_HOLDOVER

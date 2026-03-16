@@ -194,6 +194,18 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 		{
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
+			clockState:       event.PTP_HOLDOVER,
+			outOfSpec:        true,
+			iface:            "ens1f0",
+			values:           map[event.ValueType]interface{}{event.OFFSET: int64(99999), event.NMEA_STATUS: 0},
+			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
+			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
+			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 nmea_status 0 offset 99999 s1",
+			desc:             "ts2phc is not in locked state",
+		},
+		{
+			processName:      event.TS2PHCProcessName,
+			cfgName:          "ts2phc.0.config",
 			clockState:       event.PTP_FREERUN,
 			outOfSpec:        true,
 			iface:            "ens1f0",
