@@ -77,6 +77,17 @@ func Test_getPCIClockID(t *testing.T) {
 	clockID = getPCIClockID("truncated")
 	assert.Equal(t, notFound, clockID)
 	mfs.VerifyAllCalls(t)
+
+	// Config space barely holds capability ID but not the next-offset field;
+	// without a proper bounds check this would panic in Uint16(b[offset+2:]).
+	shortCap := make([]byte, pciConfigSpaceSize+2)
+	binary.LittleEndian.PutUint16(shortCap[pciConfigSpaceSize:], uint16(pciExtendedCapabilityDsnID+1))
+	mfs.ExpectReadFile("/sys/class/net/short_cap/device/config", shortCap, nil)
+	assert.NotPanics(t, func() {
+		clockID = getPCIClockID("short_cap")
+	})
+	assert.Equal(t, notFound, clockID)
+	mfs.VerifyAllCalls(t)
 }
 
 func Test_getClockIDByModule(t *testing.T) {
