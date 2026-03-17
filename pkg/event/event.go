@@ -700,6 +700,9 @@ func (e *EventHandler) reconnectEventSocket() bool {
 // Returns true if the connection is still usable for subsequent writes,
 // false if the connection is unavailable and remaining writes should be skipped.
 func (e *EventHandler) writeLogToSocket(l string) bool {
+	if !strings.HasSuffix(l, "\n") {
+		l += "\n"
+	}
 	conn := e.getConn()
 	if conn == nil {
 		return false
@@ -1378,11 +1381,7 @@ func (e *EventHandler) EmitPortRoleLogs() {
 
 	for _, entry := range entries {
 		glog.Infof("Port Event %s", entry.raw)
-		raw := entry.raw
-		if !strings.HasSuffix(raw, "\n") {
-			raw += "\n"
-		}
-		if !e.writeLogToSocket(raw) {
+		if !e.writeLogToSocket(entry.raw) {
 			glog.Warning("Broken pipe detected while emitting port role logs, stopping.")
 			break
 		}
@@ -1394,5 +1393,5 @@ func (e *EventHandler) EmitPortRoleLogs() {
 func (e *EventHandler) EmitProcessStatusLog(processName, cfgName string, status int64) {
 	message := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d", processName, time.Now().Unix(), cfgName, status)
 	glog.Info(message)
-	e.writeLogToSocket(message + "\n")
+	e.writeLogToSocket(message)
 }
