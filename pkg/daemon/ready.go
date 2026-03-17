@@ -76,10 +76,36 @@ func (h readyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func StartReadyServer(bindAddress string, tracker *ReadyTracker) {
+type metricHandler struct {
+	tracker *ReadyTracker
+}
+
+func (h metricHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	if isReady, _ := h.tracker.Ready(); !isReady {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+
+	go func() {
+		eventHandler := h.tracker.processManager.ptpEventHandler
+		eventHandler.EmitClockSyncLogs()
+		eventHandler.EmitPortRoleLogs()
+
+		processManager := h.tracker.processManager
+		go processManager.EmitProcessStatusLogs()
+		go processManager.EmitClockClassLogs()
+	}()
+}
+
+// StartReadyServer ...
+func StartReadyServer(bindAddress string, tracker *ReadyTracker, serveInitMetrics bool) {
 	glog.Info("Starting Ready Server")
 	mux := http.NewServeMux()
 	mux.Handle("/ready", readyHandler{tracker: tracker})
+	if serveInitMetrics {
+		mux.Handle("/emit-logs", metricHandler{tracker: tracker})
+	}
 	go utilwait.Until(func() {
 		err := http.ListenAndServe(bindAddress, mux)
 		if err != nil {
