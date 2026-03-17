@@ -697,6 +697,9 @@ func (e *EventHandler) reconnectEventSocket() bool {
 // Returns true if the connection is still usable for subsequent writes,
 // false if the connection is unavailable and remaining writes should be skipped.
 func (e *EventHandler) writeLogToSocket(l string) bool {
+	if !strings.HasSuffix(l, "\n") {
+		l += "\n"
+	}
 	conn := e.getConn()
 	if conn == nil {
 		return false
@@ -1382,5 +1385,5 @@ func (e *EventHandler) EmitPortRoleLogs() {
 func (e *EventHandler) EmitProcessStatusLog(processName, cfgName string, status int64) {
 	message := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d", processName, time.Now().Unix(), cfgName, status)
 	glog.Info(message)
-	e.writeLogToSocket(message + "\n")
+	e.writeLogToSocket(message)
 }
