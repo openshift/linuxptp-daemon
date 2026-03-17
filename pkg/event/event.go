@@ -683,6 +683,9 @@ func (e *EventHandler) reconnectEventSocket() bool {
 // writeLogToSocket writes a single log line to the event socket.
 // If the write fails, it attempts to reconnect and retry once.
 func (e *EventHandler) writeLogToSocket(l string) bool {
+	if !strings.HasSuffix(l, "\n") {
+		l += "\n"
+	}
 	conn := e.getConn()
 	if conn == nil {
 		return false
@@ -1347,11 +1350,7 @@ func (e *EventHandler) EmitPortRoleLogs() {
 
 	for _, entry := range entries {
 		glog.Infof("Port Event %s", entry.raw)
-		raw := entry.raw
-		if !strings.HasSuffix(raw, "\n") {
-			raw += "\n"
-		}
-		if !e.writeLogToSocket(raw) {
+		if !e.writeLogToSocket(entry.raw) {
 			glog.Warning("Broken pipe detected while emitting port role logs, stopping.")
 			break
 		}
@@ -1376,5 +1375,5 @@ func (e *EventHandler) EmitClockClass(cfgName string) {
 func (e *EventHandler) EmitProcessStatusLog(processName, cfgName string, status int64) {
 	message := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d", processName, time.Now().Unix(), cfgName, status)
 	glog.Info(message)
-	e.writeLogToSocket(message + "\n")
+	e.writeLogToSocket(message)
 }
