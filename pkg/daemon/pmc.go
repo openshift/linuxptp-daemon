@@ -206,7 +206,12 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 		}
 		return err
 	}
-	defer utils.CloseExpect(exp, r)
+
+	doneCh := make(chan struct{})
+	defer func() {
+		close(doneCh)
+		utils.CloseExpect(exp, r)
+	}()
 
 	subscribeCmd := pmc.getMonitorSubcribeCommand()
 	glog.Infof("Sending '%s' to pmc", subscribeCmd)
@@ -214,7 +219,7 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 
 	workerCh := make(chan workerSignal, 5)
 
-	go pmc.expectWorker(exp, pmc.parentDSCh, workerCh)
+	go pmc.expectWorker(exp, pmc.parentDSCh, workerCh, doneCh)
 
 	for {
 		select {
@@ -234,10 +239,12 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 	}
 }
 
-func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- protocol.ParentDataSet, signalCh chan<- workerSignal) {
+func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- protocol.ParentDataSet, signalCh chan<- workerSignal, doneCh <-chan struct{}) {
 	for {
 		select {
 		case <-pmc.exitCh:
+			return
+		case <-doneCh:
 			return
 		default:
 		}
@@ -252,6 +259,7 @@ func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- proto
 				signalCh <- workerSignal{err: expectErr, restartProcess: true}
 				return
 			}
+			glog.Warningf("expectWorker: unexpected error from Expect: %v", expectErr)
 			continue
 		}
 
