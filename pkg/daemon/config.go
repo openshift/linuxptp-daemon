@@ -409,7 +409,7 @@ func (conf *Ptp4lConf) RenderSyncE4lConf(ptpSettings map[string]string) (configO
 	relations.AddClockIds(ptpSettings)
 	deviceIdx := 0
 
-	for _, section := range conf.sections {
+	for i, section := range conf.sections {
 		configOut = fmt.Sprintf("%s\n%s", configOut, section.sectionName)
 		if strings.HasPrefix(section.sectionName, "[<") {
 			if _, found := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "clock_id"); !found {
@@ -417,7 +417,7 @@ func (conf *Ptp4lConf) RenderSyncE4lConf(ptpSettings map[string]string) (configO
 				deviceIdx++
 			}
 		}
-		for _, option := range section.options {
+		for _, option := range conf.sections[i].options {
 			k := option.key
 			v := option.value
 			configOut = fmt.Sprintf("%s\n%s %s", configOut, k, v)
