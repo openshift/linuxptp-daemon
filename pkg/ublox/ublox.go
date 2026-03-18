@@ -3,6 +3,7 @@ package ublox
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -33,6 +34,64 @@ const (
 	cmdProtoVersion = "-p MON-VER"
 )
 
+var (
+	// Disable all binary messages
+	disableBinary = []string{"-d", "BINARY"}
+	// Re-enable NAV-CLOCK every 1s
+	enableBinaryNavClock = []string{"-p", "CFG-MSG,1,34,1"}
+	// Re-enable NAV-CLOCK every 1s
+	enableBinaryNavStatus = []string{"-p", "CFG-MSG,1,3,1"}
+
+	// Enable all NMEA messages
+	enableNMEA = []string{"-e", "NMEA"}
+	// Disable unneeded SA messages
+	disableSA = []string{"-p", "CFG-MSG,0xf0,0x02,0"}
+	// Disable unneeded SV messages
+	disableSv = []string{"-p", "CFG-MSG,0xf0,0x03,0"}
+
+	// Additional NMEA messages to disable by default
+	nmeaDisableMsg = []string{
+		"VTG", "GST", "ZDA", "GBS",
+	}
+
+	// All NMEA bus types to disable NMEA messages
+	nmeaBusTypes = []string{
+		"I2C", "UART1", "UART2", "USB", "SPI",
+	}
+
+	// Final command: Save the ublox state
+	saveState = []string{"-p", "SAVE"}
+)
+
+// Generates a series of UblxCmds which disable the given message type on all bus types
+func cmdDisableNmeaMsg(msg string) [][]string {
+	result := make([][]string, len(nmeaBusTypes))
+	for i, bus := range nmeaBusTypes {
+		result[i] = []string{"-z", fmt.Sprintf("CFG-MSGOUT-NMEA_ID_%s_%s,0", msg, bus)}
+	}
+	return result
+}
+
+// Return the default set of commands we need to set at initialization
+func defaultUblxCmds() [][]string {
+	// Begin by disabling all binary commands, then re-adding only NAV-CLOCK and NAV-STATUS
+	cmds := [][]string{
+		disableBinary, enableBinaryNavClock, enableBinaryNavStatus,
+	}
+	// Next, enable all NMEA commands, but prune out any we don't need:
+	cmds = append(cmds,
+		enableNMEA, disableSA, disableSv,
+	)
+	// More pruning of all bus-specific NMEA messages
+	for _, msg := range nmeaDisableMsg {
+		cmds = append(cmds, cmdDisableNmeaMsg(msg)...)
+	}
+
+	// Finally, save the state
+	cmds = append(cmds, saveState)
+	return cmds
+}
+
 // UBlox ... UBlox type
 type UBlox struct {
 	status       int
@@ -57,7 +116,7 @@ func NewUblox() (*UBlox, error) {
 	return &u, nil
 }
 
-// Init detects the protocol version and sets up the basic message types we require
+// Init detects the protocol version and sets up the core message types we require for both GNSS monitoring and ts2phc
 func (u *UBlox) Init() error {
 	protoVersion, err := u.query(cmdProtoVersion, regexProtoVersion)
 	if err != nil {
@@ -65,9 +124,11 @@ func (u *UBlox) Init() error {
 	}
 	u.protoVersion = protoVersion
 	glog.Infof("UBX protocol version detected: %s", protoVersion)
-	u.DisableBinary()
-	u.EnableNMEA()
-	return nil
+	errs := []error{}
+	for _, cmd := range defaultUblxCmds() {
+		errs = append(errs, u.setOnly(cmd...))
+	}
+	return errors.Join(errs...)
 }
 
 // Execute a ubxtool query (run a command, wait for output, and match against the given regex for output)
@@ -210,24 +271,6 @@ func (u *UBlox) UbloxPollStop() {
 	u.setStatus(UBXTOOL_STOPPED)
 	_ = u.cmd.Process.Kill()
 	u.cmd.Wait()
-}
-
-// DisableBinary disables all binary messages via the 'ubxtool -d BINARY' macro
-func (u *UBlox) DisableBinary() {
-	if err := u.setOnly("-d", "BINARY"); err != nil {
-		glog.Error("error disabling binary stream: %s", err)
-	} else {
-		glog.Info("Disabled binary")
-	}
-}
-
-// EnableNMEA enables all ascii NMEA messages via the 'ubxtool -e NMEA' macro
-func (u *UBlox) EnableNMEA() {
-	if err := u.setOnly("-e", "NMEA"); err != nil {
-		glog.Error("error enabling NMEA stream: %s", err)
-	} else {
-		glog.Info("Enabled NMEA")
-	}
 }
 
 // ExtractOffset extracts the tAcc offset from the incoming ubxtool data stream
