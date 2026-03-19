@@ -1,53 +1,102 @@
+// Package ublox allows monitoring and configuring ublox data from the GPS hardware
 package ublox
 
 import (
 	"bufio"
-	"bytes"
+	"errors"
 	"fmt"
-	"io"
-	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
-
-	expect "github.com/google/goexpect"
 
 	"github.com/golang/glog"
 )
 
-var (
-	// PorotoVersionRegEx ...
-	PorotoVersionRegEx = regexp.MustCompile(`PROTVER=+(\d+\.\d+)`)
-	// AntennaStatusRegEx ...
-	AntennaStatusRegEx = regexp.MustCompile(`antStatus[[:space:]]+(\d+)[[:space:]]antPower[[:space:]]+(\d+)`)
-	// NavStatusRegEx ...
-	NavStatusRegEx    = regexp.MustCompile(`gpsFix[[:space:]]+(\d+)`)
-	cmdTimeout        = 10 * time.Second
-	ubloxProtoVersion = "29.20"
-)
+var regexProtoVersion = regexp.MustCompile(`PROTVER=(\d+\.\d+)`)
 
 const (
-	// CMD_PROTO_VERSION ...
-	CMD_PROTO_VERSION = " -p MON-VER"
-	// CMD_VOLTAGE_CONTROLER ...
-	CMD_VOLTAGE_CONTROLER = " -v 1 -z CFG-HW-ANT_CFG_VOLTCTRL,%d"
-	// CMD_NAV_STATUS ...
-	CMD_NAV_STATUS  = " -t -p NAV-STATUS"
-	UBXCommand      = "/usr/local/bin/ubxtool"
+	// UBXCommand is the full path to the ubxtool command in the container
+	UBXCommand = "/usr/local/bin/ubxtool"
+
 	UBXTOOL_NEW     = 0
 	UBXTOOL_ACTIVE  = 1
 	UBXTOOL_DEAD    = 2
 	UBXTOOL_STOPPED = 3
+
+	setOnlyTimeout = "0.1"
+	queryTimeout   = "0.5"
+	pollTimeout    = "1000000000"
+
+	fallbackProtocolVesion = "29.20"
+
+	cmdProtoVersion = "-p MON-VER"
 )
+
+var (
+	// Disable all binary messages
+	disableBinary = []string{"-d", "BINARY"}
+	// Re-enable NAV-CLOCK every 1s
+	enableBinaryNavClock = []string{"-p", "CFG-MSG,1,34,1"}
+	// Re-enable NAV-CLOCK every 1s
+	enableBinaryNavStatus = []string{"-p", "CFG-MSG,1,3,1"}
+
+	// Enable all NMEA messages
+	enableNMEA = []string{"-e", "NMEA"}
+	// Disable unneeded SA messages
+	disableSA = []string{"-p", "CFG-MSG,0xf0,0x02,0"}
+	// Disable unneeded SV messages
+	disableSv = []string{"-p", "CFG-MSG,0xf0,0x03,0"}
+
+	// Additional NMEA messages to disable by default
+	nmeaDisableMsg = []string{
+		"VTG", "GST", "ZDA", "GBS",
+	}
+
+	// All NMEA bus types to disable NMEA messages
+	nmeaBusTypes = []string{
+		"I2C", "UART1", "UART2", "USB", "SPI",
+	}
+
+	// Final command: Save the ublox state
+	saveState = []string{"-p", "SAVE"}
+)
+
+// Generates a series of UblxCmds which disable the given message type on all bus types
+func cmdDisableNmeaMsg(msg string) [][]string {
+	result := make([][]string, len(nmeaBusTypes))
+	for i, bus := range nmeaBusTypes {
+		result[i] = []string{"-z", fmt.Sprintf("CFG-MSGOUT-NMEA_ID_%s_%s,0", msg, bus)}
+	}
+	return result
+}
+
+// Return the default set of commands we need to set at initialization
+func defaultUblxCmds() [][]string {
+	// Begin by disabling all binary commands, then re-adding only NAV-CLOCK and NAV-STATUS
+	cmds := [][]string{
+		disableBinary, enableBinaryNavClock, enableBinaryNavStatus,
+	}
+	// Next, enable all NMEA commands, but prune out any we don't need:
+	cmds = append(cmds,
+		enableNMEA, disableSA, disableSv,
+	)
+	// More pruning of all bus-specific NMEA messages
+	for _, msg := range nmeaDisableMsg {
+		cmds = append(cmds, cmdDisableNmeaMsg(msg)...)
+	}
+
+	// Finally, save the state
+	cmds = append(cmds, saveState)
+	return cmds
+}
 
 // UBlox ... UBlox type
 type UBlox struct {
 	status       int
 	statusMutex  sync.Mutex
-	protoVersion *string
+	protoVersion string
 	mockExp      func(cmdStr string) ([]string, error)
 	cmd          *exec.Cmd
 	reader       *bufio.Reader
@@ -57,170 +106,76 @@ type UBlox struct {
 	buffermutex  sync.Mutex
 }
 
-// protocolVersion returns detected protocol version or the default.
-func (u *UBlox) protocolVersion() string {
-	if u != nil && u.protoVersion != nil && *u.protoVersion != "" {
-		return *u.protoVersion
-	}
-	return ubloxProtoVersion
-}
-
-// NewUblox ... create new Ublox
+// NewUblox creates and initializes a new Ublox monitoring object
+// Returns an error if the underlying gps channel is not available or the protocol version could not be detected
 func NewUblox() (*UBlox, error) {
-	u := &UBlox{
-		protoVersion: &ubloxProtoVersion,
-		mockExp:      nil,
-		bufferlen:    0,
-	}
-	u.setStatus(UBXTOOL_NEW)
-	if protoVersion, err := u.MonVersion(CMD_PROTO_VERSION, PorotoVersionRegEx); err == nil && protoVersion != nil && *protoVersion != "" {
-		u.protoVersion = protoVersion
-	} else {
-		glog.Warningf("UBlox protocol version detection failed, using default %s: %v", u.protocolVersion(), err)
-	}
-	u.EnableNMEA()
-	u.DisableBinary()
-
-	//u.DisableNMEA()
-	return u, nil
-}
-
-/*
- ENVIRONMENT:
-#    Options in the UBXOPTS environment variable will be parsed before
-#    the CLI options.  A handy place to put your '-f /dev/ttyXX -s SPEED'
-#
-# To see what constellations are enabled:
-#       ubxtool -p CFG-GNSS -f /dev/ttyXX
-#
-# To disable GLONASS and enable GALILEO:
-#       ubxtool -d GLONASS -f /dev/ttyXX
-#       ubxtool -e GALILEO -f /dev/ttyXX
-#
-
-*/
-
-// Init ...
-func (u *UBlox) Init() (err error) {
-	var protoVersion *string
-	if protoVersion, err = u.MonVersion(CMD_PROTO_VERSION, PorotoVersionRegEx); err == nil {
-		u.protoVersion = protoVersion
-		u.DisableBinary()
-		u.EnableNMEA()
-	} else {
-		err = fmt.Errorf("UBlox could not find version for method %s with error %s", "MON-VER", err)
-	}
-	return
-}
-
-// MonVersion  ... get monitor version
-func (u *UBlox) MonVersion(command string, regEx *regexp.Regexp) (*string, error) {
-	var stdout string
-	var err error
-	stdout, err = u.query(CMD_PROTO_VERSION, PorotoVersionRegEx)
-	glog.Infof("Queried Ublox output %s", stdout)
-	if err != nil {
-		glog.Errorf("error reading ublox MON-VER command  %s", err)
+	u := UBlox{}
+	if err := u.Init(); err != nil {
 		return nil, err
 	}
-	return &stdout, nil
+	return &u, nil
 }
 
-func (u *UBlox) queryVersion(command string, promptRE *regexp.Regexp) (result string, matches []string, err error) {
-	e, _, err := expect.Spawn("/usr/bin/bash", -1)
+// Init detects the protocol version and sets up the core message types we require for both GNSS monitoring and ts2phc
+func (u *UBlox) Init() error {
+	protoVersion, err := u.query(cmdProtoVersion, regexProtoVersion)
 	if err != nil {
-		return
+		return fmt.Errorf("no version detected: version for method %s with error %s", "MON-VER", err)
 	}
-	defer func(e *expect.GExpect) {
-		err := e.Close()
-		if err != nil {
-			glog.Errorf("error closing expect %s", err)
-		}
-	}(e)
-	if err = e.Send(fmt.Sprintf("%s -p %s", UBXCommand, command) + "\n"); err == nil {
-		result, matches, err = e.Expect(promptRE, cmdTimeout)
-		if err != nil {
-			glog.Errorf("result match error %s", err)
-			return
-		}
-		err = e.Send("\x03")
+	u.protoVersion = protoVersion
+	glog.Infof("UBX protocol version detected: %s", protoVersion)
+	errs := []error{}
+	for _, cmd := range defaultUblxCmds() {
+		errs = append(errs, u.setOnly(cmd...))
 	}
-	return
+	return errors.Join(errs...)
 }
 
-// Query ... used for testing only
-func (u *UBlox) Query(command string, promptRE *regexp.Regexp) (result string, matches []string, err error) {
-	e, _, err := expect.Spawn("/usr/bin/bash", -1)
-	if err != nil {
-		return
-	}
-	defer func(e *expect.GExpect) {
-		err := e.Close()
-		if err != nil {
-			glog.Errorf("error closing expect %s", err)
-		}
-	}(e)
-	if err = e.Send(fmt.Sprintf("%s %s", UBXCommand, command) + "\n"); err == nil {
-		result, matches, err = e.Expect(promptRE, cmdTimeout)
-		if err != nil {
-			glog.Errorf("result match error %s", err)
-			return
-		}
-		err = e.Send("\x03")
-	}
-	return
-}
-
-// EnableDisableVoltageController ... enable disable voltage controler 1 or 0
-// Enable GNSS Antenna voltage control
-// # ubxtool -v 1  -P 29.20 -z CFG-HW-ANT_CFG_VOLTCTRL,1
-// connected to tcp://localhost:2947
-// sent:
-// UBX-CFG-VALSET:
-// version 0 layer 0x7 transaction 0x0 reserved 0
-// layers (ram bbr flash) transaction (Transactionless)
-// item CFG-HW-ANT_CFG_VOLTCTRL/0x10a3002e val 1
-
-// EnableDisableVoltageController ...
-// UBX-ACK-ACK:
-// ACK to Class x06 (CFG) ID x8a (VALSET)
-// TODO: Should read ACK-ACK to confirm right and read the item
-func (u *UBlox) EnableDisableVoltageController(command string, value int) ([]byte, error) {
-	if u.protoVersion == nil {
-		return []byte{}, fmt.Errorf("Cannot query UBlox without protocol version ")
-	}
-	commandArgs := []string{"/usr/bin/bash", "-c", fmt.Sprintf("\"%s  -v 1 -P %s  -p %s,%d\"", UBXCommand, *u.protoVersion, command, value)}
-
-	stdout, err := exec.Command(commandArgs[0], commandArgs[1:]...).Output()
-	return stdout, err
-}
-
+// Execute a ubxtool query (run a command, wait for output, and match against the given regex for output)
 func (u *UBlox) query(command string, promptRE *regexp.Regexp) (string, error) {
-	var stdBuffer bytes.Buffer
-	mw := io.MultiWriter(os.Stdout, &stdBuffer)
-	cmdName := fmt.Sprintf("%s %s", UBXCommand, command)
-	cmdArgs := strings.Fields(cmdName)
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	cmd.Stdout = mw
-	cmd.Stderr = mw
-	// Execute the command
-	if err := cmd.Run(); err != nil {
-		glog.Errorf("error executing cmd %s", fmt.Sprintf("%s %s", UBXCommand, command))
+	args := []string{"-w", queryTimeout}
+	if u.protoVersion == "" {
+		// Only cmdProtoVersion can be run without a known protoVersion (because it establishes it)
+		if command != cmdProtoVersion {
+			return "", fmt.Errorf("cannot query UBlox without protocol version ")
+		}
+	} else {
+		args = append(args, "-P", u.protoVersion)
+	}
+	args = append(args, strings.Fields(command)...)
+	output, err := u.ubxtool(args...)
+	if err != nil {
 		return "", err
 	}
-	glog.Infof("Ublox cmd %s returned\n %s", fmt.Sprintf("ubxtool %s", command), stdBuffer.String())
-	return match(stdBuffer.String(), promptRE)
-
-}
-
-func match(stdout string, ubLoxRegex *regexp.Regexp) (string, error) {
-	match := ubLoxRegex.FindStringSubmatch(string(stdout))
+	match := promptRE.FindStringSubmatch(output)
 	if len(match) > 0 {
 		return match[1], nil
 	}
-	return "", fmt.Errorf("error parsing %s", stdout)
+	return "", fmt.Errorf("ubxtool output did not match %s: %s", promptRE.String(), output)
 }
 
+// Execute a set-only command (run a command, do not wait for output)
+func (u *UBlox) setOnly(command ...string) error {
+	if u.protoVersion == "" {
+		return fmt.Errorf("cannot set data without protocol version")
+	}
+	args := []string{"-w", setOnlyTimeout, "-P", u.protoVersion}
+	args = append(args, command...)
+	_, err := u.ubxtool(args...)
+	return err
+}
+
+// Low-level command: Run ubxtool and return its output
+func (u *UBlox) ubxtool(command ...string) (string, error) {
+	glog.Infof("Running ubxtool %v...", command)
+	output, err := exec.Command(UBXCommand, command...).CombinedOutput()
+	if err != nil {
+		err = fmt.Errorf("ubxtool failed: [Stdout/Stderr: %s] %w", output, err)
+	}
+	return string(output), err
+}
+
+// UbloxPollPull safely pulls data from the u.buffer
 func (u *UBlox) UbloxPollPull() string {
 	output := ""
 	u.buffermutex.Lock()
@@ -233,14 +188,21 @@ func (u *UBlox) UbloxPollPull() string {
 	return output
 }
 
+// UbloxPollInit initializes the poll thread
 func (u *UBlox) UbloxPollInit() {
+	protoVersion := u.protoVersion
+	if protoVersion == "" {
+		// Since there's no error return, we best-effort by guessing the protocol version
+		protoVersion = fallbackProtocolVesion
+		glog.Warningf("Protocol version was not detected; falling back to %s", protoVersion)
+	}
 	if u.getStatus() == UBXTOOL_NEW || u.getStatus() == UBXTOOL_DEAD {
 		u.buffermutex.Lock()
 		u.bufferlen = 0
 		u.buffer = nil
 		u.buffermutex.Unlock()
-		wait := 1000000000
-		args := []string{"-u", UBXCommand, "-t", "-P", u.protocolVersion(), "-w", fmt.Sprintf("%d", wait)}
+		// Run via `python -u ubxtool` to force unbuffered stdin/stdout
+		args := []string{"-u", UBXCommand, "-t", "-P", protoVersion, "-w", pollTimeout}
 		u.cmd = exec.Command("python3", args...)
 		stdoutreader, _ := u.cmd.StdoutPipe()
 		u.reader = bufio.NewReader(stdoutreader)
@@ -257,6 +219,7 @@ func (u *UBlox) UbloxPollInit() {
 	}
 }
 
+// UbloxPollPushThread continually reads incoming data from the running ubxtool and safely appends it to u.buffer
 func (u *UBlox) UbloxPollPushThread() {
 	for {
 		output, err := u.reader.ReadString('\n')
@@ -276,7 +239,7 @@ func (u *UBlox) UbloxPollPushThread() {
 }
 
 func (u *UBlox) setStatus(val int) {
-	//glog.Infof("ubxtool setStatus=%d", val)
+	// glog.Infof("ubxtool setStatus=%d", val)
 	u.statusMutex.Lock()
 	u.status = val
 	u.statusMutex.Unlock()
@@ -286,13 +249,14 @@ func (u *UBlox) getStatus() int {
 	u.statusMutex.Lock()
 	ret := u.status
 	u.statusMutex.Unlock()
-	//glog.Infof("ubxtool getStatus=%d", ret)
+	// glog.Infof("ubxtool getStatus=%d", ret)
 	return ret
 }
 
+// UbloxPollReset resets the ubxtool poll process
 func (u *UBlox) UbloxPollReset() {
 	pid := u.cmd.Process.Pid
-	glog.Infof("Stopping ubxtool polling with PID=%d", pid)
+	glog.Infof("Resetting ubxtool polling with PID=%d", pid)
 	_ = u.cmd.Process.Kill()
 	if u.getStatus() != UBXTOOL_STOPPED {
 		u.setStatus(UBXTOOL_DEAD)
@@ -300,6 +264,7 @@ func (u *UBlox) UbloxPollReset() {
 	u.cmd.Wait()
 }
 
+// UbloxPollStop stops the ubxtool poll process
 func (u *UBlox) UbloxPollStop() {
 	pid := u.cmd.Process.Pid
 	glog.Infof("Stopping ubxtool polling with PID=%d", pid)
@@ -308,28 +273,7 @@ func (u *UBlox) UbloxPollStop() {
 	u.cmd.Wait()
 }
 
-// DisableBinary ...  disable binary
-func (u *UBlox) DisableBinary() {
-	// Enable binary protocol
-	args := []string{"-d", "BINARY", "-P", u.protocolVersion()}
-	if err := exec.Command(UBXCommand, args...).Run(); err != nil {
-		glog.Errorf("error executing ubxtool command: %s", err)
-	} else {
-		glog.Info("disable binary")
-	}
-}
-
-// EnableNMEA ... enable nmea
-func (u *UBlox) EnableNMEA() {
-	// Enable binary protocol
-	args := []string{"-e", "NMEA", "-P", u.protocolVersion()}
-	if err := exec.Command(UBXCommand, args...).Run(); err != nil {
-		glog.Errorf("error executing ubxtool command: %s", err)
-	} else {
-		glog.Info("Enable NMEA")
-	}
-}
-
+// ExtractOffset extracts the tAcc offset from the incoming ubxtool data stream
 func ExtractOffset(output string) int64 {
 	// Find the line that contains "tAcc"
 	lines := strings.Split(output, "\n")
@@ -349,6 +293,7 @@ func ExtractOffset(output string) int64 {
 	return -1
 }
 
+// ExtractNavStatus extracts the gpsFix state from the incoming ubxtool data stream
 func ExtractNavStatus(output string) int64 {
 	// Find the line that contains "gpsFix"
 	lines := strings.Split(output, "\n")
@@ -377,8 +322,9 @@ const (
 	LeapSourceNavIC   uint8 = 7
 )
 
+// TimeLs represents GPS Leap Second data
 type TimeLs struct {
-	//Information source for the current number
+	// Information source for the current number
 	// of leap seconds
 	SrcOfCurrLs uint8
 	// Current number of leap seconds since
@@ -426,8 +372,9 @@ type TimeLs struct {
 	Valid uint8
 }
 
+// ExtractLeapSec extracts leap second data from the incoming ubxtool data stream
 func ExtractLeapSec(output []string) *TimeLs {
-	var data = TimeLs{}
+	data := TimeLs{}
 	for _, line := range output {
 		fields := strings.Fields(line)
 		for i, field := range fields {

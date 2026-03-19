@@ -2,7 +2,6 @@ package ublox_test
 
 import (
 	"os"
-	"regexp"
 	"testing"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
@@ -93,18 +92,8 @@ func TestFindProtoVersion(t *testing.T) {
 
 }*/
 
-func Test_Query(t *testing.T) {
-	t.Skip("Skipping test, ubxtool needs to be installed")
-	u := ublox.UBlox{}
-	assert.NotNil(t, &u)
-	ss, s, err := u.Query("-V", regexp.MustCompile("Version"))
-	assert.NotEmpty(t, ss)
-	assert.NotEmpty(t, s[0])
-	assert.Nil(t, err)
-}
-
 func Test_ExtractLeapSec(t *testing.T) {
-	var data = []string{
+	data := []string{
 		"iTOW 376008000 version 0 reserved2 0 0 0 srcOfCurrLs 2",
 		"currLs 18 srcOfLsChange 2 lsChange 0 timeToLsEvent 77643210",
 		"dateOfLsGpsWn 2441 dateOfLsGpsDn 7 reserved2 0 0 0",

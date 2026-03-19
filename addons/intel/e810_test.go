@@ -38,14 +38,15 @@ func Test_AfterRunPTPCommandE810(t *testing.T) {
 	assert.NoError(t, err)
 	// Ensure all 9 required calls are the last 9:
 	requiredUblxCmds := []string{
-		"CFG-MSG,1,34,1",
-		"CFG-MSG,1,3,1",
-		"CFG-MSG,0xf0,0x02,0",
-		"CFG-MSG,0xf0,0x03,0",
-		"CFG-MSGOUT-NMEA_ID_VTG_I2C,0",
-		"CFG-MSGOUT-NMEA_ID_GST_I2C,0",
-		"CFG-MSGOUT-NMEA_ID_ZDA_I2C,0",
-		"CFG-MSGOUT-NMEA_ID_GBS_I2C,0",
+		"CFG-HW-ANT_CFG_VOLTCTRL,1",
+		"GPS",
+		"Galileo",
+		"GLONASS",
+		"BeiDou",
+		"SBAS",
+		"SURVEYIN,600,50000",
+		"MON-HW",
+		"CFG-MSG,1,38,248",
 		"SAVE",
 	}
 	found := make([]string, 0, len(requiredUblxCmds))
