@@ -191,9 +191,7 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			case "gpspipe":
 				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
 				// Execute user-supplied UblxCmds first:
-				pluginData.hwplugins = append(pluginData.hwplugins, e810Opts.UblxCmds.runAll()...)
-				// Finish with the default commands:
-				pluginData.hwplugins = append(pluginData.hwplugins, defaultUblxCmds().runAll()...)
+				pluginData.hwplugins = append(pluginData.hwplugins, e810Opts.UblxCmds.runAll(true)...)
 			case "tbc-ho-exit":
 				err = clockChain.EnterNormalTBC()
 				if err != nil {
