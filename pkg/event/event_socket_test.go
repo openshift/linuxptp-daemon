@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/stretchr/testify/assert"
 )
@@ -21,7 +22,6 @@ func newTestEventHandler(socketPath string) *EventHandler {
 		stdoutSocket:   socketPath,
 		stdoutToSocket: true,
 		closeCh:        make(chan bool, 1),
-		brokenPipeCh:   make(chan struct{}, 1),
 		clkSyncState:   map[string]*clockSyncState{},
 	}
 }
@@ -181,41 +181,6 @@ func TestGetSetConn_ConcurrentAccess(t *testing.T) {
 	wg.Wait()
 	// No race detector failures = success; use assert to satisfy unused-parameter lint.
 	assert.NotNil(t, e)
-}
-
-// --- signalBrokenPipe ---
-
-func TestSignalBrokenPipe_SendsSignal(t *testing.T) {
-	e := newTestEventHandler("")
-	e.signalBrokenPipe()
-
-	select {
-	case <-e.brokenPipeCh:
-		// expected
-	default:
-		t.Fatal("expected signal on brokenPipeCh")
-	}
-}
-
-func TestSignalBrokenPipe_NonBlocking(t *testing.T) {
-	e := newTestEventHandler("")
-
-	// Fill the channel.
-	e.brokenPipeCh <- struct{}{}
-
-	// Second signal should not block.
-	done := make(chan struct{})
-	go func() {
-		e.signalBrokenPipe()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// expected: did not block
-	case <-time.After(1 * time.Second):
-		t.Fatal("signalBrokenPipe blocked when channel was already full")
-	}
 }
 
 // --- writeLogToSocket ---
@@ -600,6 +565,141 @@ done:
 	assert.Equal(t, 2, len(lines), "should have exactly 2 newline-separated lines")
 	for i, line := range lines {
 		assert.Contains(t, line, "T-GM-STATUS", "line %d should contain T-GM-STATUS", i)
+	}
+
+	e.setConn(nil) // cleanup
+}
+
+// --- emitClockClass ---
+
+func TestEmitClockClass_WritesToSocket(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	e.emitClockClass(fbprotocol.ClockClass(6), "ptp4l.0.config")
+
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 6", "message should contain clock class value")
+		assert.Contains(t, got, "ptp4l.0.config", "message should contain config name")
+		assert.Contains(t, got, "ptp4l", "message should contain process name")
+		assert.True(t, strings.HasSuffix(got, "\n"), "message should end with newline")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for clock class message")
+	}
+
+	e.setConn(nil) // cleanup
+}
+
+func TestEmitClockClass_NilConnectionNoWrite(_ *testing.T) {
+	e := newTestEventHandler("")
+	// conn is nil by default; should not panic
+	e.emitClockClass(fbprotocol.ClockClass(6), "ptp4l.0.config")
+}
+
+func TestEmitClockClass_ReconnectsOnBrokenPipe(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// Break the connection by closing it
+	e.getConn().Close()
+	e.setConn(nil)
+
+	// Re-establish and verify it can write after reconnection
+	assert.True(t, e.reconnectEventSocket())
+	e.emitClockClass(fbprotocol.ClockClass(248), "ptp4l.7.config")
+
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 248")
+		assert.Contains(t, got, "ptp4l.7.config")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for clock class message after reconnect")
+	}
+
+	e.setConn(nil) // cleanup
+}
+
+// --- EmitClockClass (exported, via clkSyncState) ---
+
+func TestEmitClockClassExported_SkipsWhenNoClkSyncState(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := NewEventHandlerForTests(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// No clkSyncState entry for this config; EmitClockClass should return early
+	e.EmitClockClass("ptp4l.99.config")
+
+	// Verify nothing was sent
+	select {
+	case got := <-received:
+		t.Fatalf("expected no message but got: %q", got)
+	case <-time.After(200 * time.Millisecond):
+		// expected: no data sent
+	}
+
+	e.setConn(nil) // cleanup
+}
+
+func TestEmitClockClassExported_EmitsStoredClockClass(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := NewEventHandlerForTests(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// Populate clkSyncState via test helper
+	e.SetClockClass("ptp4l.0.config", 6)
+	e.SetClockClass("ptp4l.1.config", 255)
+
+	// Emit for config 0
+	e.EmitClockClass("ptp4l.0.config")
+
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 6")
+		assert.Contains(t, got, "ptp4l.0.config")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for clock class message")
+	}
+
+	// Emit for config 1
+	e.EmitClockClass("ptp4l.1.config")
+
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 255")
+		assert.Contains(t, got, "ptp4l.1.config")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for clock class message for config 1")
 	}
 
 	e.setConn(nil) // cleanup
