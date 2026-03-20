@@ -279,7 +279,9 @@ func (s DpllSubscriber) Notify(source event.EventSource, state event.PTPState) {
 	dependingProcessStateMap.Lock()
 	defer dependingProcessStateMap.Unlock()
 	currentState := dependingProcessStateMap.states[source]
-	if currentState != state {
+	// If state changes, then set internal state to match.
+	// Skip if PTP_UNKNOWN so that loss of gnss doesn't incorrectly change to PTP_FREERUN
+	if currentState != state && currentState != event.PTP_UNKNOWN {
 		glog.Infof("%s notified on state change: from state %v to state %v", source, currentState, state)
 		dependingProcessStateMap.states[source] = state
 		if source == event.GNSS {
