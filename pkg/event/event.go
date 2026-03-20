@@ -172,10 +172,9 @@ type EventHandler struct {
 	stdoutToSocket     bool
 	processChannel     <-chan EventChannel
 	closeCh            chan bool
-	brokenPipeCh       chan struct{} // signals broken pipe from background goroutines to trigger reconnection
-	conn               net.Conn      // event socket connection, guarded by connMu
-	connMu             sync.Mutex    // separate mutex for conn to avoid deadlocks with embedded sync.Mutex
-	reconnectMu        sync.Mutex    // serializes reconnection attempts to prevent leaked connections
+	conn               net.Conn   // event socket connection, guarded by connMu
+	connMu             sync.Mutex // separate mutex for conn to avoid deadlocks with embedded sync.Mutex
+	reconnectMu        sync.Mutex // serializes reconnection attempts to prevent leaked connections
 	data               map[string][]*Data
 	offsetMetric       *prometheus.GaugeVec
 	clockMetric        *prometheus.GaugeVec
@@ -244,7 +243,6 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		stdoutSocket:       socketName,
 		stdoutToSocket:     stdOutToSocket,
 		closeCh:            closeCh,
-		brokenPipeCh:       make(chan struct{}, 1),
 		processChannel:     processChannel,
 		data:               map[string][]*Data{},
 		clockMetric:        clockMetric,
@@ -597,7 +595,9 @@ func (e *EventHandler) hasMetric(name string) (*prometheus.GaugeVec, bool) {
 }
 
 // AnnounceClockClass announces clock class changes to the event handler and writes to the connection.
-// Broken pipe errors are handled internally via signalBrokenPipe.
+// It also sends a non-blocking clock class update request to the ProcessEvents goroutine,
+// which calls UpdateClockClass to read the local GRANDMASTER_SETTINGS_NP and determine
+// the correct clock class for the local clock (e.g., 255 for OC slave).
 func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, clockType ClockType) {
 	e.announceClockClass(clockClass, clockAcc, cfgName)
 	select {
@@ -630,22 +630,13 @@ func (e *EventHandler) setClockClassLocked(clockClass fbprotocol.ClockClass, clo
 // emitClockClass writes the clock class to the socket and updates the metric.
 // Must NOT be called while holding e.Lock().
 func (e *EventHandler) emitClockClass(clockClass fbprotocol.ClockClass, cfgName string) {
-	brokenPipe := utils.EmitClockClass(e.getConn(), PTP4lProcessName, cfgName, clockClass)
+	if e.stdoutToSocket {
+		logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, cfgName, clockClass)
+		e.writeLogToSocket(logMsg)
+	}
 	if !e.stdoutToSocket && e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
 			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
-	}
-	if brokenPipe {
-		e.signalBrokenPipe()
-	}
-}
-
-// signalBrokenPipe sends a non-blocking signal on brokenPipeCh to notify
-// the ProcessEvents loop that the socket connection needs reconnection.
-func (e *EventHandler) signalBrokenPipe() {
-	select {
-	case e.brokenPipeCh <- struct{}{}:
-	default:
 	}
 }
 
@@ -786,9 +777,8 @@ func (e *EventHandler) ProcessEvents() {
 						if clkCfgName == cfgName {
 							cfgName = ""
 						}
-						if brokenPipe := utils.EmitClockClass(e.getConn(), PTP4lProcessName, clkCfgName, clockClass); brokenPipe {
-							glog.Warning("Broken pipe detected in clock class ticker, signaling reconnection")
-							e.signalBrokenPipe()
+						logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, clkCfgName, clockClass)
+						if !e.writeLogToSocket(logMsg) {
 							break
 						}
 					}
@@ -797,10 +787,8 @@ func (e *EventHandler) ProcessEvents() {
 						e.Lock()
 						currentClockClass := e.clockClass
 						e.Unlock()
-						if brokenPipe := utils.EmitClockClass(e.getConn(), PTP4lProcessName, cfgName, currentClockClass); brokenPipe {
-							glog.Warning("Broken pipe detected in clock class ticker, signaling reconnection")
-							e.signalBrokenPipe()
-						}
+						logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, cfgName, currentClockClass)
+						e.writeLogToSocket(logMsg)
 					}
 				}
 			}
@@ -999,14 +987,6 @@ func (e *EventHandler) ProcessEvents() {
 						}
 					}
 				}
-			}
-		case <-e.brokenPipeCh:
-			// A background goroutine detected a broken pipe on the event socket.
-			// Clear the broken connection and reconnect.
-			glog.Info("Broken pipe signal received, reconnecting event socket")
-			e.setConn(nil)
-			if !e.reconnectEventSocket() {
-				glog.Warning("Reconnect failed after broken pipe signal; will retry on next event")
 			}
 		case <-e.closeCh:
 			return
@@ -1252,17 +1232,7 @@ func (e *EventHandler) UpdateClockClass(clk ClockClassRequest) {
 		e.Unlock()
 		clockClassOut := utils.GetClockClassLogMessage(PTP4lProcessName, clk.cfgName, clockClass)
 		if e.stdoutToSocket {
-			c := e.getConn()
-			if c != nil {
-				if _, err := c.Write([]byte(clockClassOut)); err != nil {
-					glog.Errorf("failed to write class change event %s", err.Error())
-					if utils.IsBrokenPipe(err) {
-						e.signalBrokenPipe()
-					}
-				}
-			} else {
-				glog.Errorf("failed to write class change event, connection is nil")
-			}
+			e.writeLogToSocket(clockClassOut)
 		} else if e.clockClassMetric != nil {
 			e.clockClassMetric.With(prometheus.Labels{
 				"process": PTP4lProcessName, "config": clk.cfgName, "node": e.nodeName}).Set(float64(clockClass))
@@ -1355,20 +1325,6 @@ func (e *EventHandler) EmitPortRoleLogs() {
 			break
 		}
 	}
-}
-
-// EmitClockClass emits the current clock class and accuracy for the specified configuration.
-func (e *EventHandler) EmitClockClass(cfgName string) {
-	e.Lock()
-	state, ok := e.clkSyncState[cfgName]
-	if !ok {
-		e.Unlock()
-		return
-	}
-	clockClass := state.clockClass
-	clockAccuracy := state.clockAccuracy
-	e.Unlock()
-	e.announceClockClass(clockClass, clockAccuracy, cfgName)
 }
 
 // EmitProcessStatusLog writes a process status log entry to the event socket

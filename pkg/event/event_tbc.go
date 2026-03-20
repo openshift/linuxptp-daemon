@@ -261,6 +261,21 @@ func (e *EventHandler) updateDownstreamData(cfgName string) {
 	}
 }
 
+// EmitClockClass emits the current clock class and accuracy for the specified configuration.
+func (e *EventHandler) EmitClockClass(cfgName string) {
+	e.Lock()
+	state, ok := e.clkSyncState[cfgName]
+	if !ok {
+		glog.Warningf("EmitClockClass: no clkSyncState entry for %s, skipping", cfgName)
+		e.Unlock()
+		return
+	}
+	clockClass := state.clockClass
+	clockAccuracy := state.clockAccuracy
+	e.Unlock()
+	e.announceClockClass(clockClass, clockAccuracy, cfgName)
+}
+
 // Implements Rec. ITU-T G.8275 (2024) Amd. 1 (08/2024)
 // Table VIII.3 − T-BC-/ T-BC-P/ T-BC-A Announce message contents
 // for free-run (acquiring), holdover within / out of the specification
