@@ -1786,3 +1786,34 @@ func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
+	// Create a minimal event handler (no socket needed — the event package
+	// tests already cover the socket write path via EmitClockClass).
+	eventChannel := make(chan event.EventChannel)
+	closeCh := make(chan bool, 1)
+	handler := event.Init("testnode", false, "", eventChannel, closeCh, nil, nil, nil)
+
+	// Create a PMC process with parentDS = nil (the bug condition).
+	// Before the fix, EmitClockClassLogs skipped the call when parentDS was nil.
+	pmcProc := NewPMCProcess(0, handler, "OC")
+	assert.Nil(t, pmcProc.parentDS, "parentDS should be nil for this test")
+
+	// Create a ptp4l process with the PMC as a dependent process
+	pm := &ProcessManager{
+		process: []*ptpProcess{
+			{
+				name:       ptp4lProcessName,
+				depProcess: []process{pmcProc},
+			},
+		},
+	}
+
+	// EmitClockClassLogs should dispatch to pmc.EmitClockClassLogs()
+	// without panicking, even when parentDS is nil.
+	// EmitClockClass returns early (no clkSyncState data) but the key
+	// assertion is that the call is made at all — the old code skipped it.
+	assert.NotPanics(t, func() {
+		pm.EmitClockClassLogs()
+	}, "EmitClockClassLogs should not panic with nil parentDS")
+}

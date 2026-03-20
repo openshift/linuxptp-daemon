@@ -250,12 +250,7 @@ func (p *ProcessManager) EmitClockClassLogs() {
 			for _, dp := range proc.depProcess {
 				if dp.Name() == PMCProcessName {
 					pmc := dp.(*PMCProcess)
-					if pmc.parentDS != nil {
-						// if parentDS is nil that means the clock class will
-						// be announced as soon as we get one
-						// therefore no need force it.
-						pmc.EmitClockClassLogs()
-					}
+					pmc.EmitClockClassLogs()
 				}
 			}
 		}
