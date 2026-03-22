@@ -127,3 +127,76 @@ func TestTS2PHCParser(t *testing.T) {
 		})
 	}
 }
+
+func TestNoSourceTSRegex(t *testing.T) {
+	validLine := "ts2phc[20748687.391]: [ts2phc.0.config:3] source ts not valid"
+	validMasterLine := "ts2phc[82674.465]: [ts2phc.0.cfg] ens2f1 master offset        0 s2 freq      0"
+
+	t.Run("matches documented log line and returns nil metrics", func(t *testing.T) {
+		parser.NoSourceTSCount = 0
+		extractor := parser.NewTS2PHCExtractor()
+		metric, ptpEvent, err := extractor.Extract(validLine)
+		assert.NoError(t, err)
+		assert.Nil(t, metric)
+		assert.Nil(t, ptpEvent)
+		assert.Equal(t, 1, parser.NoSourceTSCount)
+	})
+
+	t.Run("increments NoSourceTSCount to two then stops", func(t *testing.T) {
+		parser.NoSourceTSCount = 0
+		extractor := parser.NewTS2PHCExtractor()
+		line := "ts2phc[1.0]: [ts2phc.0.cfg] source ts not valid"
+		_, _, err := extractor.Extract(line)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, parser.NoSourceTSCount)
+		_, _, err = extractor.Extract(line)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, parser.NoSourceTSCount)
+		_, _, err = extractor.Extract(line)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, parser.NoSourceTSCount)
+	})
+
+	t.Run("valid master offset line resets NoSourceTSCount", func(t *testing.T) {
+		parser.NoSourceTSCount = 2
+		extractor := parser.NewTS2PHCExtractor()
+		metric, _, err := extractor.Extract(validMasterLine)
+		assert.NoError(t, err)
+		assert.NotNil(t, metric)
+		assert.Equal(t, 0, parser.NoSourceTSCount)
+	})
+
+	t.Run("matches without space after ts2phc timestamp colon", func(t *testing.T) {
+		parser.NoSourceTSCount = 0
+		extractor := parser.NewTS2PHCExtractor()
+		line := "ts2phc[99]:[ts2phc.0.config] source ts not valid"
+		_, _, err := extractor.Extract(line)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, parser.NoSourceTSCount)
+	})
+
+	t.Run("matches .cfg config name", func(t *testing.T) {
+		parser.NoSourceTSCount = 0
+		extractor := parser.NewTS2PHCExtractor()
+		line := "ts2phc[0]: [ts2phc.0.cfg] source ts not valid"
+		_, _, err := extractor.Extract(line)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, parser.NoSourceTSCount)
+	})
+
+	t.Run("does not match trailing extra text", func(t *testing.T) {
+		parser.NoSourceTSCount = 0
+		extractor := parser.NewTS2PHCExtractor()
+		_, _, err := extractor.Extract(validLine + " trailing")
+		assert.NoError(t, err)
+		assert.Equal(t, 0, parser.NoSourceTSCount)
+	})
+
+	t.Run("does not match when config bracket does not match pattern", func(t *testing.T) {
+		parser.NoSourceTSCount = 0
+		extractor := parser.NewTS2PHCExtractor()
+		_, _, err := extractor.Extract("ts2phc[1]: [other] source ts not valid")
+		assert.NoError(t, err)
+		assert.Equal(t, 0, parser.NoSourceTSCount)
+	})
+}

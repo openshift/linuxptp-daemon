@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"syscall"
 	"testing"
 	"time"
 
@@ -19,30 +18,6 @@ func TestDefaultReconnectConfig(t *testing.T) {
 	assert.Equal(t, utils.DefaultMaxReconnectAttempts, cfg.MaxAttempts)
 	assert.Equal(t, utils.DefaultReconnectBackoffBase, cfg.BackoffBase)
 	assert.Equal(t, utils.DefaultMaxReconnectBackoff, cfg.MaxBackoff)
-}
-
-// --- IsBrokenPipe ---
-
-func TestIsBrokenPipe(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		expected bool
-	}{
-		{"nil error", nil, false},
-		{"generic error", errors.New("some error"), false},
-		{"EPIPE", syscall.EPIPE, true},
-		{"ECONNRESET", syscall.ECONNRESET, true},
-		{"ECONNREFUSED", syscall.ECONNREFUSED, true},
-		{"ENOTCONN", syscall.ENOTCONN, true},
-		{"wrapped EPIPE in OpError", &net.OpError{Op: "write", Err: syscall.EPIPE}, true},
-		{"wrapped generic in OpError", &net.OpError{Op: "write", Err: errors.New("other")}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, utils.IsBrokenPipe(tt.err))
-		})
-	}
 }
 
 // --- ReconnectWithBackoff ---

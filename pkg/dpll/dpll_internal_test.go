@@ -291,3 +291,33 @@ func TestActivePhaseOffsetPin(t *testing.T) {
 		})
 	}
 }
+
+// TestDpllSubscriberNotifySkipsWhenCurrentStatePTP_UNKNOWN covers dpll.go:284 — when the
+// depending process state is still PTP_UNKNOWN, Notify must not apply the new state (so loss
+// of GNSS does not incorrectly drive PTP_FREERUN into the map / sourceLost).
+func TestDpllSubscriberNotifySkipsWhenCurrentStatePTP_UNKNOWN(t *testing.T) {
+	d := &DpllConfig{
+		isMonitoring: true,
+		sourceLost:   false,
+		dependsOn:    []event.EventSource{event.GNSS},
+	}
+	sub := DpllSubscriber{source: event.GNSS, dpll: d, id: "test-gnss"}
+
+	dependingProcessStateMap.Lock()
+	dependingProcessStateMap.states[event.GNSS] = event.PTP_UNKNOWN
+	dependingProcessStateMap.Unlock()
+	t.Cleanup(func() {
+		dependingProcessStateMap.Lock()
+		delete(dependingProcessStateMap.states, event.GNSS)
+		dependingProcessStateMap.Unlock()
+	})
+
+	sub.Notify(event.GNSS, event.PTP_FREERUN)
+
+	dependingProcessStateMap.Lock()
+	st := dependingProcessStateMap.states[event.GNSS]
+	dependingProcessStateMap.Unlock()
+
+	assert.Equal(t, event.PTP_UNKNOWN, st)
+	assert.False(t, d.sourceLost, "Notify must not run GNSS sourceLost logic when current state is PTP_UNKNOWN")
+}
