@@ -14,6 +14,18 @@ import (
 // It is a variable so it can be replaced in tests.
 var discoverSysfsPinsFunc = discoverPHCPins
 
+// hasDPLLPinLabelFunc checks whether a pin name exists as a DPLL board label.
+// It is a variable so it can be replaced in tests.
+var hasDPLLPinLabelFunc = hasDPLLPinLabel
+
+// hasSysfsSMAPinsFunc checks whether SMA pins are available via sysfs for a device.
+// It is a variable so it can be replaced in tests.
+var hasSysfsSMAPinsFunc = hasSysfsSMAPins
+
+func hasDPLLPinLabel(pinName string) bool {
+	return len(DpllPins.GetAllPinsByLabel(pinName)) > 0
+}
+
 // discoverPHCPins reads available PHC pin names from sysfs for a given device.
 // Returns the pin names found under /sys/class/net/<device>/device/ptp/<phc>/pins/
 func discoverPHCPins(device string) ([]string, error) {
@@ -95,27 +107,42 @@ func validateUnknownFields(rawJSON []byte, target interface{}) []string {
 	return nil
 }
 
-// validatePinNames checks that all pin names in the DevicePins map are valid
-// by discovering valid pins from sysfs at runtime.
-func validatePinNames(devicePins map[string]pinSet, pluginName string) []string {
+// validatePinNames checks that all pin names in the DevicePins map are valid.
+// The useSysfs strategy function decides per device whether to validate against
+// sysfs pins or DPLL board labels. This mirrors each plugin's runtime behavior:
+// - E810: passes hasSysfsSMAPins (sysfs when SMA1 exists, DPLL otherwise)
+// - E825/E830: passes alwaysSysfs (always sysfs, matching pinConfig.applyPinSet)
+func validatePinNames(devicePins map[string]pinSet, pluginName string, useSysfs func(string) bool) []string {
 	var errs []string
 	for device, pins := range devicePins {
-		validPins, err := discoverSysfsPinsFunc(device)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf(
-				"%s plugin: failed to discover pins for device '%s': %v",
-				pluginName, device, err))
-			continue
-		}
-		validSet := make(map[string]bool, len(validPins))
-		for _, p := range validPins {
-			validSet[p] = true
-		}
-		for pinName := range pins {
-			if !validSet[pinName] {
+		if useSysfs(device) {
+			// sysfs path: validate all pins against discovered sysfs pins
+			sysfsPins, sysfsErr := discoverSysfsPinsFunc(device)
+			if sysfsErr != nil {
 				errs = append(errs, fmt.Sprintf(
-					"%s plugin: unknown pin name '%s' for device '%s' (valid pins: %s)",
-					pluginName, pinName, device, strings.Join(validPins, ", ")))
+					"%s plugin: cannot discover sysfs pins for device '%s': %v",
+					pluginName, device, sysfsErr))
+				continue
+			}
+			validSet := make(map[string]bool, len(sysfsPins))
+			for _, p := range sysfsPins {
+				validSet[p] = true
+			}
+			for pinName := range pins {
+				if !validSet[pinName] {
+					errs = append(errs, fmt.Sprintf(
+						"%s plugin: unknown pin name '%s' for device '%s' (valid sysfs pins: %s)",
+						pluginName, pinName, device, strings.Join(sysfsPins, ", ")))
+				}
+			}
+		} else {
+			// DPLL path: validate all pins against DPLL board labels
+			for pinName := range pins {
+				if !hasDPLLPinLabelFunc(pinName) {
+					errs = append(errs, fmt.Sprintf(
+						"%s plugin: unknown pin name '%s' for device '%s' (not found in DPLL pin labels)",
+						pluginName, pinName, device))
+				}
 			}
 		}
 	}
@@ -239,7 +266,7 @@ func ValidateE810Opts(rawJSON []byte) []string {
 		return errs
 	}
 
-	errs = append(errs, validatePinNames(opts.DevicePins, "e810")...)
+	errs = append(errs, validatePinNames(opts.DevicePins, "e810", hasSysfsSMAPinsFunc)...)
 	errs = append(errs, validatePinValues(opts.DevicePins, "e810")...)
 
 	// Validate interconnections
@@ -267,7 +294,7 @@ func ValidateE825Opts(rawJSON []byte) []string {
 		return errs
 	}
 
-	errs = append(errs, validatePinNames(opts.DevicePins, "e825")...)
+	errs = append(errs, validatePinNames(opts.DevicePins, "e825", hasSysfsSMAPinsFunc)...)
 	errs = append(errs, validatePinValues(opts.DevicePins, "e825")...)
 
 	return errs
@@ -290,7 +317,7 @@ func ValidateE830Opts(rawJSON []byte) []string {
 		return errs
 	}
 
-	errs = append(errs, validatePinNames(opts.DevicePins, "e830")...)
+	errs = append(errs, validatePinNames(opts.DevicePins, "e830", hasSysfsSMAPinsFunc)...)
 	errs = append(errs, validatePinValues(opts.DevicePins, "e830")...)
 
 	return errs
