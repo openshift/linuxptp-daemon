@@ -362,6 +362,11 @@ func (c *ClockChain) EnableE810Outputs() error {
 			glog.Errorf("failed to set SMA2 pin via sysfs: %s", err)
 		}
 	} else {
+		// This is to assign channel 2 to SDP22. The period command below will fail without it
+		err = pinConfig.applyPinSet(c.LeadingNIC.Name, pinSet{"SDP22": "2 2"})
+		if err != nil {
+			glog.Errorf("failed to set SDP22 pin via sysfs: %s", err)
+		}
 		sma2Cmds := c.DpllPins.GetCommandsForPluginPinSet(c.LeadingNIC.DpllClockID, map[string]string{"SMA2": "2 2"})
 		err = c.DpllPins.ApplyPinCommands(sma2Cmds)
 		if err != nil {
