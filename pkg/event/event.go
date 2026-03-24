@@ -1105,6 +1105,9 @@ func (e *EventHandler) GetPTPState(source EventSource, cfgName string) PTPState 
 
 // UpdateClockStateMetrics ...
 func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace string) {
+	if !utils.CheckMetricSanity("ClockState", process, iFace) {
+		return
+	}
 	if e.stdoutToSocket {
 		return
 	}

@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
+
 	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -11,6 +13,9 @@ var NodeName string // to be initialized on startup or via setter
 
 // UpdateClockStateMetrics sets the ClockState metric (1 = LOCKED, 0 = other)
 func UpdateClockStateMetrics(process, iface, state string) {
+	if !utils.CheckMetricSanity("ClockState", process, iface) {
+		return
+	}
 	val := 0.0
 	if state == "LOCKED" {
 		val = 1.0
@@ -20,6 +25,9 @@ func UpdateClockStateMetrics(process, iface, state string) {
 
 // UpdateInterfaceRoleMetrics ...
 func UpdateInterfaceRoleMetrics(process, iface string, role int) {
+	if !utils.CheckMetricSanity("InterfaceRole", process, iface) {
+		return
+	}
 	InterfaceRole.With(prometheus.Labels{"process": process, "node": NodeName, "iface": iface}).Set(float64(role))
 }
 
@@ -52,6 +60,9 @@ func UpdatePTPHAMetrics(profile string, inActiveProfiles []string, state int64) 
 
 // UpdateSynceClockQlMetrics ...
 func UpdateSynceClockQlMetrics(process, cfgName, iface string, networkOption int, device string, value int) {
+	if !utils.CheckMetricSanity("SynceClockQl", process, iface) {
+		return
+	}
 	SynceClockQL.With(prometheus.Labels{
 		"process": process, "node": NodeName, "profile": cfgName, "network_option": strconv.Itoa(networkOption),
 		"iface": iface, "device": device}).Set(float64(value))
@@ -59,6 +70,9 @@ func UpdateSynceClockQlMetrics(process, cfgName, iface string, networkOption int
 
 // UpdateSynceQLMetrics ...
 func UpdateSynceQLMetrics(process, cfgName, iface string, networkOption int, device, qlType string, value byte) {
+	if !utils.CheckMetricSanity("SynceQL", process, iface) {
+		return
+	}
 	SynceQLInfo.With(prometheus.Labels{
 		"process": process, "node": NodeName, "profile": cfgName, "iface": iface,
 		"network_option": strconv.Itoa(networkOption), "device": device, "ql_type": qlType}).Set(float64(value))
@@ -66,6 +80,9 @@ func UpdateSynceQLMetrics(process, cfgName, iface string, networkOption int, dev
 
 // UpdatePTPMetrics updatePTPMetrics ...
 func UpdatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, frequencyAdjustment, delay float64) {
+	if !utils.CheckMetricSanity("PTPMetrics", process, iface) {
+		return
+	}
 	Offset.With(prometheus.Labels{"from": from,
 		"process": process, "node": NodeName, "iface": iface}).Set(ptpOffset)
 
