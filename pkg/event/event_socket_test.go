@@ -353,9 +353,19 @@ func TestWriteLogToSocket_WriteAndReconnect(t *testing.T) {
 	// Simulate broken pipe: close the current connection.
 	e.setConn(nil)
 
-	// writeLogToSocket should detect nil conn and return false.
-	result = e.writeLogToSocket("should fail\n")
-	assert.False(t, result)
+	// Accept the reconnection attempt so the write can succeed.
+	go acceptAndRead(listener, received)
+
+	// writeLogToSocket should reconnect and succeed since listener is still up.
+	result = e.writeLogToSocket("test message\n")
+	assert.True(t, result)
+
+	select {
+	case got := <-received:
+		assert.Equal(t, "test message\n", got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for reconnected message")
+	}
 
 	e.setConn(nil) // cleanup
 }
@@ -601,7 +611,9 @@ func TestEmitClockClass_WritesToSocket(t *testing.T) {
 
 func TestEmitClockClass_NilConnectionNoWrite(_ *testing.T) {
 	e := newTestEventHandler("")
-	// conn is nil by default; should not panic
+	// conn is nil by default; signal closeCh so reconnect exits immediately
+	e.closeCh <- true
+	// should not panic
 	e.emitClockClass(fbprotocol.ClockClass(6), "ptp4l.0.config")
 }
 
@@ -700,6 +712,82 @@ func TestEmitClockClassExported_EmitsStoredClockClass(t *testing.T) {
 		assert.Contains(t, got, "ptp4l.1.config")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for clock class message for config 1")
+	}
+
+	e.setConn(nil) // cleanup
+}
+
+// --- storeClockClassLocked ---
+
+func TestStoreClockClassLocked_CreatesNewEntry(t *testing.T) {
+	e := newTestEventHandler("")
+	e.Lock()
+	e.storeClockClassLocked("ptp4l.0.config", fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21))
+	state, ok := e.clkSyncState["ptp4l.0.config"]
+	e.Unlock()
+
+	assert.True(t, ok)
+	assert.Equal(t, fbprotocol.ClockClass(6), state.clockClass)
+	assert.Equal(t, fbprotocol.ClockAccuracy(0x21), state.clockAccuracy)
+}
+
+func TestStoreClockClassLocked_UpdatesExistingEntry(t *testing.T) {
+	e := newTestEventHandler("")
+
+	// Pre-populate with other fields
+	e.clkSyncState["ptp4l.0.config"] = &clockSyncState{
+		state:      PTP_LOCKED,
+		clockClass: fbprotocol.ClockClass(248),
+	}
+
+	e.Lock()
+	e.storeClockClassLocked("ptp4l.0.config", fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21))
+	state := e.clkSyncState["ptp4l.0.config"]
+	e.Unlock()
+
+	assert.Equal(t, fbprotocol.ClockClass(6), state.clockClass)
+	assert.Equal(t, fbprotocol.ClockAccuracy(0x21), state.clockAccuracy)
+	// Existing field preserved
+	assert.Equal(t, PTP_LOCKED, state.state)
+}
+
+func TestStoreClockClassLocked_MakesEmitClockClassWork(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// Simulate what clockClassRequestCh handler does
+	e.Lock()
+	e.storeClockClassLocked("ptp4l.0.config", fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21))
+	e.storeClockClassLocked("ptp4l.1.config", fbprotocol.ClockClass(255), fbprotocol.ClockAccuracy(0xFE))
+	e.Unlock()
+
+	// EmitClockClass should now find and emit the stored values
+	e.EmitClockClass("ptp4l.0.config")
+
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 6")
+		assert.Contains(t, got, "ptp4l.0.config")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for clock class message")
+	}
+
+	e.EmitClockClass("ptp4l.1.config")
+
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 255")
+		assert.Contains(t, got, "ptp4l.1.config")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for clock class message")
 	}
 
 	e.setConn(nil) // cleanup

@@ -638,6 +638,17 @@ func (e *EventHandler) setClockClassLocked(clockClass fbprotocol.ClockClass, clo
 	e.clockAccuracy = clockAcc
 }
 
+// storeClockClassLocked stores the clock class and accuracy in clkSyncState
+// so that EmitClockClass and the classTicker can re-emit after a reconnect.
+// Caller must hold e.Lock().
+func (e *EventHandler) storeClockClassLocked(cfgName string, clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy) {
+	if _, ok := e.clkSyncState[cfgName]; !ok {
+		e.clkSyncState[cfgName] = &clockSyncState{}
+	}
+	e.clkSyncState[cfgName].clockClass = clockClass
+	e.clkSyncState[cfgName].clockAccuracy = clockAcc
+}
+
 // emitClockClass writes the clock class to the socket and updates the metric.
 // Must NOT be called while holding e.Lock().
 func (e *EventHandler) emitClockClass(clockClass fbprotocol.ClockClass, cfgName string) {
@@ -696,7 +707,15 @@ func (e *EventHandler) writeLogToSocket(l string) bool {
 	}
 	conn := e.getConn()
 	if conn == nil {
-		return false
+		if !e.reconnectEventSocket() {
+			glog.Warning("Connection is nil and reconnect failed, skipping socket write")
+			return false
+		}
+		conn = e.getConn()
+		if conn == nil {
+			glog.Error("Connection is still nil after successful reconnect, skipping socket write")
+			return false
+		}
 	}
 	if err := conn.SetWriteDeadline(time.Now().Add(socketWriteTimeout)); err != nil {
 		glog.Warningf("Failed to set write deadline: %v", err)
@@ -781,6 +800,7 @@ func (e *EventHandler) ProcessEvents() {
 						e.Lock()
 						e.clockClass = clk.clockClass
 						e.clockAccuracy = clk.clockAccuracy
+						e.storeClockClassLocked(clk.cfgName, clk.clockClass, clk.clockAccuracy)
 						e.Unlock()
 					}
 
@@ -1266,6 +1286,7 @@ func (e *EventHandler) UpdateClockClass(clk ClockClassRequest) {
 		e.Lock()
 		e.clockClass = clockClass
 		e.clockAccuracy = clockAccuracy
+		e.storeClockClassLocked(clk.cfgName, clockClass, clockAccuracy)
 		e.Unlock()
 		clockClassOut := utils.GetClockClassLogMessage(PTP4lProcessName, clk.cfgName, clockClass)
 		if e.stdoutToSocket {
