@@ -606,7 +606,7 @@ func batchPinSet(commands []dpll.PinParentDeviceCtl) error {
 	//nolint:errcheck
 	defer conn.Close()
 	for _, command := range commands {
-		glog.Infof("DPLL pin command %#v", command)
+		glog.Infof("DPLL pin command %s", command.String())
 		b, err := dpll.EncodePinControl(command)
 		if err != nil {
 			return err
