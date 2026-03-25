@@ -60,7 +60,7 @@ func TestActivePhaseOffsetPin(t *testing.T) {
 			pin: &nl.PinInfo{
 				ClockID: testClockID,
 				ParentDevice: []nl.PinParentDevice{
-				{ParentID: ppsDeviceID, State: nl.PinStateConnected, Direction: nl.PinDirectionInput},
+					{ParentID: ppsDeviceID, State: nl.PinStateConnected, Direction: nl.PinDirectionInput},
 				},
 			},
 			expectedIndex: 0,
@@ -112,8 +112,8 @@ func TestActivePhaseOffsetPin(t *testing.T) {
 			pin: &nl.PinInfo{
 				ClockID: testClockID,
 				ParentDevice: []nl.PinParentDevice{
-				{ParentID: eecDeviceID, State: nl.PinStateConnected, Direction: nl.PinDirectionInput},
-				{ParentID: ppsDeviceID, State: nl.PinStateConnected, Direction: nl.PinDirectionInput},
+					{ParentID: eecDeviceID, State: nl.PinStateConnected, Direction: nl.PinDirectionInput},
+					{ParentID: ppsDeviceID, State: nl.PinStateConnected, Direction: nl.PinDirectionInput},
 				},
 			},
 			expectedIndex: 1,
