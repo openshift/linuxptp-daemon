@@ -22,6 +22,7 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 	// EnableE810Outputs is called for the leading NIC (ens4f0) - needs specific paths
 	mockFS.AllowReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
 	mockFS.AllowReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
+	// mock applyPinSet does not hit the filesystem; only the period write from EnableE810Outputs is real.
 	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0o666), nil)
 
 	mockPinConfig, restorePins := setupMockPinConfig()
@@ -41,7 +42,7 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 	assert.Equal(t, ClockTypeTBC, ccData.Type, "identified a wrong clock type")
 	assert.Equal(t, uint64(5799633565432596414), ccData.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
 	assert.Equal(t, "ens4f1", ccData.LeadingNIC.UpstreamPort, "wrong upstream port")
-	assert.Equal(t, 0, mockPinConfig.actualPinSetCount)
+	assert.Equal(t, 1, mockPinConfig.actualPinSetCount, "SDP22 sysfs channel assignment for 1PPS")
 	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 	assert.NotNil(t, mockPinSet.commands, "DPLL commands should have been issued")
 	assert.Greater(t, len(mockPinSet.commands), 0, "should have DPLL pin commands")
@@ -102,7 +103,7 @@ func Test_ProcessProfileTtscClockChain(t *testing.T) {
 	assert.Equal(t, uint64(5799633565432596414), ccData.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
 	assert.Equal(t, "ens4f1", ccData.LeadingNIC.UpstreamPort, "wrong upstream port")
 	assert.NotNil(t, mockPinSet.commands, "Ensure some pins were set")
-	assert.Equal(t, 0, mockPinConfig.actualPinSetCount)
+	assert.Equal(t, 1, mockPinConfig.actualPinSetCount, "SDP22 sysfs channel assignment for 1PPS")
 	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 
 	// Test holdover entry
@@ -146,7 +147,7 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 	// Initialize the clock chain with multiple NICs
 	err = OnPTPConfigChangeE810(nil, profile)
 	assert.NoError(t, err)
-	assert.Equal(t, 0, mockPinConfig.actualPinSetCount)
+	assert.Equal(t, 1, mockPinConfig.actualPinSetCount, "SDP22 sysfs channel assignment for 1PPS")
 	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 
 	// Verify we have the expected clock chain structure
