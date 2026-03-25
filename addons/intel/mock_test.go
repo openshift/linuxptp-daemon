@@ -362,6 +362,30 @@ func setupMockDPLLPins(pins ...*dpll.PinInfo) (*mockedDPLLPins, func()) {
 	return mock, func() { DpllPins = orig }
 }
 
+// expandPinsForPluginYAMLCompatibility adds in-memory PinInfo clones so tests can keep legacy
+// plugin YAML keys (SMA2, U.FL1, U.FL2) while dpll-pins.json reports boardLabel "SMA2/U.FL2"
+// and no separate U.FL1 DPLL pin (tests only; production JSON and YAML unchanged).
+func expandPinsForPluginYAMLCompatibility(pins []*dpll.PinInfo) []*dpll.PinInfo {
+	out := make([]*dpll.PinInfo, 0, len(pins)+32)
+	out = append(out, pins...)
+	for _, p := range pins {
+		if p.BoardLabel == "SMA2/U.FL2" {
+			s2 := *p
+			s2.BoardLabel = "SMA2"
+			out = append(out, &s2)
+			u2 := *p
+			u2.BoardLabel = "U.FL2"
+			out = append(out, &u2)
+		}
+		if p.BoardLabel == "SMA1" && p.ModuleName == "ice" {
+			u1 := *p
+			u1.BoardLabel = "U.FL1"
+			out = append(out, &u1)
+		}
+	}
+	return out
+}
+
 func setupMockDPLLPinsFromJSON(path string) (*mockedDPLLPins, func()) { //nolint: unparam // it may be used for other pin files in the future it doesn't make the code overly complex
 	pins := []dpll.PinInfo{}
 	data, err := os.ReadFile(path)
@@ -375,6 +399,7 @@ func setupMockDPLLPinsFromJSON(path string) (*mockedDPLLPins, func()) { //nolint
 	for i := range pins {
 		ptrs[i] = &pins[i]
 	}
+	ptrs = expandPinsForPluginYAMLCompatibility(ptrs)
 	return setupMockDPLLPins(ptrs...)
 }
 
