@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
+
 	"fmt"
 	"net/http"
 	"strconv"
@@ -243,6 +245,9 @@ func InitializeOffsetMaps() {
 
 // updatePTPMetrics ...
 func updatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, frequencyAdjustment, delay float64) {
+	if !utils.CheckMetricSanity("PTPMetrics", process, iface) {
+		return
+	}
 	Offset.With(prometheus.Labels{"from": from,
 		"process": process, "node": NodeName, "iface": iface}).Set(ptpOffset)
 
@@ -519,6 +524,9 @@ func extractRegularMetrics(configName, processName, output string, ifaces config
 
 // updateClockStateMetrics ...
 func updateClockStateMetrics(process, iface string, state string) {
+	if !utils.CheckMetricSanity("ClockState", process, iface) {
+		return
+	}
 	if state == LOCKED {
 		ClockState.With(prometheus.Labels{
 			"process": process, "node": NodeName, "iface": iface}).Set(1)
@@ -529,6 +537,9 @@ func updateClockStateMetrics(process, iface string, state string) {
 }
 
 func UpdateInterfaceRoleMetrics(process string, iface string, role ptpPortRole) {
+	if !utils.CheckMetricSanity("InterfaceRole", process, iface) {
+		return
+	}
 	InterfaceRole.With(prometheus.Labels{
 		"process": process, "node": NodeName, "iface": iface}).Set(float64(role))
 }
@@ -559,11 +570,17 @@ func UpdatePTPHAMetrics(profile string, inActiveProfiles []string, state int64) 
 }
 
 func UpdateSynceClockQlMetrics(process, cfgName string, iface string, network_option int, device string, value int) {
+	if !utils.CheckMetricSanity("SynceClockQl", process, iface) {
+		return
+	}
 	SynceClockQL.With(prometheus.Labels{
 		"process": process, "node": NodeName, "profile": cfgName, "network_option": strconv.Itoa(network_option), "iface": iface, "device": device}).Set(float64(value))
 }
 
 func UpdateSynceQLMetrics(process, cfgName string, iface string, network_option int, device string, qlType string, value byte) {
+	if !utils.CheckMetricSanity("SynceQL", process, iface) {
+		return
+	}
 	SynceQLInfo.With(prometheus.Labels{
 		"process": process, "node": NodeName, "profile": cfgName, "iface": iface,
 		"network_option": strconv.Itoa(network_option), "device": device, "ql_type": qlType}).Set(float64(value))
