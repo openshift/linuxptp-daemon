@@ -394,6 +394,59 @@ func GetPinDirection(d uint32) string {
 	return ""
 }
 
+// String returns a concise debug representation aligned with PinParentDeviceHR
+// field semantics (direction/state as names when known).
+func (p PinControl) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "parentID=%d", p.PinParentID)
+	if p.Direction != nil {
+		if d := GetPinDirection(*p.Direction); d != "" {
+			fmt.Fprintf(&b, " direction=%s", d)
+		} else {
+			fmt.Fprintf(&b, " direction=%d", *p.Direction)
+		}
+	}
+	if p.Prio != nil {
+		fmt.Fprintf(&b, " prio=%d", *p.Prio)
+	}
+	if p.State != nil {
+		if s := GetPinState(*p.State); s != "" {
+			fmt.Fprintf(&b, " state=%s", s)
+		} else {
+			fmt.Fprintf(&b, " state=%d", *p.State)
+		}
+	}
+	return b.String()
+}
+
+// String returns a concise debug representation of the pin parent device control request.
+func (p PinParentDeviceCtl) String() string {
+	var b strings.Builder
+	b.WriteString("PinParentDeviceCtl{")
+	fmt.Fprintf(&b, "id=%d", p.ID)
+	if p.Frequency != nil {
+		fmt.Fprintf(&b, " frequency=%d", *p.Frequency)
+	}
+	if p.PhaseAdjust != nil {
+		fmt.Fprintf(&b, " phaseAdjust=%d", *p.PhaseAdjust)
+	}
+	if p.EsyncFrequency != nil {
+		fmt.Fprintf(&b, " esyncFrequency=%d", *p.EsyncFrequency)
+	}
+	if len(p.PinParentCtl) > 0 {
+		b.WriteString(" pinParent=[")
+		for i := range p.PinParentCtl {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(p.PinParentCtl[i].String())
+		}
+		b.WriteString("]")
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
 // Defines pin capabilities
 const (
 	PinCapNone  = 0

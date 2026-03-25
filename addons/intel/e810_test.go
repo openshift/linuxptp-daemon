@@ -127,7 +127,7 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
-	assert.Equal(t, 0, mockPinConfig.actualPinSetCount)
+	assert.Equal(t, 1, mockPinConfig.actualPinSetCount, "SDP22 sysfs channel assignment for 1PPS")
 	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 
 	// Verify that clockChain was initialized (SetPinDefaults is called as part of InitClockChain)
