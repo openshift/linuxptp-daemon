@@ -67,9 +67,10 @@ func Test_RenderLeapFile(t *testing.T) {
 func Test_processLeapIndication_FutureLeapZero(t *testing.T) {
 	leapData := readTestData(t)
 	lm := &LeapManager{
-		UbloxLsInd: make(chan ublox.TimeLs),
-		Close:      make(chan bool),
-		leapFile:   *leapData,
+		UbloxLsInd:         make(chan ublox.TimeLs),
+		Close:              make(chan bool),
+		leapFile:           *leapData,
+		allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true},
 	}
 
 	ind := ublox.TimeLs{
@@ -90,9 +91,10 @@ func Test_processLeapIndication_FutureLeapZero(t *testing.T) {
 func Test_processLeapIndication_FutureLeapNotZero(t *testing.T) {
 	leapData := readTestData(t)
 	lm := &LeapManager{
-		UbloxLsInd: make(chan ublox.TimeLs),
-		Close:      make(chan bool),
-		leapFile:   *leapData,
+		UbloxLsInd:         make(chan ublox.TimeLs),
+		Close:              make(chan bool),
+		leapFile:           *leapData,
+		allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true},
 	}
 
 	ind := ublox.TimeLs{
@@ -119,9 +121,10 @@ func Test_processLeapIndication_FutureLeapNotZero(t *testing.T) {
 func Test_processLeapIndication_MissedLeapZero(t *testing.T) {
 	leapData := readTestData(t)
 	lm := &LeapManager{
-		UbloxLsInd: make(chan ublox.TimeLs),
-		Close:      make(chan bool),
-		leapFile:   *leapData,
+		UbloxLsInd:         make(chan ublox.TimeLs),
+		Close:              make(chan bool),
+		leapFile:           *leapData,
+		allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true},
 	}
 
 	ind := ublox.TimeLs{
@@ -145,9 +148,10 @@ func Test_processLeapIndication_MissedLeapZero(t *testing.T) {
 func Test_processLeapIndication_MissedLeapNotZero(t *testing.T) {
 	leapData := readTestData(t)
 	lm := &LeapManager{
-		UbloxLsInd: make(chan ublox.TimeLs),
-		Close:      make(chan bool),
-		leapFile:   *leapData,
+		UbloxLsInd:         make(chan ublox.TimeLs),
+		Close:              make(chan bool),
+		leapFile:           *leapData,
+		allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true},
 	}
 
 	ind := ublox.TimeLs{
@@ -169,6 +173,71 @@ func Test_processLeapIndication_MissedLeapNotZero(t *testing.T) {
 	fmt.Println(res.updateTime)
 	fmt.Println(res.leapSec)
 	fmt.Println(res.leapTime)
+}
+
+func Test_processLeapIndication_BeiDouAllowed(t *testing.T) {
+	leapData := readTestData(t)
+	lm := &LeapManager{
+		UbloxLsInd:         make(chan ublox.TimeLs),
+		Close:              make(chan bool),
+		leapFile:           *leapData,
+		allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true, ublox.LeapSourceBeiDou: true},
+	}
+
+	ind := ublox.TimeLs{
+		SrcOfCurrLs:   ublox.LeapSourceBeiDou,
+		CurrLs:        18,
+		SrcOfLsChange: ublox.LeapSourceBeiDou,
+		LsChange:      1,
+		TimeToLsEvent: 74329702,
+		DateOfLsGpsWn: 2441,
+		DateOfLsGpsDn: 7,
+		Valid:         3,
+	}
+	res, err := lm.processLeapIndication(&ind)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.Equal(t, int(ind.CurrLs+ind.LsChange+19), res.leapSec)
+}
+
+func Test_processLeapIndication_SourceRejected(t *testing.T) {
+	leapData := readTestData(t)
+	lm := &LeapManager{
+		UbloxLsInd:         make(chan ublox.TimeLs),
+		Close:              make(chan bool),
+		leapFile:           *leapData,
+		allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true},
+	}
+
+	ind := ublox.TimeLs{
+		SrcOfCurrLs:   ublox.LeapSourceBeiDou,
+		CurrLs:        18,
+		SrcOfLsChange: ublox.LeapSourceBeiDou,
+		LsChange:      1,
+		TimeToLsEvent: 74329702,
+		DateOfLsGpsWn: 2441,
+		DateOfLsGpsDn: 7,
+		Valid:         3,
+	}
+	res, err := lm.processLeapIndication(&ind)
+	assert.NoError(t, err)
+	assert.Nil(t, res)
+}
+
+func Test_SetAllowedLeapSources(t *testing.T) {
+	lm := &LeapManager{
+		allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true},
+	}
+	newSources := map[uint8]bool{
+		ublox.LeapSourceGPS:    true,
+		ublox.LeapSourceBeiDou: true,
+		ublox.LeapSourceNavIC:  true,
+	}
+	lm.SetAllowedLeapSources(newSources)
+	assert.True(t, lm.allowedLeapSources[ublox.LeapSourceGPS])
+	assert.True(t, lm.allowedLeapSources[ublox.LeapSourceBeiDou])
+	assert.True(t, lm.allowedLeapSources[ublox.LeapSourceNavIC])
+	assert.False(t, lm.allowedLeapSources[ublox.LeapSourceGLONASS])
 }
 
 func Test_populateLeapDataCmGood(t *testing.T) {
@@ -281,11 +350,12 @@ func Test_handleLeapIndication(t *testing.T) {
 	os.Setenv("NODE_NAME", "test-node-name")
 	client := fake.NewSimpleClientset(cm)
 	lm := &LeapManager{
-		UbloxLsInd:  make(chan ublox.TimeLs),
-		Close:       make(chan bool),
-		client:      client,
-		namespace:   "openshift-ptp",
-		retryUpdate: false,
+		UbloxLsInd:         make(chan ublox.TimeLs),
+		Close:              make(chan bool),
+		client:             client,
+		namespace:          "openshift-ptp",
+		retryUpdate:        false,
+		allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true},
 	}
 	err := lm.populateLeapData()
 	assert.NoError(t, err)
