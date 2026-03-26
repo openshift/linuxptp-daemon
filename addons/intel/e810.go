@@ -24,6 +24,7 @@ type E810Opts struct {
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
 	PhaseInputs         []PhaseInputs                `json:"interconnections"`
+	Gnss                GnssOptions                  `json:"gnss"`
 }
 
 // GetPhaseInputs implements PhaseInputsProvider
@@ -71,6 +72,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	autoDetectGNSSSerialPort(nodeProfile)
 
 	var e810Opts E810Opts
+	e810Opts.Gnss.LeapSources = defaultLeapSourceOptions()
 	var err error
 	var optsByteArray []byte
 	var stdout []byte
@@ -159,6 +161,8 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			} else {
 				glog.Error("no clock chain set")
 			}
+
+			updateLeapManagerSources(e810Opts.Gnss.LeapSources)
 		}
 	}
 	return nil
