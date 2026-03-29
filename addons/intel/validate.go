@@ -10,22 +10,6 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// discoverSysfsPinsFunc is the function used to discover pins from sysfs.
-// It is a variable so it can be replaced in tests.
-var discoverSysfsPinsFunc = discoverPHCPins
-
-// hasDPLLPinLabelFunc checks whether a pin name exists as a DPLL board label.
-// It is a variable so it can be replaced in tests.
-var hasDPLLPinLabelFunc = hasDPLLPinLabel
-
-// hasSysfsSMAPinsFunc checks whether SMA pins are available via sysfs for a device.
-// It is a variable so it can be replaced in tests.
-var hasSysfsSMAPinsFunc = hasSysfsSMAPins
-
-func hasDPLLPinLabel(pinName string) bool {
-	return len(DpllPins.GetAllPinsByLabel(pinName)) > 0
-}
-
 // discoverPHCPins reads available PHC pin names from sysfs for a given device.
 // Returns the pin names found under /sys/class/net/<device>/device/ptp/<phc>/pins/
 func discoverPHCPins(device string) ([]string, error) {
@@ -55,24 +39,25 @@ func discoverPHCPins(device string) ([]string, error) {
 	return result, nil
 }
 
-// validConnectorNames are valid connector names from the hardware spec
-func validConnectorNames() []string {
+// connectorNamesForPart returns valid connector names for a specific hardware part.
+func connectorNamesForPart(part string) []string {
+	specYaml, ok := hardware[part]
+	if !ok {
+		return nil
+	}
+	delays := InternalDelays{}
+	if err := yaml.Unmarshal([]byte(specYaml), &delays); err != nil {
+		return nil
+	}
 	connectors := map[string]bool{}
-	for _, specYaml := range hardware {
-		delays := InternalDelays{}
-		b := []byte(specYaml)
-		if err := yaml.Unmarshal(b, &delays); err != nil {
-			continue
-		}
-		for _, link := range delays.ExternalInputs {
-			connectors[strings.ToLower(link.Connector)] = true
-		}
-		for _, link := range delays.ExternalOutputs {
-			connectors[strings.ToLower(link.Connector)] = true
-		}
-		if delays.GnssInput.Connector != "" {
-			connectors[strings.ToLower(delays.GnssInput.Connector)] = true
-		}
+	for _, link := range delays.ExternalInputs {
+		connectors[strings.ToLower(link.Connector)] = true
+	}
+	for _, link := range delays.ExternalOutputs {
+		connectors[strings.ToLower(link.Connector)] = true
+	}
+	if delays.GnssInput.Connector != "" {
+		connectors[strings.ToLower(delays.GnssInput.Connector)] = true
 	}
 	result := make([]string, 0, len(connectors))
 	for c := range connectors {
@@ -81,13 +66,10 @@ func validConnectorNames() []string {
 	return result
 }
 
-// validPartNames returns valid part names from the hardware map
-func validPartNames() []string {
-	parts := make([]string, 0, len(hardware))
-	for k := range hardware {
-		parts = append(parts, k)
-	}
-	return parts
+// isValidPart checks whether a part name exists in the hardware map.
+func isValidPart(part string) bool {
+	_, ok := hardware[part]
+	return ok
 }
 
 // validateUnknownFields checks for unknown JSON fields by re-decoding with DisallowUnknownFields.
@@ -107,54 +89,41 @@ func validateUnknownFields(rawJSON []byte, target interface{}) []string {
 	return nil
 }
 
-// validatePinNames checks that all pin names in the DevicePins map are valid.
-// The useSysfs strategy function decides per device whether to validate against
-// sysfs pins or DPLL board labels. This mirrors each plugin's runtime behavior:
-// - E810: passes hasSysfsSMAPins (sysfs when SMA1 exists, DPLL otherwise)
-// - E825/E830: passes alwaysSysfs (always sysfs, matching pinConfig.applyPinSet)
-func validatePinNames(devicePins map[string]pinSet, pluginName string, useSysfs func(string) bool) []string {
+// validateDevicePins checks pin names and values in a single pass per device.
+func validateDevicePins(devicePins map[string]pinSet, pluginName string) []string {
 	var errs []string
 	for device, pins := range devicePins {
-		if useSysfs(device) {
-			// sysfs path: validate all pins against discovered sysfs pins
-			sysfsPins, sysfsErr := discoverSysfsPinsFunc(device)
-			if sysfsErr != nil {
+		useSysfs := pluginName != "e810" || hasSysfsSMAPins(device)
+
+		var phcName string
+		if useSysfs {
+			deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
+			phcs, err := filesystem.ReadDir(deviceDir)
+			if err != nil || len(phcs) == 0 {
 				errs = append(errs, fmt.Sprintf(
 					"%s plugin: cannot discover sysfs pins for device '%s': %v",
-					pluginName, device, sysfsErr))
+					pluginName, device, err))
 				continue
 			}
-			validSet := make(map[string]bool, len(sysfsPins))
-			for _, p := range sysfsPins {
-				validSet[p] = true
-			}
-			for pinName := range pins {
-				if !validSet[pinName] {
+			phcName = phcs[0].Name()
+		}
+
+		for pinName, value := range pins {
+			if useSysfs {
+				pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phcName, pinName)
+				if _, err := filesystem.ReadFile(pinPath); err != nil {
 					errs = append(errs, fmt.Sprintf(
-						"%s plugin: unknown pin name '%s' for device '%s' (valid sysfs pins: %s)",
-						pluginName, pinName, device, strings.Join(sysfsPins, ", ")))
+						"%s plugin: unknown pin name '%s' for device '%s'",
+						pluginName, pinName, device))
 				}
-			}
-		} else {
-			// DPLL path: validate all pins against DPLL board labels
-			for pinName := range pins {
-				if !hasDPLLPinLabelFunc(pinName) {
+			} else {
+				if len(DpllPins.GetAllPinsByLabel(pinName)) == 0 {
 					errs = append(errs, fmt.Sprintf(
 						"%s plugin: unknown pin name '%s' for device '%s' (not found in DPLL pin labels)",
 						pluginName, pinName, device))
 				}
 			}
-		}
-	}
-	return errs
-}
 
-// validatePinValues checks that pin values have the expected "<direction> <channel>" format
-// where direction is 0-2 and channel is a non-negative integer
-func validatePinValues(devicePins map[string]pinSet, pluginName string) []string {
-	var errs []string
-	for device, pins := range devicePins {
-		for pinName, value := range pins {
 			parts := strings.Fields(value)
 			if len(parts) != 2 {
 				errs = append(errs, fmt.Sprintf(
@@ -182,57 +151,47 @@ func validatePinValues(devicePins map[string]pinSet, pluginName string) []string
 // validateInterconnections checks that interconnections entries have valid fields
 func validateInterconnections(inputs []PhaseInputs) []string {
 	var errs []string
-	validParts := validPartNames()
-	validConns := validConnectorNames()
 
 	for i, card := range inputs {
-		// Validate ID is not empty
 		if card.ID == "" {
 			errs = append(errs, fmt.Sprintf(
 				"interconnections[%d]: 'id' field is required", i))
 		}
 
-		// Validate Part name
 		if card.Part == "" {
 			errs = append(errs, fmt.Sprintf(
 				"interconnections[%d] (%s): 'Part' field is required", i, card.ID))
-		} else {
-			found := false
-			for _, p := range validParts {
-				if p == card.Part {
-					found = true
-					break
-				}
-			}
-			if !found {
-				errs = append(errs, fmt.Sprintf(
-					"interconnections[%d] (%s): unknown Part '%s' (valid parts: %s)",
-					i, card.ID, card.Part, strings.Join(validParts, ", ")))
-			}
+			continue
 		}
 
-		// Validate input connector name (if not GNSS input and not T-BC upstream)
+		if !isValidPart(card.Part) {
+			errs = append(errs, fmt.Sprintf(
+				"interconnections[%d] (%s): unknown Part '%s'",
+				i, card.ID, card.Part))
+			continue
+		}
+
+		partConns := connectorNamesForPart(card.Part)
+
 		if !card.GnssInput && card.UpstreamPort == "" && card.Input.Connector != "" {
-			if !isValidConnector(card.Input.Connector, validConns) {
+			if !isValidConnector(card.Input.Connector, partConns) {
 				errs = append(errs, fmt.Sprintf(
-					"interconnections[%d] (%s): unknown input connector '%s' (valid connectors: %s)",
-					i, card.ID, card.Input.Connector, strings.Join(validConns, ", ")))
+					"interconnections[%d] (%s): unknown input connector '%s' for part '%s' (valid connectors: %s)",
+					i, card.ID, card.Input.Connector, card.Part, strings.Join(partConns, ", ")))
 			}
 		}
 
-		// Validate that non-leading, non-GNSS cards have an input connector
 		if !card.GnssInput && card.UpstreamPort == "" && card.Input.Connector == "" {
 			errs = append(errs, fmt.Sprintf(
 				"interconnections[%d] (%s): must specify either 'gnssInput: true', 'upstreamPort', or 'inputConnector'",
 				i, card.ID))
 		}
 
-		// Validate phaseOutputConnectors
 		for j, conn := range card.PhaseOutputConnectors {
-			if !isValidConnector(conn, validConns) {
+			if !isValidConnector(conn, partConns) {
 				errs = append(errs, fmt.Sprintf(
-					"interconnections[%d] (%s): unknown phaseOutputConnector[%d] '%s' (valid connectors: %s)",
-					i, card.ID, j, conn, strings.Join(validConns, ", ")))
+					"interconnections[%d] (%s): unknown phaseOutputConnector[%d] '%s' for part '%s' (valid connectors: %s)",
+					i, card.ID, j, conn, card.Part, strings.Join(partConns, ", ")))
 			}
 		}
 	}
@@ -266,8 +225,7 @@ func ValidateE810Opts(rawJSON []byte) []string {
 		return errs
 	}
 
-	errs = append(errs, validatePinNames(opts.DevicePins, "e810", hasSysfsSMAPinsFunc)...)
-	errs = append(errs, validatePinValues(opts.DevicePins, "e810")...)
+	errs = append(errs, validateDevicePins(opts.DevicePins, "e810")...)
 
 	// Validate interconnections
 	if opts.PhaseInputs != nil {
@@ -294,8 +252,7 @@ func ValidateE825Opts(rawJSON []byte) []string {
 		return errs
 	}
 
-	errs = append(errs, validatePinNames(opts.DevicePins, "e825", hasSysfsSMAPinsFunc)...)
-	errs = append(errs, validatePinValues(opts.DevicePins, "e825")...)
+	errs = append(errs, validateDevicePins(opts.DevicePins, "e825")...)
 
 	return errs
 }
@@ -317,8 +274,7 @@ func ValidateE830Opts(rawJSON []byte) []string {
 		return errs
 	}
 
-	errs = append(errs, validatePinNames(opts.DevicePins, "e830", hasSysfsSMAPinsFunc)...)
-	errs = append(errs, validatePinValues(opts.DevicePins, "e830")...)
+	errs = append(errs, validateDevicePins(opts.DevicePins, "e830")...)
 
 	return errs
 }

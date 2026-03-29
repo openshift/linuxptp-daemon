@@ -6,8 +6,27 @@ import (
 	"os"
 	"testing"
 
+	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/stretchr/testify/assert"
 )
+
+// mockSysfsPins sets up MockFileSystem so each pin exists as a readable
+// sysfs file under the device's PHC. If SMA1 is in the list,
+// hasSysfsSMAPins(device) will also return true.
+func mockSysfsPins(mockFS *MockFileSystem, device string, pins []string) {
+	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+	mockFS.AllowReadDir(fmt.Sprintf("/sys/class/net/%s/device/ptp/", device), phcEntries, nil)
+	for _, pin := range pins {
+		mockFS.AllowReadFile(fmt.Sprintf("/sys/class/net/%s/device/ptp/ptp0/pins/%s", device, pin), []byte("0 1"), nil)
+	}
+}
+
+// mockNoSysfsSMA sets up MockFileSystem so hasSysfsSMAPins(device) returns false.
+func mockNoSysfsSMA(mockFS *MockFileSystem, device string) { //nolint:unparam // device varies by test scenario
+	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+	mockFS.AllowReadDir(fmt.Sprintf("/sys/class/net/%s/device/ptp/", device), phcEntries, nil)
+	mockFS.AllowReadFile(fmt.Sprintf("/sys/class/net/%s/device/ptp/ptp0/pins/SMA1", device), nil, os.ErrNotExist)
+}
 
 func TestValidateE810Opts_UnknownFields(t *testing.T) {
 	tests := []struct {
@@ -57,39 +76,10 @@ func TestValidateE810Opts_UnknownFields(t *testing.T) {
 	}
 }
 
-// setupMockPinDiscovery replaces the sysfs pin discovery function with a mock
-// that returns the given pin names for any device.
-func setupMockPinDiscovery(pins []string) func() {
-	original := discoverSysfsPinsFunc
-	discoverSysfsPinsFunc = func(_ string) ([]string, error) {
-		return pins, nil
-	}
-	return func() { discoverSysfsPinsFunc = original }
-}
-
-// setupMockDPLLPinLabelCheck replaces the DPLL pin label check with a mock
-// that uses the provided map of known labels.
-func setupMockDPLLPinLabelCheck(labels map[string]bool) func() {
-	original := hasDPLLPinLabelFunc
-	hasDPLLPinLabelFunc = func(pinName string) bool {
-		return labels[pinName]
-	}
-	return func() { hasDPLLPinLabelFunc = original }
-}
-
-func setupMockHasSysfsSMAPins(hasSMA bool) func() {
-	original := hasSysfsSMAPinsFunc
-	hasSysfsSMAPinsFunc = func(_ string) bool { return hasSMA }
-	return func() { hasSysfsSMAPinsFunc = original }
-}
-
 func TestValidateE810Opts_InvalidPinNames_RuntimeDiscovery(t *testing.T) {
-	cleanupHas := setupMockHasSysfsSMAPins(true)
-	defer cleanupHas()
-
-	// Mock sysfs discovery: ens4f0 has pins SMA1, SMA2, U.FL1, U.FL2
-	cleanup := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
+	mockFS, cleanup := setupMockFS()
 	defer cleanup()
+	mockSysfsPins(mockFS, "ens4f0", []string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
 
 	tests := []struct {
 		name      string
@@ -158,10 +148,11 @@ func TestValidateE810Opts_InvalidPinNames_RuntimeDiscovery(t *testing.T) {
 }
 
 func TestValidateE810Opts_ErrorWhenBothSysfsAndDPLLFail(t *testing.T) {
-	cleanupHas := setupMockHasSysfsSMAPins(false)
-	defer cleanupHas()
+	mockFS, cleanupFS := setupMockFS()
+	defer cleanupFS()
+	mockNoSysfsSMA(mockFS, "ens4f0")
 
-	cleanupDPLL := setupMockDPLLPinLabelCheck(map[string]bool{})
+	_, cleanupDPLL := setupMockDPLLPins()
 	defer cleanupDPLL()
 
 	config := map[string]interface{}{
@@ -182,14 +173,10 @@ func TestValidateE810Opts_ErrorWhenBothSysfsAndDPLLFail(t *testing.T) {
 }
 
 func TestValidateE810Opts_DynamicPinDiscovery(t *testing.T) {
-	cleanupHas := setupMockHasSysfsSMAPins(true)
-	defer cleanupHas()
-
-	// Simulate a card variant with different pins than the hardcoded fallback
-	cleanup := setupMockPinDiscovery([]string{"CUSTOM_PIN", "SMA1"})
+	mockFS, cleanup := setupMockFS()
 	defer cleanup()
+	mockSysfsPins(mockFS, "ens4f0", []string{"CUSTOM_PIN", "SMA1"})
 
-	// CUSTOM_PIN is valid because sysfs says so (even though it's not in the hardcoded list)
 	config := map[string]interface{}{
 		"pins": map[string]interface{}{
 			"ens4f0": map[string]string{
@@ -201,7 +188,6 @@ func TestValidateE810Opts_DynamicPinDiscovery(t *testing.T) {
 	errs := ValidateE810Opts(raw)
 	assert.Empty(t, errs, "CUSTOM_PIN should be valid when sysfs reports it, got: %v", errs)
 
-	// U.FL2 is NOT valid for this card variant (even though it's in the hardcoded fallback)
 	config2 := map[string]interface{}{
 		"pins": map[string]interface{}{
 			"ens4f0": map[string]string{
@@ -215,12 +201,15 @@ func TestValidateE810Opts_DynamicPinDiscovery(t *testing.T) {
 }
 
 func TestValidatePinNames_E810_DPLLPath_NewerKernel(t *testing.T) {
-	cleanupHas := setupMockHasSysfsSMAPins(false)
-	defer cleanupHas()
+	mockFS, cleanupFS := setupMockFS()
+	defer cleanupFS()
+	mockNoSysfsSMA(mockFS, "ens4f0")
 
-	cleanupDPLL := setupMockDPLLPinLabelCheck(map[string]bool{
-		"SMA1": true, "SMA2": true, "U.FL1": true,
-	})
+	_, cleanupDPLL := setupMockDPLLPins(
+		&dpll.PinInfo{BoardLabel: "SMA1"},
+		&dpll.PinInfo{BoardLabel: "SMA2"},
+		&dpll.PinInfo{BoardLabel: "U.FL1"},
+	)
 	defer cleanupDPLL()
 
 	config := map[string]interface{}{
@@ -237,10 +226,14 @@ func TestValidatePinNames_E810_DPLLPath_NewerKernel(t *testing.T) {
 }
 
 func TestValidatePinNames_E810_DPLLPath_SysfsUnavailable(t *testing.T) {
-	cleanupHas := setupMockHasSysfsSMAPins(false)
-	defer cleanupHas()
+	mockFS, cleanupFS := setupMockFS()
+	defer cleanupFS()
+	mockNoSysfsSMA(mockFS, "ens4f0")
 
-	cleanupDPLL := setupMockDPLLPinLabelCheck(map[string]bool{"SMA1": true, "SMA2": true})
+	_, cleanupDPLL := setupMockDPLLPins(
+		&dpll.PinInfo{BoardLabel: "SMA1"},
+		&dpll.PinInfo{BoardLabel: "SMA2"},
+	)
 	defer cleanupDPLL()
 
 	config := map[string]interface{}{
@@ -254,10 +247,14 @@ func TestValidatePinNames_E810_DPLLPath_SysfsUnavailable(t *testing.T) {
 }
 
 func TestValidatePinNames_E810_DPLLPath_BogusPin(t *testing.T) {
-	cleanupHas := setupMockHasSysfsSMAPins(false)
-	defer cleanupHas()
+	mockFS, cleanupFS := setupMockFS()
+	defer cleanupFS()
+	mockNoSysfsSMA(mockFS, "ens4f0")
 
-	cleanupDPLL := setupMockDPLLPinLabelCheck(map[string]bool{"SMA1": true, "SMA2": true})
+	_, cleanupDPLL := setupMockDPLLPins(
+		&dpll.PinInfo{BoardLabel: "SMA1"},
+		&dpll.PinInfo{BoardLabel: "SMA2"},
+	)
 	defer cleanupDPLL()
 
 	config := map[string]interface{}{
@@ -278,11 +275,9 @@ func TestValidatePinNames_E810_DPLLPath_BogusPin(t *testing.T) {
 }
 
 func TestValidatePinValues(t *testing.T) {
-	cleanupHas := setupMockHasSysfsSMAPins(true)
-	defer cleanupHas()
-
-	cleanup := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
+	mockFS, cleanup := setupMockFS()
 	defer cleanup()
+	mockSysfsPins(mockFS, "ens4f0", []string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
 
 	tests := []struct {
 		name      string
@@ -647,12 +642,15 @@ func TestDiscoverPHCPins_MultiplePHCs(t *testing.T) {
 	assert.ElementsMatch(t, []string{"SMA1", "SMA2", "U.FL1"}, pins)
 }
 
-func TestValidatePinNames_E810_UsesHasSysfsSMAPinsDecision(t *testing.T) {
-	original := hasSysfsSMAPinsFunc
-	hasSysfsSMAPinsFunc = func(_ string) bool { return false }
-	defer func() { hasSysfsSMAPinsFunc = original }()
+func TestValidatePinNames_E810_DPLLPathWhenNoSysfsSMA(t *testing.T) {
+	mockFS, cleanupFS := setupMockFS()
+	defer cleanupFS()
+	mockNoSysfsSMA(mockFS, "ens4f0")
 
-	cleanupDPLL := setupMockDPLLPinLabelCheck(map[string]bool{"SMA1": true, "U.FL1": true})
+	_, cleanupDPLL := setupMockDPLLPins(
+		&dpll.PinInfo{BoardLabel: "SMA1"},
+		&dpll.PinInfo{BoardLabel: "U.FL1"},
+	)
 	defer cleanupDPLL()
 
 	config := map[string]interface{}{
@@ -668,13 +666,10 @@ func TestValidatePinNames_E810_UsesHasSysfsSMAPinsDecision(t *testing.T) {
 	assert.Empty(t, errs, "all pins should be valid via DPLL when hasSysfsSMAPins is false, got: %v", errs)
 }
 
-func TestValidatePinNames_E810_SysfsSMAPinsTrue_ValidatesAgainstSysfs(t *testing.T) {
-	originalHas := hasSysfsSMAPinsFunc
-	hasSysfsSMAPinsFunc = func(_ string) bool { return true }
-	defer func() { hasSysfsSMAPinsFunc = originalHas }()
-
-	cleanup := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
+func TestValidatePinNames_E810_SysfsPathWhenSMAExists(t *testing.T) {
+	mockFS, cleanup := setupMockFS()
 	defer cleanup()
+	mockSysfsPins(mockFS, "ens4f0", []string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
 
 	config := map[string]interface{}{
 		"pins": map[string]interface{}{
@@ -696,11 +691,13 @@ func TestValidatePinNames_E810_SysfsSMAPinsTrue_ValidatesAgainstSysfs(t *testing
 }
 
 func TestValidatePinNames_E810_DPLLPath_InvalidPin(t *testing.T) {
-	originalHas := hasSysfsSMAPinsFunc
-	hasSysfsSMAPinsFunc = func(_ string) bool { return false }
-	defer func() { hasSysfsSMAPinsFunc = originalHas }()
+	mockFS, cleanupFS := setupMockFS()
+	defer cleanupFS()
+	mockNoSysfsSMA(mockFS, "ens4f0")
 
-	cleanupDPLL := setupMockDPLLPinLabelCheck(map[string]bool{"SMA1": true})
+	_, cleanupDPLL := setupMockDPLLPins(
+		&dpll.PinInfo{BoardLabel: "SMA1"},
+	)
 	defer cleanupDPLL()
 
 	config := map[string]interface{}{
@@ -721,11 +718,9 @@ func TestValidatePinNames_E810_DPLLPath_InvalidPin(t *testing.T) {
 }
 
 func TestValidatePinNames_E825_AlwaysUsesSysfs(t *testing.T) {
-	cleanupHas := setupMockHasSysfsSMAPins(true)
-	defer cleanupHas()
-
-	cleanup := setupMockPinDiscovery([]string{"SDP0", "SDP1", "SDP2", "SDP3"})
+	mockFS, cleanup := setupMockFS()
 	defer cleanup()
+	mockSysfsPins(mockFS, "eno5", []string{"SDP0", "SDP1", "SDP2", "SDP3"})
 
 	config := map[string]interface{}{
 		"pins": map[string]interface{}{
@@ -757,11 +752,9 @@ func TestValidatePinNames_E825_AlwaysUsesSysfs(t *testing.T) {
 }
 
 func TestValidatePinNames_E830_AlwaysUsesSysfs(t *testing.T) {
-	cleanupHas := setupMockHasSysfsSMAPins(true)
-	defer cleanupHas()
-
-	cleanup := setupMockPinDiscovery([]string{"PGT0", "PGT1", "PGT2", "PGT3"})
+	mockFS, cleanup := setupMockFS()
 	defer cleanup()
+	mockSysfsPins(mockFS, "enp108s0f0", []string{"PGT0", "PGT1", "PGT2", "PGT3"})
 
 	config := map[string]interface{}{
 		"pins": map[string]interface{}{
@@ -783,14 +776,10 @@ func TestValidatePinNames_E830_AlwaysUsesSysfs(t *testing.T) {
 }
 
 func TestValidatePinNames_SysfsDiscoveryError(t *testing.T) {
-	cleanupHas := setupMockHasSysfsSMAPins(true)
-	defer cleanupHas()
+	mockFS, cleanup := setupMockFS()
+	defer cleanup()
 
-	original := discoverSysfsPinsFunc
-	discoverSysfsPinsFunc = func(_ string) ([]string, error) {
-		return nil, fmt.Errorf("cannot read PTP device directory")
-	}
-	defer func() { discoverSysfsPinsFunc = original }()
+	mockFS.AllowReadDir("/sys/class/net/eno5/device/ptp/", nil, fmt.Errorf("no such directory"))
 
 	config := map[string]interface{}{
 		"pins": map[string]interface{}{

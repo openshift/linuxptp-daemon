@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/golang/glog"
@@ -19,11 +20,55 @@ const (
 
 // FindPtpConfigByProfileName extracts the PtpConfig CR name and the original profile name.
 func FindPtpConfigByProfileName(profileName string) (string, string, bool) {
-	parts := strings.SplitN(profileName, ProfileNameSeparator, 2)
-	if len(parts) < 2 {
+	i := strings.Index(profileName, ProfileNameSeparator)
+	if i < 0 {
 		return "", profileName, false
 	}
-	return parts[0], parts[1], true
+	return profileName[:i], profileName[i+1:], true
+}
+
+// reportPluginStatus reports hardware plugin configuration status to the PtpConfig CRD.
+// On success it sets HardwarePluginReady=True; on errors it sets HardwarePluginReady=False
+// with the error details in the condition message.
+func (dn *Daemon) reportPluginStatus(profileName string, pluginErrors []error) {
+	if dn.ptpClient == nil {
+		if len(pluginErrors) > 0 {
+			glog.Warningf("ptpClient is nil, cannot update PtpConfig status for plugin errors: %v", pluginErrors)
+		}
+		return
+	}
+
+	if len(pluginErrors) == 0 {
+		configName, originalProfileName, found := FindPtpConfigByProfileName(profileName)
+		if found {
+			UpdatePtpConfigCondition(dn.ptpClient, configName,
+				ConditionTypeHardwarePluginReady,
+				metav1.ConditionTrue,
+				"HardwarePluginConfigured",
+				fmt.Sprintf("Hardware plugin configured successfully for profile %s on node %s", originalProfileName, dn.nodeName),
+			)
+		}
+		return
+	}
+
+	configName, originalProfileName, found := FindPtpConfigByProfileName(profileName)
+	if !found {
+		glog.Warningf("Could not find PtpConfig for profile %s to report plugin errors: %v", originalProfileName, pluginErrors)
+		return
+	}
+
+	glog.Warningf("Hardware plugin errors for profile %s: %v", originalProfileName, pluginErrors)
+	var msgs []string
+	for _, e := range pluginErrors {
+		msgs = append(msgs, e.Error())
+	}
+	UpdatePtpConfigCondition(dn.ptpClient, configName,
+		ConditionTypeHardwarePluginReady,
+		metav1.ConditionFalse,
+		"HardwarePluginConfigError",
+		fmt.Sprintf("Hardware plugin configuration errors on node %s for profile %s: %s",
+			dn.nodeName, originalProfileName, strings.Join(msgs, "; ")),
+	)
 }
 
 // UpdatePtpConfigCondition updates a condition on the given PtpConfig's status.

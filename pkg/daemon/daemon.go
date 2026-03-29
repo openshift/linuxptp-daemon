@@ -41,7 +41,6 @@ import (
 
 	"github.com/golang/glog"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -377,8 +376,8 @@ type Daemon struct {
 	// Allow vendors to include plugins
 	pluginManager  plugin.PluginManager
 	saFileWatcher  *fsnotify.Watcher
-	ptpClient      *ptpclient.Clientset // NEW: for updating PtpConfig status
-	unknownPlugins []string             // NEW: for storing unknown plugins
+	ptpClient      *ptpclient.Clientset
+	unknownPlugins []string
 }
 
 // UpdateHardwareConfig implements controller.HardwareConfigUpdateHandler.
@@ -849,15 +848,13 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		glog.Infof("Using hardware configs for PTP profile %s instead of plugins", *nodeProfile.Name)
 		if err := dn.hardwareConfigManager.ApplyHardwareConfigsForProfile(nodeProfile); err != nil {
 			glog.Errorf("Failed to apply hardware configs for profile %s: %v", *nodeProfile.Name, err)
-			pluginErrors = append(pluginErrors, fmt.Errorf("hardware config: %w", err))
 			// Fall back to plugins
-			// TODO: add a timeout for the plugin errors
-			errs := dn.pluginManager.OnPTPConfigChange(nodeProfile) // returns a slice of errors from each plugin
+			errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
 			pluginErrors = append(pluginErrors, errs...)
 		}
 	} else {
 		glog.Infof("No hardware configs found for PTP profile %s, using plugins", *nodeProfile.Name)
-		errs := dn.pluginManager.OnPTPConfigChange(nodeProfile) // returns a slice of errors from each plugin
+		errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
 		pluginErrors = append(pluginErrors, errs...)
 	}
 
@@ -866,40 +863,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			fmt.Errorf("unknown plugins specified (possible typo): %v", dn.unknownPlugins))
 	}
 
-	// Report plugin errors to PtpConfig CRD status
-	if dn.ptpClient != nil {
-		configName, originalProfileName, found := FindPtpConfigByProfileName(*nodeProfile.Name)
-		if found {
-			if len(pluginErrors) > 0 {
-				glog.Warningf("Hardware plugin errors for profile %s: %v", originalProfileName, pluginErrors)
-
-				var msgs []string
-				for _, e := range pluginErrors {
-					msgs = append(msgs, e.Error())
-				}
-				message := fmt.Sprintf("Hardware plugin configuration errors on node %s for profile %s: %s",
-					dn.nodeName, originalProfileName, strings.Join(msgs, "; "))
-
-				UpdatePtpConfigCondition(dn.ptpClient, configName,
-					ConditionTypeHardwarePluginReady,
-					metav1.ConditionFalse,
-					"HardwarePluginConfigError",
-					message,
-				)
-			} else {
-				UpdatePtpConfigCondition(dn.ptpClient, configName,
-					ConditionTypeHardwarePluginReady,
-					metav1.ConditionTrue,
-					"HardwarePluginConfigured",
-					fmt.Sprintf("Hardware plugin configured successfully for profile %s on node %s", originalProfileName, dn.nodeName),
-				)
-			}
-		} else if len(pluginErrors) > 0 {
-			glog.Warningf("Could not find PtpConfig for profile %s to report plugin errors: %v", originalProfileName, pluginErrors)
-		}
-	} else if len(pluginErrors) > 0 {
-		glog.Warningf("ptpClient is nil, cannot update PtpConfig status for plugin errors: %v", pluginErrors)
-	}
+	dn.reportPluginStatus(*nodeProfile.Name, pluginErrors)
 	var err error
 	var cmdLine string
 	var configPath string

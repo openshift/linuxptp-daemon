@@ -4,18 +4,20 @@ import (
 	"os"
 	"testing"
 
+	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/stretchr/testify/assert"
 )
 
 func Test_ProcessProfileTbcClockChain(t *testing.T) {
-	_, restoreDPLLPins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
+	dpllMock, restoreDPLLPins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
 	defer restoreDPLLPins()
+	dpllMock.pins = append(dpllMock.pins,
+		&dpll.PinInfo{BoardLabel: "SMA2"},
+		&dpll.PinInfo{BoardLabel: "U.FL1"},
+		&dpll.PinInfo{BoardLabel: "U.FL2"},
+	)
 	restoreDelay := setupMockDelayCompensation()
 	defer restoreDelay()
-	restoreHasSMA := setupMockHasSysfsSMAPins(true)
-	defer restoreHasSMA()
-	restoreDiscovery := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
-	defer restoreDiscovery()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 	// Setup filesystem mock for TBC profile (3 devices with pins)
@@ -73,14 +75,15 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 }
 
 func Test_ProcessProfileTtscClockChain(t *testing.T) {
-	_, restoreDPLLPins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
+	dpllMock, restoreDPLLPins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
 	defer restoreDPLLPins()
+	dpllMock.pins = append(dpllMock.pins,
+		&dpll.PinInfo{BoardLabel: "SMA2"},
+		&dpll.PinInfo{BoardLabel: "U.FL1"},
+		&dpll.PinInfo{BoardLabel: "U.FL2"},
+	)
 	restoreDelay := setupMockDelayCompensation()
 	defer restoreDelay()
-	restoreHasSMA := setupMockHasSysfsSMAPins(true)
-	defer restoreHasSMA()
-	restoreDiscovery := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
-	defer restoreDiscovery()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 	// Setup filesystem mock for T-TSC profile (1 device with pins)
@@ -128,14 +131,15 @@ func Test_ProcessProfileTtscClockChain(t *testing.T) {
 }
 
 func Test_SetPinDefaults_AllNICs(t *testing.T) {
-	_, restoreDPLLPins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
+	dpllMock, restoreDPLLPins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
 	defer restoreDPLLPins()
+	dpllMock.pins = append(dpllMock.pins,
+		&dpll.PinInfo{BoardLabel: "SMA2"},
+		&dpll.PinInfo{BoardLabel: "U.FL1"},
+		&dpll.PinInfo{BoardLabel: "U.FL2"},
+	)
 	restoreDelay := setupMockDelayCompensation()
 	defer restoreDelay()
-	restoreHasSMA := setupMockHasSysfsSMAPins(true)
-	defer restoreHasSMA()
-	restoreDiscovery := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
-	defer restoreDiscovery()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 

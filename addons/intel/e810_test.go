@@ -76,14 +76,15 @@ func Test_initInternalDelays_BadPart(t *testing.T) {
 }
 
 func Test_ProcessProfileTGMNew(t *testing.T) {
-	_, restorePins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
+	dpllMock, restorePins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
 	defer restorePins()
+	dpllMock.pins = append(dpllMock.pins,
+		&dpll.PinInfo{BoardLabel: "SMA2"},
+		&dpll.PinInfo{BoardLabel: "U.FL1"},
+		&dpll.PinInfo{BoardLabel: "U.FL2"},
+	)
 	restoreDelay := setupMockDelayCompensation()
 	defer restoreDelay()
-	restoreHasSMA := setupMockHasSysfsSMAPins(true)
-	defer restoreHasSMA()
-	restoreDiscovery := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
-	defer restoreDiscovery()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 	profile, err := loadProfile("./testdata/profile-tgm.yaml")
@@ -101,14 +102,15 @@ func Test_ProcessProfileTGMNew(t *testing.T) {
 
 // Test that the profile with no phase inputs is processed correctly
 func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
-	_, restoreDPLLPins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
+	dpllMock, restoreDPLLPins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
 	defer restoreDPLLPins()
+	dpllMock.pins = append(dpllMock.pins,
+		&dpll.PinInfo{BoardLabel: "SMA2"},
+		&dpll.PinInfo{BoardLabel: "U.FL1"},
+		&dpll.PinInfo{BoardLabel: "U.FL2"},
+	)
 	restoreDelay := setupMockDelayCompensation()
 	defer restoreDelay()
-	restoreHasSMA := setupMockHasSysfsSMAPins(true)
-	defer restoreHasSMA()
-	restoreDiscovery := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
-	defer restoreDiscovery()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 
@@ -150,14 +152,15 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 }
 
 func Test_ProcessProfileTGMOld(t *testing.T) {
-	_, restorePins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
+	dpllMock, restorePins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
 	defer restorePins()
+	dpllMock.pins = append(dpllMock.pins,
+		&dpll.PinInfo{BoardLabel: "SMA2"},
+		&dpll.PinInfo{BoardLabel: "U.FL1"},
+		&dpll.PinInfo{BoardLabel: "U.FL2"},
+	)
 	restoreDelay := setupMockDelayCompensation()
 	defer restoreDelay()
-	restoreHasSMA := setupMockHasSysfsSMAPins(true)
-	defer restoreHasSMA()
-	restoreDiscovery := setupMockPinDiscovery([]string{"SMA1", "SMA2", "U.FL1", "U.FL2"})
-	defer restoreDiscovery()
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 
