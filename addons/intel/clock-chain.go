@@ -12,6 +12,28 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
+// FileSystemInterface defines the interface for filesystem operations to enable mocking.
+type FileSystemInterface interface {
+	ReadDir(dirname string) ([]os.DirEntry, error)
+	WriteFile(filename string, data []byte, perm os.FileMode) error
+}
+
+// RealFileSystem implements FileSystemInterface using real OS operations.
+type RealFileSystem struct{}
+
+// ReadDir reads the contents of the directory specified by dirname.
+func (fs *RealFileSystem) ReadDir(dirname string) ([]os.DirEntry, error) {
+	return os.ReadDir(dirname)
+}
+
+// WriteFile writes the data to the file specified by filename.
+func (fs *RealFileSystem) WriteFile(filename string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(filename, data, perm)
+}
+
+// Default filesystem implementation (used by clock-chain, gnss_detect, tests).
+var filesystem FileSystemInterface = &RealFileSystem{}
+
 type ClockChainType int
 type ClockChain struct {
 	Type       ClockChainType  `json:"clockChainType"`
@@ -215,7 +237,7 @@ func (ch *ClockChain) GetLeadingCardSDP() error {
 
 func writeSysFs(path string, val string) error {
 	glog.Infof("writing " + val + " to " + path)
-	err := os.WriteFile(path, []byte(val), 0666)
+	err := filesystem.WriteFile(path, []byte(val), 0666)
 	if err != nil {
 		return fmt.Errorf("e810 failed to write " + val + " to " + path + ": " + err.Error())
 	}
@@ -285,7 +307,7 @@ func (c *ClockChain) EnableE810Outputs() error {
 		return nil
 	} else {
 		deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", c.LeadingNIC.Name)
-		phcs, err := os.ReadDir(deviceDir)
+		phcs, err := filesystem.ReadDir(deviceDir)
 		if err != nil {
 			return fmt.Errorf("e810 failed to read " + deviceDir + ": " + err.Error())
 		}
