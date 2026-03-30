@@ -182,6 +182,13 @@ const (
 	DPLL_PIN_STATE_CONNECTED    = 1
 	DPLL_PIN_STATE_DISCONNECTED = 2
 	DPLL_PIN_STATE_SELECTABLE   = 3
+
+	PinStateConnected    = DPLL_PIN_STATE_CONNECTED
+	PinStateDisconnected = DPLL_PIN_STATE_DISCONNECTED
+	PinStateSelectable   = DPLL_PIN_STATE_SELECTABLE
+
+	DpllTypePPS uint32 = 1
+	DpllTypeEEC uint32 = 2
 )
 
 // GetPinState returns DPLL pin state as a string
