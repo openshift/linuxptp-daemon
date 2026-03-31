@@ -406,6 +406,22 @@ func (r *HardwareConfigReconciler) recordUpdateFailure(ctx context.Context, conf
 	// For now, we rely on events for error reporting
 }
 
+// ptpProfileNameMatchesActive reports whether relatedProfile is considered active.
+func ptpProfileNameMatchesActive(relatedProfile string, activePTPProfiles map[string]bool) bool {
+	if activePTPProfiles[relatedProfile] {
+		return true
+	}
+	// Also accept a match when an active profile entry carries the ptpconfig resource name
+	// as a prefix separated by "_".
+	suffix := "_" + relatedProfile
+	for activeProfile := range activePTPProfiles {
+		if strings.HasSuffix(activeProfile, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // calculateNodeHardwareConfigs determines which hardware configurations should be applied to this node
 // Only includes hardware configs whose related PTP profile is applicable to this node
 func (r *HardwareConfigReconciler) calculateNodeHardwareConfigs(_ context.Context, hwConfigs []ptpv2alpha1.HardwareConfig) []ptpv2alpha1.HardwareConfig {
@@ -438,8 +454,8 @@ func (r *HardwareConfigReconciler) calculateNodeHardwareConfigs(_ context.Contex
 			continue
 		}
 
-		// Only include configs whose related profile is active
-		if !activePTPProfiles[relatedProfile] {
+		// Only include configs whose related profile is active.
+		if !ptpProfileNameMatchesActive(relatedProfile, activePTPProfiles) {
 			glog.V(3).Infof("Skipping HardwareConfig '%s' - related PTP profile '%s' is not active on this node", hwConfig.Name, relatedProfile)
 			continue
 		}
@@ -477,16 +493,18 @@ func (r *HardwareConfigReconciler) checkIfChangedConfigsAffectActiveProfiles(dif
 		return false
 	}
 
-	// Check if any changed config is associated with an active PTP profile
+	activePTPProfilesSet := make(map[string]bool, len(activePTPProfiles))
+	for _, p := range activePTPProfiles {
+		activePTPProfilesSet[p] = true
+	}
+
+	// Check if any changed config is associated with an active PTP profile.
 	for _, changedCfg := range diff.AllChanged() {
-		if changedCfg.Spec.RelatedPtpProfileName != "" {
-			for _, activeProfile := range activePTPProfiles {
-				if changedCfg.Spec.RelatedPtpProfileName == activeProfile {
-					glog.Infof("Changed hardware config '%s' is associated with active PTP profile '%s', will trigger restart",
-						changedCfg.Name, activeProfile)
-					return true
-				}
-			}
+		relatedProfile := changedCfg.Spec.RelatedPtpProfileName
+		if relatedProfile != "" && ptpProfileNameMatchesActive(relatedProfile, activePTPProfilesSet) {
+			glog.Infof("Changed hardware config '%s' is associated with active PTP profile '%s', will trigger restart",
+				changedCfg.Name, relatedProfile)
+			return true
 		}
 	}
 
