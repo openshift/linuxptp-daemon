@@ -36,6 +36,33 @@ func Test_applyPinSet(t *testing.T) {
 	assert.Equal(t, 1, mockFS.currentWriteFile)
 }
 
+func Test_hasSysfsSMAPins(t *testing.T) {
+	t.Run("SMA1 exists", func(t *testing.T) {
+		mockFS, restoreFS := setupMockFS()
+		defer restoreFS()
+		phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+		mockFS.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+		mockFS.ExpectReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", []byte("0 1"), nil)
+		assert.True(t, hasSysfsSMAPins("ens4f0"))
+	})
+
+	t.Run("SMA1 missing", func(t *testing.T) {
+		mockFS, restoreFS := setupMockFS()
+		defer restoreFS()
+		phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+		mockFS.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+		mockFS.ExpectReadFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA1", nil, os.ErrNotExist)
+		assert.False(t, hasSysfsSMAPins("ens4f0"))
+	})
+
+	t.Run("no PHC directory", func(t *testing.T) {
+		mockFS, restoreFS := setupMockFS()
+		defer restoreFS()
+		mockFS.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", nil, os.ErrNotExist)
+		assert.False(t, hasSysfsSMAPins("ens4f0"))
+	})
+}
+
 func Test_applyPinFrq(t *testing.T) {
 	mockFS, restoreFS := setupMockFS()
 	defer restoreFS()

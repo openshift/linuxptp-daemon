@@ -9,6 +9,7 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
+	dpll_netlink "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
@@ -17,26 +18,45 @@ var pluginNameE830 = "e830"
 
 // E830Opts is the options for e830 plugin
 type E830Opts struct {
-	Devices          []string                     `json:"devices"`
-	DevicePins       map[string]pinSet            `json:"pins"`
-	DeviceFreqencies map[string]frqSet            `json:"frequencies"`
-	DpllSettings     map[string]uint64            `json:"settings"`
-	PhaseOffsetPins  map[string]map[string]string `json:"phaseOffsetPins"`
-}
-
-// allDevices enumerates all defined devices (Devices/DevicePins/DeviceFrequencies/PhaseOffsets)
-func (opts *E830Opts) allDevices() []string {
-	allDevices := opts.Devices
-	allDevices = extendWithKeys(allDevices, opts.DevicePins)
-	allDevices = extendWithKeys(allDevices, opts.DeviceFreqencies)
-	allDevices = extendWithKeys(allDevices, opts.PhaseOffsetPins)
-	return allDevices
+	PluginOpts
 }
 
 // E830PluginData is the plugin data for e830 plugin
 type E830PluginData struct {
-	hwplugins *[]string
+	PluginData
 }
+
+func _hasDpllForClockID(clockID uint64) bool {
+	if clockID == 0 {
+		return false
+	}
+	conn, err := dpll_netlink.Dial(nil)
+	if err != nil {
+		glog.Warningf("failed to dial DPLL: %s", err)
+		return false
+	}
+	defer conn.Close()
+
+	devices, err := conn.DumpDeviceGet()
+	if err != nil || devices == nil {
+		glog.Infof("No DPLLs found on this system")
+		return false
+	}
+	found := false
+	for _, device := range devices {
+		if device.ClockID == clockID {
+			glog.Infof("Detected %s DPLL for clock ID %#x", dpll_netlink.GetDpllType(device.Type), clockID)
+			found = true
+		}
+	}
+	if !found {
+		glog.Infof("No DPLL detected for clock ID %#x", clockID)
+	}
+	return found
+}
+
+// Function pointer for mocking
+var hasDpllForClockID = _hasDpllForClockID
 
 // OnPTPConfigChangeE830 is called on PTP config change for e830 plugin
 func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error {
@@ -62,8 +82,10 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 			glog.Infof("Initializing e830 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
 
 			// Setup clockID (prefer ice modue clock ID for e830)
+			clockIDs := make(map[string]uint64)
 			for _, device := range allDevices {
-				clockID := getClockIDE810(device)
+				clockID := getClockID(device)
+				clockIDs[device] = clockID
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				nodeProfile.PtpSettings[dpllClockIDStr] = strconv.FormatUint(clockID, 10)
 				glog.Infof("e830: Detected %s=%d (%x)", dpllClockIDStr, clockID, clockID)
@@ -111,15 +133,14 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 				}
 			}
 
-			// e830 DPLL is inaccessible to software, so ensure the daemon ignores all e830 DPLLs for now:
+			// Setup DPLL flags for all e830 cards
 			for _, device := range allDevices {
-				// Note: Only set to "true" if it's unset; This allows overriding this by explicitly setting dpll.$iface.ignore = "false" in the PtpConfig section
-				key := dpll.PtpSettingsDpllIgnoreKey(device)
-				if value, ok := nodeProfile.PtpSettings[key]; ok {
-					glog.Infof("Not setting %s (already \"%s\")", key, value)
+				if hasDpllForClockID(clockIDs[device]) {
+					// CF DPLL only provides PhaseStatus, not Phase Offset or Frequency Status:
+					nodeProfile.PtpSettings[dpll.PtpSettingsDpllFlagsKey(device)] = strconv.FormatUint(uint64(dpll.FlagOnlyPhaseStatus), 10)
 				} else {
-					nodeProfile.PtpSettings[key] = "true"
-					glog.Infof("Setting %s = \"true\"", key)
+					// No DPLL found: Mark this device to be ignored
+					nodeProfile.PtpSettings[dpll.PtpSettingsDpllIgnoreKey(device)] = "true"
 				}
 			}
 		}
@@ -130,9 +151,6 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 // AfterRunPTPCommandE830 is called after running ptp command for e830 plugin
 func AfterRunPTPCommandE830(_ *interface{}, _ *ptpv1.PtpProfile, _ string) error { return nil }
 
-// PopulateHwConfigE830 populates hwconfig for e830 plugin
-func PopulateHwConfigE830(_ *interface{}, _ *[]ptpv1.HwConfig) error { return nil }
-
 // E830 initializes the e830 plugin
 func E830(name string) (*plugin.Plugin, *interface{}) {
 	if name != pluginNameE830 {
@@ -140,13 +158,14 @@ func E830(name string) (*plugin.Plugin, *interface{}) {
 		return nil, nil
 	}
 	glog.Infof("registering e830 plugin")
-	hwplugins := []string{}
-	pluginData := E830PluginData{hwplugins: &hwplugins}
+	pluginData := E830PluginData{
+		PluginData: PluginData{name: pluginNameE830},
+	}
 	_plugin := plugin.Plugin{
 		Name:               pluginNameE830,
 		OnPTPConfigChange:  OnPTPConfigChangeE830,
 		AfterRunPTPCommand: AfterRunPTPCommandE830,
-		PopulateHwConfig:   PopulateHwConfigE830,
+		PopulateHwConfig:   pluginData.PopulateHwConfig,
 	}
 	var iface interface{} = &pluginData
 	return &_plugin, &iface
