@@ -779,12 +779,30 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					} else {
 						eventSource = []event.EventSource{event.GNSS}
 					}
-					// pass array of ifaces which has source + clockId -
-					// here we have multiple dpll objects identified by clock id
-					// depends on will be either PPS or  GNSS,
-					// ONLY the one with GNSS dependency will go to HOLDOVER
-					dpllDaemon := dpll.NewDpll(clockId, localMaxHoldoverOffSet, localHoldoverTimeout,
-						maxInSpecOffset, iface.Name, eventSource, dpll.NONE, dn.GetPhaseOffsetPinFilter(nodeProfile))
+				// pass array of ifaces which has source + clockId -
+				// here we have multiple dpll objects identified by clock id
+				// depends on will be either PPS or  GNSS,
+				// ONLY the one with GNSS dependency will go to HOLDOVER
+				var inSyncConditionTh uint64 = dpll.MaxInSpecOffset
+				var inSyncConditionTimes uint64 = 1
+				sInSyncConditionTh, found1 := (*nodeProfile).PtpSettings["inSyncConditionThreshold"]
+				if found1 {
+					inSyncConditionTh, err = strconv.ParseUint(sInSyncConditionTh, 0, 64)
+					if err != nil {
+						return fmt.Errorf("failed to parse inSyncConditionThreshold: %s", err)
+					}
+				}
+				sInSyncConditionTim, found2 := (*nodeProfile).PtpSettings["inSyncConditionTimes"]
+				if found2 {
+					inSyncConditionTimes, err = strconv.ParseUint(sInSyncConditionTim, 0, 64)
+					if err != nil {
+						return fmt.Errorf("failed to parse inSyncConditionTimes: %s", err)
+					}
+				}
+				dpllDaemon := dpll.NewDpll(clockId, localMaxHoldoverOffSet, localHoldoverTimeout,
+					maxInSpecOffset, iface.Name, eventSource, dpll.NONE, dn.GetPhaseOffsetPinFilter(nodeProfile),
+					// Used only in T-BC in-sync condition:
+					inSyncConditionTh, inSyncConditionTimes, 0)
 					glog.Infof("depending on %s", dpllDaemon.DependsOn())
 					dpllDaemon.CmdInit()
 					dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)

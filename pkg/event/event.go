@@ -44,6 +44,11 @@ const (
 	CLOCK_QUALITY        ValueType = "clock_quality"
 	NETWORK_OPTION       ValueType = "network_option"
 	EEC_STATE                      = "eec_state"
+	LeadingSource           ValueType = "leading_source"
+	InSyncConditionThreshold ValueType = "in_sync_condition_threshold"
+	InSyncConditionTimes    ValueType = "in_sync_condition_times"
+	ToFreeRunThreshold      ValueType = "to_freerun_threshold"
+	MaxInSpecOffset         ValueType = "max_in_spec_offset"
 )
 
 var valueTypeHelpTxt = map[ValueType]string{

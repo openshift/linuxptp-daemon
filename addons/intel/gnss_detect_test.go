@@ -2,8 +2,6 @@ package intel
 
 import (
 	"errors"
-	"fmt"
-	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -11,60 +9,6 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
 )
-
-// MockDirEntry is a minimal os.DirEntry stub for tests.
-type MockDirEntry struct {
-	name string
-}
-
-func (m MockDirEntry) Name() string               { return m.name }
-func (m MockDirEntry) IsDir() bool                { return false }
-func (m MockDirEntry) Type() fs.FileMode          { return 0 }
-func (m MockDirEntry) Info() (os.FileInfo, error) { return nil, fs.ErrNotExist }
-
-type mockReadDirExpect struct {
-	path    string
-	entries []os.DirEntry
-	err     error
-}
-
-// MockFileSystem implements FileSystemInterface with scripted ReadDir responses
-// (WriteFile is not expected by gnss tests).
-type MockFileSystem struct {
-	expect []mockReadDirExpect
-	calls  int
-}
-
-func (m *MockFileSystem) ExpectReadDir(path string, entries []os.DirEntry, err error) {
-	m.expect = append(m.expect, mockReadDirExpect{path: path, entries: entries, err: err})
-}
-
-func (m *MockFileSystem) WriteFile(filename string, data []byte, perm os.FileMode) error {
-	return fmt.Errorf("MockFileSystem: unexpected WriteFile(%s)", filename)
-}
-
-func (m *MockFileSystem) ReadDir(dirname string) ([]os.DirEntry, error) {
-	if m.calls >= len(m.expect) {
-		return nil, errors.New("MockFileSystem: unexpected ReadDir call")
-	}
-	e := m.expect[m.calls]
-	m.calls++
-	if e.path != dirname {
-		return nil, fmt.Errorf("MockFileSystem: path mismatch: got %q, want %q", dirname, e.path)
-	}
-	return e.entries, e.err
-}
-
-func (m *MockFileSystem) VerifyAllCalls(t *testing.T) {
-	assert.Equal(t, len(m.expect), m.calls, "ReadDir expectations should be fully consumed")
-}
-
-func setupMockFS() (*MockFileSystem, func()) {
-	prev := filesystem
-	mock := &MockFileSystem{}
-	filesystem = mock
-	return mock, func() { filesystem = prev }
-}
 
 func TestFindLeadingInterface(t *testing.T) {
 	tests := []struct {
