@@ -899,7 +899,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					dpllDaemon := dpll.NewDpll(clockId, localMaxHoldoverOffSet, localHoldoverTimeout,
 						maxInSpecOffset, iface.Name, eventSource, dpll.NONE, dn.GetPhaseOffsetPinFilter(nodeProfile),
 						// Used only in T-BC in-sync condition:
-						inSyncConditionTh, inSyncConditionTimes)
+						inSyncConditionTh, inSyncConditionTimes, 0)
 					glog.Infof("depending on %s", dpllDaemon.DependsOn())
 					dpllDaemon.CmdInit()
 					dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
