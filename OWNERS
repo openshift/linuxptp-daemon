@@ -1,17 +1,10 @@
-reviewers:
-  - SchSeba
-  - josephdrichard
-  - aneeshkp
-  - vitus133
-  - jzding
-  - nocturnalastro
 approvers:
-  - dougbtv
-  - SchSeba
   - josephdrichard
-  - aneeshkp
-  - nocturnalastro
-  - vitus133
   - jzding
+  - lack
+  - nocturnalastro
+  - sebsoto
+  - vitus133
+
 component: "Networking"
 subcomponent: "ptp"
