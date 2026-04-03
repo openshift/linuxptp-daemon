@@ -115,6 +115,14 @@ func GetDevStatusUpdate(nodePTPDev *ptpv1.NodePtpDevice) (*ptpv1.NodePtpDevice, 
 	ptpnetwork.LogDeviceChanges(nodePTPDev.Status.Devices, newDevices)
 
 	nodePTPDev.Status.Devices = newDevices
+
+	// Populate system and baseboard DMI/SMBIOS info only once (static per-node data).
+	if nodePTPDev.Status.SystemInfo == nil || nodePTPDev.Status.BaseBoardInfo == nil {
+		nodePTPDev.Status.SystemInfo = ptpnetwork.GetSystemInfo()
+		nodePTPDev.Status.BaseBoardInfo = ptpnetwork.GetBaseBoardInfo()
+		ptpnetwork.LogDMIInfo(nodePTPDev.Status.SystemInfo, nodePTPDev.Status.BaseBoardInfo)
+	}
+
 	return nodePTPDev, nil
 }
 
