@@ -499,7 +499,7 @@ func (r *HardwareConfigReconciler) checkIfChangedConfigsAffectActiveProfiles(dif
 func (r *HardwareConfigReconciler) SetupWithManager(mgr ctrl.Manager, enablePtpConfigController bool, profileDir string) error {
 	// Initialize event recorder if not set
 	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("hardwareconfig-controller")
+		r.Recorder = mgr.GetEventRecorderFor("hardwareconfig-controller") //nolint:staticcheck // migrating to events.EventRecorder requires API changes
 	}
 
 	// Initialize lastAppliedConfigs from current system state to avoid unnecessary restarts at startup.

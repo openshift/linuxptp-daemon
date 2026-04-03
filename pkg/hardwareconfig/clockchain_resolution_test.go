@@ -171,7 +171,7 @@ func TestClockChainResolution(t *testing.T) {
 			assert.Contains(t, upstreamPorts, "eno2", "Should find eno2 as upstream port")
 
 			// Set up fake ConfigMap loader for tests (reused later for hcm)
-			fakeClient := fake.NewSimpleClientset()
+			fakeClient := fake.NewClientset()
 			loader := NewBoardLabelMapLoader(fakeClient, "default")
 
 			// Load behavior profile template
@@ -344,7 +344,7 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 	SetLeadingInterfaceResolver(mockResolver)
 	defer ResetLeadingInterfaceResolver()
 
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	hcm := NewHardwareConfigManager(fakeClient, "default")
 	resolvedConfig, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
 	assert.NoError(t, err)

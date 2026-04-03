@@ -676,7 +676,7 @@ func TestDellXR8720tBehaviorTransitions(t *testing.T) {
 
 // TestLoadBehaviorProfile_DellXR8720t tests that dell/XR8720t behavior profiles load correctly
 func TestLoadBehaviorProfile_DellXR8720t(t *testing.T) {
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	loader := NewBoardLabelMapLoader(fakeClient, "default")
 
 	template, err := LoadBehaviorProfile("dell/XR8720t", "T-BC", loader)
@@ -722,7 +722,7 @@ func TestLoadBehaviorProfile_DellXR8720t(t *testing.T) {
 
 // TestLoadBehaviorProfile_MultiVendor tests behavior profile loading for multiple vendors
 func TestLoadBehaviorProfile_MultiVendor(t *testing.T) {
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	loader := NewBoardLabelMapLoader(fakeClient, "default")
 
 	vendors := []struct {
