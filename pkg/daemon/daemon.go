@@ -858,11 +858,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		pluginErrors = append(pluginErrors, errs...)
 	}
 
-	if len(dn.unknownPlugins) > 0 {
-		pluginErrors = append(pluginErrors,
-			fmt.Errorf("unknown plugins specified (possible typo): %v", dn.unknownPlugins))
-	}
-
 	dn.reportPluginStatus(*nodeProfile.Name, pluginErrors)
 	var err error
 	var cmdLine string
