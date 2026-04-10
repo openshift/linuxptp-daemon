@@ -1,4 +1,4 @@
-package utils
+package utils //nolint:revive // widely-used package, renaming is out of scope
 
 import (
 	"runtime/debug"

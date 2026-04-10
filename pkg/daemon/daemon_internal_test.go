@@ -29,7 +29,7 @@ import (
 // NewDaemonForTests creates a Daemon instance for testing
 func NewDaemonForTests(tracker *ReadyTracker, processManager *ProcessManager) *Daemon {
 	tracker.processManager = processManager
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	return &Daemon{
 		readyTracker:          tracker,
 		processManager:        processManager,
@@ -555,7 +555,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 		defer func() { vTbcHasHardwareConfig = oldValue }()
 
 		// Create a mock Daemon with hardwareConfigManager and set up hardware config
-		fakeClient := fake.NewSimpleClientset()
+		fakeClient := fake.NewClientset()
 		hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 		err := setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 		assert.NoError(t, err, "Should be able to set up hardware config")
@@ -638,7 +638,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 		defer func() { vTbcHasHardwareConfig = oldValue }()
 
 		// Create a mock Daemon with hardwareConfigManager and set up hardware config
-		fakeClient := fake.NewSimpleClientset()
+		fakeClient := fake.NewClientset()
 		hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 		err := setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 		assert.NoError(t, err, "Should be able to set up hardware config")
@@ -886,7 +886,7 @@ func setupHardwareConfigForTest(hcm *hardwareconfig.HardwareConfigManager, profi
 // Creates a hardware config with a PTP source that monitors ens4f0, then initializes the detector
 func createMockPTPStateDetectorForHardwareConfig() *hardwareconfig.PTPStateDetector {
 	// Create a detector using the normal constructor - this properly initializes ptp4lExtractor
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 	_ = setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 
@@ -945,7 +945,7 @@ func TestProcessTBCTransitionHardwareConfig_HardwareConfigIntegration(t *testing
 	assert.Contains(t, ptpSource.PTPTimeReceivers, "ens4f1", "Expected ens4f1 to be monitored")
 
 	// Create hardware config manager and verify it works with our config
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 	err = hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig})
 	assert.NoError(t, err, "Should be able to update hardware config")
@@ -1019,7 +1019,7 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 	assert.NoError(t, err, "Should be able to parse hardware config YAML")
 
 	// Create hardware config manager and initialize it
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 	err = hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig})
 	assert.NoError(t, err, "Should be able to update hardware config")
@@ -1332,7 +1332,7 @@ func TestTBCDualUpstream_PortALost_PortBTakesOver(t *testing.T) {
 	vTbcHasHardwareConfig = true
 	defer func() { vTbcHasHardwareConfig = oldValue }()
 
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 	err := setupDualUpstreamHardwareConfig(hcm, "test-profile", "eno2", "eno3")
 	assert.NoError(t, err)
@@ -1397,7 +1397,7 @@ func TestTBCDualUpstream_BothPortsLost(t *testing.T) {
 	vTbcHasHardwareConfig = true
 	defer func() { vTbcHasHardwareConfig = oldValue }()
 
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 	err := setupDualUpstreamHardwareConfig(hcm, "test-profile", "eno2", "eno3")
 	assert.NoError(t, err)
@@ -1448,7 +1448,7 @@ func TestTBCDualUpstream_RecoveryAfterBothLost(t *testing.T) {
 	vTbcHasHardwareConfig = true
 	defer func() { vTbcHasHardwareConfig = oldValue }()
 
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
 	err := setupDualUpstreamHardwareConfig(hcm, "test-profile", "eno2", "eno3")
 	assert.NoError(t, err)

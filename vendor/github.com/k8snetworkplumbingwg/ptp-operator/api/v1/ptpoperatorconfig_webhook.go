@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	"context"
 	"errors"
 
 	semver "github.com/Masterminds/semver/v3"
@@ -35,8 +36,8 @@ var k8sclient client.Client
 
 func (r *PtpOperatorConfig) SetupWebhookWithManager(mgr ctrl.Manager, client client.Client) error {
 	k8sclient = client
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
+	return ctrl.NewWebhookManagedBy(mgr, r).
+		WithCustomValidator(&ptpOperatorConfigValidator{}).
 		Complete()
 }
 
@@ -67,10 +68,12 @@ func (r *PtpOperatorConfig) validate() error {
 	return nil
 }
 
-var _ webhook.Validator = &PtpOperatorConfig{}
+type ptpOperatorConfigValidator struct{}
 
-// ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (r *PtpOperatorConfig) ValidateCreate() (admission.Warnings, error) {
+var _ webhook.CustomValidator = &ptpOperatorConfigValidator{}
+
+func (v *ptpOperatorConfigValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	r := obj.(*PtpOperatorConfig)
 	ptpoperatorconfiglog.Info("validate create", "name", r.Name)
 	if err := r.validate(); err != nil {
 		return admission.Warnings{}, err
@@ -78,8 +81,8 @@ func (r *PtpOperatorConfig) ValidateCreate() (admission.Warnings, error) {
 	return admission.Warnings{}, nil
 }
 
-// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (r *PtpOperatorConfig) ValidateUpdate(old runtime.Object) (admission.Warnings, error) {
+func (v *ptpOperatorConfigValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	r := newObj.(*PtpOperatorConfig)
 	ptpoperatorconfiglog.Info("validate update", "name", r.Name)
 	if err := r.validate(); err != nil {
 		return admission.Warnings{}, err
@@ -87,8 +90,8 @@ func (r *PtpOperatorConfig) ValidateUpdate(old runtime.Object) (admission.Warnin
 	return admission.Warnings{}, nil
 }
 
-// ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (r *PtpOperatorConfig) ValidateDelete() (admission.Warnings, error) {
+func (v *ptpOperatorConfigValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	r := obj.(*PtpOperatorConfig)
 	ptpoperatorconfiglog.Info("validate delete", "name", r.Name)
 	return admission.Warnings{}, nil
 }
