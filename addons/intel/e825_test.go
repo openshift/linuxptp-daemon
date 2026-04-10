@@ -43,7 +43,6 @@ func Test_E825(t *testing.T) {
 }
 
 func Test_AfterRunPTPCommandE825(t *testing.T) {
-	unitTest = true
 	profile, err := loadProfile("./testdata/e825-tgm.yaml")
 	assert.NoError(t, err)
 	p, d := E825("e825")
@@ -79,7 +78,7 @@ func Test_AfterRunPTPCommandE825(t *testing.T) {
 	}
 	assert.Equal(t, requiredUblxCmds, found)
 	// And expect 3 of them to have produced output (as specified in the profile)
-	assert.Equal(t, 3, len(*data.hwplugins))
+	assert.Equal(t, 3, len(data.hwplugins))
 }
 
 func Test_AfterRunPTPCommandE825_TBC(t *testing.T) {
@@ -141,7 +140,7 @@ func Test_PopulateHwConfdigE825(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(output))
 
-	data.hwplugins = &[]string{"A", "B", "C"}
+	data.hwplugins = []string{"A", "B", "C"}
 	err = p.PopulateHwConfig(d, &output)
 	assert.NoError(t, err)
 	assert.Equal(t, []ptpv1.HwConfig{
@@ -161,17 +160,7 @@ func Test_PopulateHwConfdigE825(t *testing.T) {
 		output)
 }
 
-type mockBatchPinSet struct {
-	commands *[]dpll.PinParentDeviceCtl
-}
-
-func (m *mockBatchPinSet) mock(commands *[]dpll.PinParentDeviceCtl) error {
-	m.commands = commands
-	return nil
-}
-
 func Test_setupGnss(t *testing.T) {
-	unitTest = true
 	tcs := []struct {
 		name             string
 		gnss             GnssOptions
@@ -265,8 +254,8 @@ func Test_setupGnss(t *testing.T) {
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(tt *testing.T) {
-			mockPinSet := mockBatchPinSet{}
-			e825DoPinSet = mockPinSet.mock
+			mockPinSet, restorePinSet := setupBatchPinSetMock()
+			defer restorePinSet()
 			data := E825PluginData{
 				dpllPins: tc.dpll,
 			}
@@ -275,12 +264,12 @@ func Test_setupGnss(t *testing.T) {
 				assert.Error(tt, err)
 			} else {
 				assert.NoError(tt, err)
-				assert.Equal(tt, tc.expectedCmdCount, len(*mockPinSet.commands))
+				assert.Equal(tt, tc.expectedCmdCount, len(mockPinSet.commands))
 				expectedState := uint32(dpll.PinStateSelectable)
 				if tc.gnss.Disabled {
 					expectedState = uint32(dpll.PinStateDisconnected)
 				}
-				for _, cmd := range *mockPinSet.commands {
+				for _, cmd := range mockPinSet.commands {
 					for _, ctrl := range cmd.PinParentCtl {
 						assert.Equal(tt, expectedState, *ctrl.State)
 					}
@@ -327,7 +316,6 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(tt *testing.T) {
-			unitTest = true
 			mockPins, restorePins := setupMockPinConfig()
 			defer restorePins()
 			profile, err := loadProfile(tc.profile)
@@ -336,6 +324,9 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 			}
 			assert.NoError(tt, err)
 			p, d := E825("e825")
+			data := (*d).(*E825PluginData)
+			mockDpllPinset, restoreDpllPins := setupGNSSMocks(data)
+			defer restoreDpllPins()
 			err = p.OnPTPConfigChange(d, profile)
 			if tc.expectError {
 				assert.Error(tt, err)
@@ -343,6 +334,7 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 				assert.NoError(tt, err)
 				assert.Equal(tt, tc.expectedPinSets, mockPins.actualPinSetCount)
 				assert.Equal(tt, tc.expectedPinFrqs, mockPins.actualPinFrqCount)
+				assert.Equal(tt, 1, len(mockDpllPinset.commands))
 			}
 		})
 	}

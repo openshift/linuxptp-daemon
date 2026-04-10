@@ -1,6 +1,5 @@
 name: grandmaster
 ptpSettings:
-  unitTest: /tmp/test
   clockId[ens4f0]: 5799633565432596414
   clockId[ens5f0]: 5799633565433967128
   clockId[ens8f0]: 5799633565432596448
