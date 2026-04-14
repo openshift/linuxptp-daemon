@@ -22,7 +22,7 @@ import (
 
 // newHardwareConfigManagerForTests creates a HardwareConfigManager with a fake ConfigMap loader for tests
 func newHardwareConfigManagerForTests() *HardwareConfigManager {
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	return NewHardwareConfigManager(fakeClient, "default")
 }
 
