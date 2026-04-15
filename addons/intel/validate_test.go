@@ -391,6 +391,172 @@ func TestValidatePinValues(t *testing.T) {
 	}
 }
 
+func TestValidateInterconnections_Direct(t *testing.T) {
+	tests := []struct {
+		name      string
+		inputs    []PhaseInputs
+		expectErr bool
+		errSubstr string
+	}{
+		{
+			name:      "empty list is valid",
+			inputs:    []PhaseInputs{},
+			expectErr: false,
+		},
+		{
+			name: "valid entry with gnssInput",
+			inputs: []PhaseInputs{
+				{
+					ID:                    "ens4f0",
+					Part:                  "E810-XXVDA4T",
+					GnssInput:             true,
+					PhaseOutputConnectors: []string{"SMA1", "SMA2"},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			name: "valid entry with upstreamPort",
+			inputs: []PhaseInputs{
+				{
+					ID:           "ens5f0",
+					Part:         "E810-XXVDA4T",
+					UpstreamPort: "ens4f0",
+				},
+			},
+			expectErr: false,
+		},
+		{
+			name: "valid entry with inputConnector",
+			inputs: []PhaseInputs{
+				{
+					ID:   "ens4f0",
+					Part: "E810-XXVDA4T",
+					Input: InputConnector{
+						Connector: "SMA1",
+						DelayPs:   920,
+					},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			name: "missing id",
+			inputs: []PhaseInputs{
+				{
+					Part:      "E810-XXVDA4T",
+					GnssInput: true,
+				},
+			},
+			expectErr: true,
+			errSubstr: "'id' field is required",
+		},
+		{
+			name: "missing Part",
+			inputs: []PhaseInputs{
+				{
+					ID:        "ens4f0",
+					GnssInput: true,
+				},
+			},
+			expectErr: true,
+			errSubstr: "'Part' field is required",
+		},
+		{
+			name: "unknown Part (typo)",
+			inputs: []PhaseInputs{
+				{
+					ID:        "ens4f0",
+					Part:      "E810-XXVDA4",
+					GnssInput: true,
+				},
+			},
+			expectErr: true,
+			errSubstr: "unknown Part",
+		},
+		{
+			name: "no input source specified",
+			inputs: []PhaseInputs{
+				{
+					ID:   "ens4f0",
+					Part: "E810-XXVDA4T",
+				},
+			},
+			expectErr: true,
+			errSubstr: "must specify either",
+		},
+		{
+			name: "invalid inputConnector name",
+			inputs: []PhaseInputs{
+				{
+					ID:   "ens4f0",
+					Part: "E810-XXVDA4T",
+					Input: InputConnector{
+						Connector: "BOGUS_CONN",
+					},
+				},
+			},
+			expectErr: true,
+			errSubstr: "BOGUS_CONN",
+		},
+		{
+			name: "invalid phaseOutputConnector name",
+			inputs: []PhaseInputs{
+				{
+					ID:                    "ens4f0",
+					Part:                  "E810-XXVDA4T",
+					GnssInput:             true,
+					PhaseOutputConnectors: []string{"SMA1", "BADCONN"},
+				},
+			},
+			expectErr: true,
+			errSubstr: "BADCONN",
+		},
+		{
+			name: "multiple entries with errors on different indices",
+			inputs: []PhaseInputs{
+				{
+					ID:        "ens4f0",
+					Part:      "E810-XXVDA4T",
+					GnssInput: true,
+				},
+				{
+					Part:      "E810-XXVDA4T",
+					GnssInput: true,
+				},
+			},
+			expectErr: true,
+			errSubstr: "interconnections[1]",
+		},
+		{
+			name: "missing both id and Part",
+			inputs: []PhaseInputs{
+				{},
+			},
+			expectErr: true,
+			errSubstr: "'id' field is required",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := validateInterconnections(tc.inputs)
+			if tc.expectErr {
+				assert.NotEmpty(t, errs, "expected validation errors")
+				found := false
+				for _, e := range errs {
+					if contains(e, tc.errSubstr) {
+						found = true
+					}
+				}
+				assert.True(t, found, "expected error containing '%s', got: %v", tc.errSubstr, errs)
+			} else {
+				assert.Empty(t, errs, "expected no validation errors but got: %v", errs)
+			}
+		})
+	}
+}
+
 func TestValidateE810Opts_InvalidInterconnections(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -773,6 +939,160 @@ func TestValidatePinNames_E830_AlwaysUsesSysfs(t *testing.T) {
 	raw2, _ := json.Marshal(config2)
 	errs2 := ValidateE830Opts(raw2)
 	assert.NotEmpty(t, errs2, "BOGUS should be invalid for E830 (sysfs-only)")
+}
+
+func TestValidateE830Opts_GNRDFullValidation(t *testing.T) {
+	mockFS, cleanup := setupMockFS()
+	defer cleanup()
+	mockSysfsPins(mockFS, "enp108s0f0", []string{"PGT0", "PGT1", "PGT2", "PGT3"})
+
+	tests := []struct {
+		name      string
+		config    map[string]interface{}
+		expectErr bool
+		errSubstr string
+	}{
+		{
+			name: "valid GNR-D config with all PGT pins",
+			config: map[string]interface{}{
+				"devices": []string{"enp108s0f0"},
+				"pins": map[string]interface{}{
+					"enp108s0f0": map[string]string{
+						"PGT0": "2 1",
+						"PGT1": "0 1",
+						"PGT2": "0 2",
+						"PGT3": "0 3",
+					},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			name: "valid GNR-D config with frequencies",
+			config: map[string]interface{}{
+				"devices":     []string{"enp108s0f0"},
+				"frequencies": map[string]interface{}{},
+			},
+			expectErr: false,
+		},
+		{
+			name: "valid GNR-D config with settings",
+			config: map[string]interface{}{
+				"devices":  []string{"enp108s0f0"},
+				"settings": map[string]interface{}{},
+			},
+			expectErr: false,
+		},
+		{
+			name: "valid GNR-D config with phaseOffsetPins",
+			config: map[string]interface{}{
+				"devices":         []string{"enp108s0f0"},
+				"phaseOffsetPins": map[string]interface{}{},
+			},
+			expectErr: false,
+		},
+		{
+			name: "GNR-D typo in pin name (SMA1 instead of PGT)",
+			config: map[string]interface{}{
+				"pins": map[string]interface{}{
+					"enp108s0f0": map[string]string{
+						"SMA1": "2 1",
+					},
+				},
+			},
+			expectErr: true,
+			errSubstr: "SMA1",
+		},
+		{
+			name: "GNR-D invalid pin value format",
+			config: map[string]interface{}{
+				"pins": map[string]interface{}{
+					"enp108s0f0": map[string]string{
+						"PGT0": "abc",
+					},
+				},
+			},
+			expectErr: true,
+			errSubstr: "invalid pin value",
+		},
+		{
+			name: "GNR-D direction out of range",
+			config: map[string]interface{}{
+				"pins": map[string]interface{}{
+					"enp108s0f0": map[string]string{
+						"PGT0": "5 1",
+					},
+				},
+			},
+			expectErr: true,
+			errSubstr: "invalid direction",
+		},
+		{
+			name: "GNR-D negative channel",
+			config: map[string]interface{}{
+				"pins": map[string]interface{}{
+					"enp108s0f0": map[string]string{
+						"PGT0": "2 -1",
+					},
+				},
+			},
+			expectErr: true,
+			errSubstr: "invalid channel",
+		},
+		{
+			name: "GNR-D unknown top-level field (typo)",
+			config: map[string]interface{}{
+				"devics": []string{"enp108s0f0"},
+			},
+			expectErr: true,
+			errSubstr: "unknown",
+		},
+		{
+			name:      "GNR-D empty config is valid",
+			config:    map[string]interface{}{},
+			expectErr: false,
+		},
+		{
+			name: "GNR-D interconnections field rejected (E810-only)",
+			config: map[string]interface{}{
+				"interconnections": []map[string]interface{}{},
+			},
+			expectErr: true,
+			errSubstr: "unknown",
+		},
+		{
+			name: "GNR-D multiple pin errors accumulate",
+			config: map[string]interface{}{
+				"pins": map[string]interface{}{
+					"enp108s0f0": map[string]string{
+						"BOGUS1": "2 1",
+						"BOGUS2": "0 1",
+					},
+				},
+			},
+			expectErr: true,
+			errSubstr: "BOGUS",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, _ := json.Marshal(tc.config)
+			errs := ValidateE830Opts(raw)
+			if tc.expectErr {
+				assert.NotEmpty(t, errs, "expected validation errors")
+				found := false
+				for _, e := range errs {
+					if contains(e, tc.errSubstr) {
+						found = true
+					}
+				}
+				assert.True(t, found, "expected error containing '%s', got: %v", tc.errSubstr, errs)
+			} else {
+				assert.Empty(t, errs, "expected no validation errors but got: %v", errs)
+			}
+		})
+	}
 }
 
 func TestValidatePinNames_SysfsDiscoveryError(t *testing.T) {
