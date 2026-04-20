@@ -26,6 +26,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
+	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 
@@ -39,9 +40,8 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
 
 	"github.com/golang/glog"
-	"k8s.io/client-go/kubernetes"
-
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -374,8 +374,10 @@ type Daemon struct {
 	pmcPollInterval int
 
 	// Allow vendors to include plugins
-	pluginManager plugin.PluginManager
-	saFileWatcher *fsnotify.Watcher
+	pluginManager  plugin.PluginManager
+	saFileWatcher  *fsnotify.Watcher
+	ptpClient      *ptpclient.Clientset
+	unknownPlugins []string
 }
 
 // UpdateHardwareConfig implements controller.HardwareConfigUpdateHandler.
@@ -457,6 +459,7 @@ func New(
 	namespace string,
 	stdoutToSocket bool,
 	kubeClient *kubernetes.Clientset,
+	ptpClient *ptpclient.Clientset,
 	ptpUpdate *LinuxPTPConfUpdate,
 	stopCh <-chan struct{},
 	plugins []string,
@@ -470,7 +473,7 @@ func New(
 		RegisterMetrics(nodeName)
 	}
 	InitializeOffsetMaps()
-	pluginManager := registerPlugins(plugins)
+	pluginManager, unknownPlugins := registerPlugins(plugins)
 	eventChannel := make(chan event.EventChannel, 100)
 	pm := &ProcessManager{
 		process:         nil,
@@ -503,8 +506,10 @@ func New(
 		namespace:             namespace,
 		stdoutToSocket:        stdoutToSocket,
 		kubeClient:            kubeClient,
+		ptpClient:             ptpClient,
 		ptpUpdate:             ptpUpdate,
 		pluginManager:         pluginManager,
+		unknownPlugins:        unknownPlugins,
 		hwconfigs:             hwconfigs,
 		hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(kubeClient, namespace),
 		refreshNodePtpDevice:  refreshNodePtpDevice,
@@ -824,6 +829,18 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	if test {
 		configPrefix = testDir
 	}
+	var pluginErrors []error
+
+	// Validate that all plugin names in the profile match registered plugins
+	if nodeProfile.Plugins != nil {
+		for pluginName := range nodeProfile.Plugins {
+			if _, registered := dn.pluginManager.Plugins[pluginName]; !registered {
+				pluginErrors = append(pluginErrors, fmt.Errorf(
+					"unknown plugin '%s' in profile '%s' (possible typo in hardware plugin configuration)",
+					pluginName, *nodeProfile.Name))
+			}
+		}
+	}
 
 	// Check if hardware configs are available for this profile
 	// If hardware configs arrive later, reconciliation will re-apply the profile
@@ -831,13 +848,17 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		glog.Infof("Using hardware configs for PTP profile %s instead of plugins", *nodeProfile.Name)
 		if err := dn.hardwareConfigManager.ApplyHardwareConfigsForProfile(nodeProfile); err != nil {
 			glog.Errorf("Failed to apply hardware configs for profile %s: %v", *nodeProfile.Name, err)
-			dn.pluginManager.OnPTPConfigChange(nodeProfile)
+			// Fall back to plugins
+			errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
+			pluginErrors = append(pluginErrors, errs...)
 		}
 	} else {
 		glog.Infof("No hardware configs found for PTP profile %s, using plugins", *nodeProfile.Name)
-		dn.pluginManager.OnPTPConfigChange(nodeProfile)
+		errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
+		pluginErrors = append(pluginErrors, errs...)
 	}
 
+	dn.reportPluginStatus(*nodeProfile.Name, pluginErrors)
 	var err error
 	var cmdLine string
 	var configPath string

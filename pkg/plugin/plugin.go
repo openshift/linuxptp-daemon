@@ -1,6 +1,9 @@
 package plugin
 
 import (
+	"fmt"
+
+	"github.com/golang/glog"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
@@ -40,13 +43,22 @@ type RegisterEnableCallback func(*interface{}, string, func(bool))
 type ProcessLog func(*interface{}, string, string) string
 
 // OnPTPConfigChange is plugin interface
-func (pm *PluginManager) OnPTPConfigChange(nodeProfile *ptpv1.PtpProfile) {
+func (pm *PluginManager) OnPTPConfigChange(nodeProfile *ptpv1.PtpProfile) []error {
+	var errs []error
 	for pluginName, pluginObject := range pm.Plugins {
 		pluginFunc := pluginObject.OnPTPConfigChange
 		if pluginFunc != nil {
-			pluginFunc(pm.Data[pluginName], nodeProfile)
+			if err := pluginFunc(pm.Data[pluginName], nodeProfile); err != nil {
+				profileName := "unknown"
+				if nodeProfile.Name != nil {
+					profileName = *nodeProfile.Name
+				}
+				glog.Warningf("Plugin '%s' OnPTPConfigChange failed for profile '%s': %v", pluginName, profileName, err)
+				errs = append(errs, fmt.Errorf("plugin %s: %w", pluginName, err))
+			}
 		}
 	}
+	return errs
 }
 
 // AfterRunPTPCommand is plugin interface

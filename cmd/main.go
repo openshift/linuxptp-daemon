@@ -182,6 +182,7 @@ func main() {
 		daemon.PtpNamespace,
 		stdoutToSocket,
 		kubeClient,
+		ptpClient,
 		ptpConfUpdate,
 		stopCh,
 		plugins,
