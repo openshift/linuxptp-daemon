@@ -303,18 +303,31 @@ func mockClockIDsFromProfile(mfs *MockFileSystem, profile *ptpv1.PtpProfile) {
 	}
 }
 
+// testClockID is the ClockID used across test mock pins and devices
+const testClockID = uint64(1000)
+
+// testDpllDevices returns a standard set of mock DPLL devices (EEC id=1, PPS id=2)
+func testDpllDevices() []*dpll.DoDeviceGetReply {
+	return []*dpll.DoDeviceGetReply{
+		{ID: 1, ClockID: testClockID, Type: dpll.DpllTypeEEC},
+		{ID: 2, ClockID: testClockID, Type: dpll.DpllTypePPS},
+	}
+}
+
 func setupGNSSMocks(data *E825PluginData) (*mockBatchPinSet, func()) {
-	// Setup Mock gnss dpll pin data
+	// Setup Mock gnss dpll pin data (includes GNSS pin + REF0P/REF0N for T-BC input pin tests)
 	data.dpllPins = []*dpll.PinInfo{
 		{
 			ID:           1,
 			BoardLabel:   "SkipMe",
+			ClockID:      testClockID,
 			Type:         dpll.PinTypeEXT,
 			Capabilities: dpll.PinCapPrio,
 		},
 		{
 			BoardLabel:   "GNSS_1PPS_IN",
 			ID:           2,
+			ClockID:      testClockID,
 			Type:         dpll.PinTypeGNSS,
 			Capabilities: dpll.PinCapPrio | dpll.PinCapState,
 			ParentDevice: []dpll.PinParentDevice{
@@ -328,7 +341,32 @@ func setupGNSSMocks(data *E825PluginData) (*mockBatchPinSet, func()) {
 				},
 			},
 		},
+		{
+			ID:           10,
+			ClockID:      testClockID,
+			BoardLabel:   "ETH01_SDP_TIMESYNC_2",
+			PackageLabel: "REF0P",
+			Type:         dpll.PinTypeEXT,
+			Capabilities: dpll.PinCapState,
+			ParentDevice: []dpll.PinParentDevice{
+				{ParentID: uint32(1), Direction: dpll.PinDirectionInput},
+				{ParentID: uint32(2), Direction: dpll.PinDirectionInput},
+			},
+		},
+		{
+			ID:           11,
+			ClockID:      testClockID,
+			BoardLabel:   "ETH01_SDP_TIMESYNC_0",
+			PackageLabel: "REF0N",
+			Type:         dpll.PinTypeEXT,
+			Capabilities: dpll.PinCapState,
+			ParentDevice: []dpll.PinParentDevice{
+				{ParentID: uint32(1), Direction: dpll.PinDirectionInput},
+				{ParentID: uint32(2), Direction: dpll.PinDirectionInput},
+			},
+		},
 	}
+	data.dpllDevices = testDpllDevices()
 	// Mock pin-set logic
 	return setupBatchPinSetMock()
 }
