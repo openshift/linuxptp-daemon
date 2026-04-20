@@ -41,12 +41,12 @@ type DpllTestCase struct {
 func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 	return []DpllTestCase{{
 		reply: &nl.DoDeviceGetReply{
-			Id:            id,
+			ID:            id,
 			ModuleName:    moduleName,
 			Mode:          1,
 			ModeSupported: []uint32{0},
 			LockStatus:    3, //LHAQ,
-			ClockId:       clockid,
+			ClockID:       clockid,
 			Type:          2, //1 pps 2 eec
 		},
 		sourceLost:                false,
@@ -61,12 +61,12 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		desc:                      fmt.Sprintf("1.LHAQ frequency status, unknown Phase status : pin %d ", pinType),
 	}, {
 		reply: &nl.DoDeviceGetReply{
-			Id:            id,
+			ID:            id,
 			ModuleName:    moduleName,
 			Mode:          1,
 			ModeSupported: []uint32{0},
 			LockStatus:    3, //LHAQ,
-			ClockId:       clockid,
+			ClockID:       clockid,
 			Type:          1, //1 pps 2 eec
 		},
 		sourceLost:                false,
@@ -82,7 +82,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 	},
 		{
 			reply: &nl.DoDeviceGetReply{
-				Id:            id,
+				ID:            id,
 				ModuleName:    moduleName,
 				Mode:          1,
 				ModeSupported: []uint32{0},
@@ -93,7 +93,7 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 						return 4 // holdover
 					}
 				}(), // holdover,
-				ClockId: clockid,
+				ClockID: clockid,
 				Type:    pinType, //1 pps 2 eec
 			},
 			sourceLost:                true,
@@ -128,12 +128,12 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 		},
 		{
 			reply: &nl.DoDeviceGetReply{
-				Id:            id,
+				ID:            id,
 				ModuleName:    moduleName,
 				Mode:          1,
 				ModeSupported: []uint32{0},
 				LockStatus:    4, // holdover,
-				ClockId:       clockid,
+				ClockID:       clockid,
 				Type:          pinType, //1 pps 2 eec
 			},
 			sourceLost:                true,
@@ -177,7 +177,7 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
-		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{})
+		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 	d.CmdInit()
 	eventChannel := make(chan event.EventChannel, 10)
 	go eventProcessor.ProcessEvents()
@@ -220,7 +220,7 @@ func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
-		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{})
+		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 	d.CmdInit()
 	eventChannel := make(chan event.EventChannel, 10)
 	go eventProcessor.ProcessEvents()
@@ -284,7 +284,7 @@ func TestSlopeAndTimer(t *testing.T) {
 	}
 	for _, tt := range testCase {
 		d := dpll.NewDpll(100, tt.localMaxHoldoverOffSet, tt.localHoldoverTimeout, tt.maxInSpecOffset,
-			"test", []event.EventSource{}, dpll.MOCK, map[string]map[string]string{})
+			"test", []event.EventSource{}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 		assert.Equal(t, tt.localMaxHoldoverOffSet, d.LocalMaxHoldoverOffSet, "localMaxHoldover offset")
 		assert.Equal(t, tt.localHoldoverTimeout, d.LocalHoldoverTimeout, "Local holdover timeout")
 		assert.Equal(t, tt.maxInSpecOffset, d.MaxInSpecOffset, "Max In Spec Offset")
