@@ -295,7 +295,7 @@ filter_skipped() {
 
     local skip_reason=""
 
-    for skip_num in "${skip_pr_list[@]}"; do
+    for skip_num in "${skip_pr_list[@]+"${skip_pr_list[@]}"}"; do
       skip_num="${skip_num// /}"
       if [ -n "$skip_num" ] && [ "$skip_num" = "$pr_number" ]; then
         skip_reason="manually skipped (SKIP_PRS)"
@@ -304,7 +304,7 @@ filter_skipped() {
     done
 
     if [ -z "$skip_reason" ]; then
-      for skip_sha in "${skip_commit_list[@]}"; do
+      for skip_sha in "${skip_commit_list[@]+"${skip_commit_list[@]}"}"; do
         skip_sha="${skip_sha// /}"
         if [ -n "$skip_sha" ] && [[ "$pr_sha" == ${skip_sha}* ]]; then
           skip_reason="manually skipped (SKIP_COMMITS)"
