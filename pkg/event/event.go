@@ -626,6 +626,7 @@ func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, cloc
 func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string) {
 	e.Lock()
 	e.setClockClassLocked(clockClass, clockAcc)
+	e.storeClockClassLocked(cfgName, clockClass, clockAcc)
 	e.Unlock()
 
 	e.emitClockClass(clockClass, cfgName)

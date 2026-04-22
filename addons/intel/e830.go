@@ -73,9 +73,15 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 		if name == pluginNameE830 {
 			// Parse user-specified config
 			optsByteArray, _ = json.Marshal(raw)
+
+			// Validate configuration before applying
+			if validationErrors := ValidateE830Opts(optsByteArray); len(validationErrors) > 0 {
+				return fmt.Errorf("e830 plugin configuration errors: %s", strings.Join(validationErrors, "; "))
+			}
+
 			err = json.Unmarshal(optsByteArray, &opts)
 			if err != nil {
-				glog.Error("e830 failed to unmarshal opts: " + err.Error())
+				return fmt.Errorf("e830 failed to unmarshal opts: %w", err)
 			}
 
 			allDevices := opts.allDevices()

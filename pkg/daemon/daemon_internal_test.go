@@ -131,6 +131,7 @@ func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 		"openshift-ptp",
 		false,
 		nil,
+		nil,
 		&LinuxPTPConfUpdate{
 			UpdateCh:     make(chan bool),
 			NodeProfiles: []ptpv1.PtpProfile{*profile},
@@ -216,6 +217,7 @@ func Test_applyProfile_TBC(t *testing.T) {
 		"test-node-name",
 		"openshift-ptp",
 		false,
+		nil,
 		nil,
 		&LinuxPTPConfUpdate{
 			UpdateCh:     make(chan bool),
@@ -508,7 +510,7 @@ func stringPointer(s string) *string {
 // TestTBCTransitionCheck_HardwareConfigPath tests the hardware config path of tBCTransitionCheck
 func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 	// Create a real PluginManager
-	pmStruct := registerPlugins([]string{})
+	pmStruct, _ := registerPlugins([]string{})
 	pm := &pmStruct
 
 	// Test case: Verify hardware config setup
@@ -1144,7 +1146,7 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 // TestTBCTransitionCheck_LegacyPath tests the legacy path of tBCTransitionCheck
 func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 	// Create a real PluginManager
-	pmStruct := registerPlugins([]string{})
+	pmStruct, _ := registerPlugins([]string{})
 	pm := &pmStruct
 
 	// Test case 1: Locked transition
@@ -1359,7 +1361,7 @@ func TestTBCDualUpstream_PortALost_PortBTakesOver(t *testing.T) {
 		dn:               mockDaemon,
 	}
 
-	pmStruct := registerPlugins([]string{})
+	pmStruct, _ := registerPlugins([]string{})
 	pm := &pmStruct
 
 	// Port eno2 becomes SLAVE
@@ -1425,7 +1427,7 @@ func TestTBCDualUpstream_BothPortsLost(t *testing.T) {
 		dn:               mockDaemon,
 	}
 
-	pmStruct := registerPlugins([]string{})
+	pmStruct, _ := registerPlugins([]string{})
 	pm := &pmStruct
 
 	// Port eno2 loses SLAVE — eno3 still LOCKED, no aggregate change
@@ -1476,7 +1478,7 @@ func TestTBCDualUpstream_RecoveryAfterBothLost(t *testing.T) {
 		dn:               mockDaemon,
 	}
 
-	pmStruct := registerPlugins([]string{})
+	pmStruct, _ := registerPlugins([]string{})
 	pm := &pmStruct
 
 	// Port eno2 recovers to SLAVE
