@@ -10,7 +10,29 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name }}-${{ github.event.pull_request.head.ref }}
   cancel-in-progress: true
 jobs:
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      has-code-changes: ${{ steps.filter.outputs.has-code-changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for production code changes
+        id: filter
+        run: |
+          BASE=${{ github.event.pull_request.base.sha }}
+          HEAD=${{ github.event.pull_request.head.sha }}
+          CHANGED=$(git diff --name-only "$BASE" "$HEAD" | grep -cvE '^\.(github/|gitignore)|^docs/|\.md$' || true)
+          if [ "$CHANGED" -gt 0 ]; then
+            echo "has-code-changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-code-changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy-ec2:
+    needs: check-changes
+    if: needs.check-changes.outputs.has-code-changes == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 115
     steps:
