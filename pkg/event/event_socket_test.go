@@ -792,3 +792,46 @@ func TestStoreClockClassLocked_MakesEmitClockClassWork(t *testing.T) {
 
 	e.setConn(nil) // cleanup
 }
+
+// --- announceClockClass stores in clkSyncState ---
+
+func TestAnnounceClockClass_PopulatesClkSyncState(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// clkSyncState should be empty initially
+	e.Lock()
+	_, ok := e.clkSyncState["ptp4l.1.config"]
+	e.Unlock()
+	assert.False(t, ok, "clkSyncState should be empty before announceClockClass")
+
+	// announceClockClass should populate clkSyncState AND emit to socket
+	e.announceClockClass(fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21), "ptp4l.1.config")
+
+	// Verify clkSyncState was populated
+	e.Lock()
+	state, ok := e.clkSyncState["ptp4l.1.config"]
+	e.Unlock()
+	assert.True(t, ok, "clkSyncState should have ptp4l.1.config after announceClockClass")
+	assert.Equal(t, fbprotocol.ClockClass(6), state.clockClass)
+	assert.Equal(t, fbprotocol.ClockAccuracy(0x21), state.clockAccuracy)
+
+	// Verify it was written to socket
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 6")
+		assert.Contains(t, got, "ptp4l.1.config")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for clock class message on socket")
+	}
+
+	e.setConn(nil) // cleanup
+}
