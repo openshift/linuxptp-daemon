@@ -19,21 +19,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Coverage Gate
+        if: github.event_name == 'pull_request'
+        run: make coverage-gate BASE_REF=${{ github.event.pull_request.base.sha }}
+
       - name: Generate Coverage
+        if: github.event_name == 'push'
         run: make test
-
-      - name: Generate Base Coverage
-        if: github.event_name == 'pull_request'
-        run: |
-          git checkout ${{ github.event.pull_request.base.sha }}
-          make test
-          go run github.com/vladopajic/go-test-coverage/v2@v2.17.1 -p coverage.out --breakdown-file-name base-coverage.json
-          git checkout ${{ github.sha }}
-
-      - name: Check Coverage Regressions
-        if: github.event_name == 'pull_request'
-        uses: vladopajic/go-test-coverage@v2
-        with:
-          profile: coverage.out
-          base-breakdown-file: base-coverage.json
-          diff-threshold: 0
