@@ -1,0 +1,39 @@
+name: "Coverage Quality Gate"
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  coverage:
+    if: "!contains(github.event.pull_request.labels.*.name, 'skip-coverage')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Generate Coverage
+        run: make test
+
+      - name: Generate Base Coverage
+        if: github.event_name == 'pull_request'
+        run: |
+          git checkout ${{ github.event.pull_request.base.sha }}
+          make test
+          go run github.com/vladopajic/go-test-coverage/v2@v2.17.1 -p coverage.out --breakdown-file-name base-coverage.json
+          git checkout ${{ github.sha }}
+
+      - name: Check Coverage Regressions
+        if: github.event_name == 'pull_request'
+        uses: vladopajic/go-test-coverage@v2
+        with:
+          profile: coverage.out
+          base-breakdown-file: base-coverage.json
+          diff-threshold: 0
