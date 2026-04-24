@@ -23,7 +23,9 @@ fmt:
 	./hack/gofmt.sh
 
 test:
-	SKIP_GNSS_MONITORING=1 go test ./... --tags=unittests -coverprofile=coverage.out
+	SKIP_GNSS_MONITORING=1 go test ./... --tags=unittests -coverprofile=coverage.raw.out
+	# Filter out generated code and mocks
+	grep -vE "zz_generated|\.pb\.go|mock_" coverage.raw.out > coverage.out
 
 lint:
 	golangci-lint run
