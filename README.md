@@ -87,3 +87,27 @@ $ kubectl get pods -n openshift-ptp
 NAME                    READY   STATUS    RESTARTS   AGE
 linuxptp-daemon-txmpn   1/1     Running   0          105m
 ```
+
+## Test Coverage
+
+Run `make coverage-gate` to compare test coverage of your branch against the upstream main branch. The script auto-detects the upstream remote and its tracking branch.
+
+```sh
+$ make coverage-gate
+
+Base coverage (up-main): 45.4%
+Current coverage:            45.4%
+Difference:                  0%
+✅ Coverage unchanged.
+```
+
+You can also compare against a specific branch:
+
+```sh
+$ BASE_REF=release-4.20 make coverage-gate
+
+Base coverage (release-4.20): 40.9%
+Current coverage:            45.4%
+Difference:                  4.5%
+🎉 Coverage increased by 4.5%, good job!
+```
