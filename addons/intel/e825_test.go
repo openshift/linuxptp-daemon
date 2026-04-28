@@ -280,23 +280,178 @@ func Test_setupGnss(t *testing.T) {
 	}
 }
 
-func Test_OnPTPConfigChangeE825(t *testing.T) {
+func makeRefPins(ref0p, ref0n bool) []*dpll.PinInfo {
+	pins := []*dpll.PinInfo{}
+	if ref0p {
+		pins = append(pins, &dpll.PinInfo{
+			ID: 0, ClockID: testClockID, PackageLabel: "REF0P", BoardLabel: "ETH01_SDP_TIMESYNC_2",
+			Capabilities: dpll.PinCapState,
+			ParentDevice: []dpll.PinParentDevice{
+				{ParentID: 1, Direction: dpll.PinDirectionInput},
+				{ParentID: 2, Direction: dpll.PinDirectionInput},
+			},
+		})
+	}
+	if ref0n {
+		pins = append(pins, &dpll.PinInfo{
+			ID: 1, ClockID: testClockID, PackageLabel: "REF0N", BoardLabel: "ETH01_SDP_TIMESYNC_0",
+			Capabilities: dpll.PinCapState,
+			ParentDevice: []dpll.PinParentDevice{
+				{ParentID: 1, Direction: dpll.PinDirectionInput},
+				{ParentID: 2, Direction: dpll.PinDirectionInput},
+			},
+		})
+	}
+	return pins
+}
+
+func Test_setupDpllInputPins(t *testing.T) {
+	defaultDevices := testDpllDevices()
 	tcs := []struct {
-		name            string
-		profile         string
-		editProfile     func(*ptpv1.PtpProfile)
-		expectError     bool
-		expectedPinSets int
-		expectedPinFrqs int
+		name             string
+		dpllPins         []*dpll.PinInfo
+		dpllDevices      []*dpll.DoDeviceGetReply
+		expectedCmdCount int
+		expectPPSOnly    bool
 	}{
 		{
-			name:    "TGM Profile",
-			profile: "./testdata/e825-tgm.yaml",
+			name:             "Both REF0P and REF0N present",
+			dpllPins:         makeRefPins(true, true),
+			dpllDevices:      defaultDevices,
+			expectedCmdCount: 2,
+			expectPPSOnly:    true,
 		},
 		{
-			name:            "TBC Profile",
-			profile:         "./testdata/e825-tbc.yaml",
-			expectedPinSets: 2,
+			name:             "Only REF0P present",
+			dpllPins:         makeRefPins(true, false),
+			dpllDevices:      defaultDevices,
+			expectedCmdCount: 1,
+			expectPPSOnly:    true,
+		},
+		{
+			name: "No matching pins",
+			dpllPins: []*dpll.PinInfo{
+				{ID: 99, PackageLabel: "REF4P", Capabilities: dpll.PinCapState},
+			},
+			dpllDevices:      defaultDevices,
+			expectedCmdCount: 0,
+		},
+		{
+			name: "Pin lacks PinCapState",
+			dpllPins: []*dpll.PinInfo{
+				{
+					ID: 1, ClockID: testClockID, PackageLabel: "REF0P",
+					Capabilities: dpll.PinCapPrio,
+					ParentDevice: []dpll.PinParentDevice{
+						{ParentID: 1, Direction: dpll.PinDirectionInput},
+						{ParentID: 2, Direction: dpll.PinDirectionInput},
+					},
+				},
+			},
+			dpllDevices:      defaultDevices,
+			expectedCmdCount: 0,
+		},
+		{
+			name: "PPS parent is output direction",
+			dpllPins: []*dpll.PinInfo{
+				{
+					ID: 1, ClockID: testClockID, PackageLabel: "REF0P",
+					Capabilities: dpll.PinCapState,
+					ParentDevice: []dpll.PinParentDevice{
+						{ParentID: 1, Direction: dpll.PinDirectionInput},
+						{ParentID: 2, Direction: dpll.PinDirectionOutput},
+					},
+				},
+			},
+			dpllDevices:      defaultDevices,
+			expectedCmdCount: 0,
+		},
+		{
+			name: "No PPS device in devices list",
+			dpllPins: []*dpll.PinInfo{
+				{
+					ID: 1, ClockID: testClockID, PackageLabel: "REF0P",
+					Capabilities: dpll.PinCapState,
+					ParentDevice: []dpll.PinParentDevice{
+						{ParentID: 1, Direction: dpll.PinDirectionInput},
+						{ParentID: 2, Direction: dpll.PinDirectionInput},
+					},
+				},
+			},
+			dpllDevices: []*dpll.DoDeviceGetReply{
+				{ID: 1, ClockID: testClockID, Type: dpll.DpllTypeEEC},
+				{ID: 2, ClockID: testClockID, Type: dpll.DpllTypeEEC},
+			},
+			expectedCmdCount: 0,
+		},
+		{
+			name: "ClockID mismatch between pin and device",
+			dpllPins: []*dpll.PinInfo{
+				{
+					ID: 1, ClockID: 9999, PackageLabel: "REF0P",
+					Capabilities: dpll.PinCapState,
+					ParentDevice: []dpll.PinParentDevice{
+						{ParentID: 1, Direction: dpll.PinDirectionInput},
+						{ParentID: 2, Direction: dpll.PinDirectionInput},
+					},
+				},
+			},
+			dpllDevices:      defaultDevices,
+			expectedCmdCount: 0,
+		},
+		{
+			name: "Pin has only EEC parent, no PPS parent",
+			dpllPins: []*dpll.PinInfo{
+				{
+					ID: 1, ClockID: testClockID, PackageLabel: "REF0P",
+					Capabilities: dpll.PinCapState,
+					ParentDevice: []dpll.PinParentDevice{
+						{ParentID: 1, Direction: dpll.PinDirectionInput},
+					},
+				},
+			},
+			dpllDevices:      defaultDevices,
+			expectedCmdCount: 0,
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(tt *testing.T) {
+			mockPinSet, restorePinSet := setupBatchPinSetMock()
+			defer restorePinSet()
+			data := E825PluginData{dpllPins: tc.dpllPins, dpllDevices: tc.dpllDevices}
+			err := data.setupDpllInputPins()
+			assert.NoError(tt, err)
+			assert.Equal(tt, tc.expectedCmdCount, len(mockPinSet.commands))
+			if tc.expectPPSOnly {
+				for _, cmd := range mockPinSet.commands {
+					assert.Len(tt, cmd.PinParentCtl, 1, "must target PPS parent only")
+					assert.Equal(tt, uint32(dpll.PinStateSelectable), *cmd.PinParentCtl[0].State)
+				}
+			}
+		})
+	}
+}
+
+func Test_OnPTPConfigChangeE825(t *testing.T) {
+	tcs := []struct {
+		name             string
+		profile          string
+		editProfile      func(*ptpv1.PtpProfile)
+		expectError      bool
+		expectedPinSets  int
+		expectedPinFrqs  int
+		expectedDpllCmds int
+	}{
+		{
+			name:             "TGM Profile",
+			profile:          "./testdata/e825-tgm.yaml",
+			expectedDpllCmds: 1,
+		},
+		{
+			name:             "TBC Profile",
+			profile:          "./testdata/e825-tbc.yaml",
+			expectedPinSets:  2,
+			expectedDpllCmds: 3,
 		},
 		{
 			name:    "TBC with no leadingInterface",
@@ -335,7 +490,7 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 				assert.NoError(tt, err)
 				assert.Equal(tt, tc.expectedPinSets, mockPins.actualPinSetCount)
 				assert.Equal(tt, tc.expectedPinFrqs, mockPins.actualPinFrqCount)
-				assert.Equal(tt, 1, len(mockDpllPinset.commands))
+				assert.Equal(tt, tc.expectedDpllCmds, len(mockDpllPinset.commands))
 			}
 		})
 	}
