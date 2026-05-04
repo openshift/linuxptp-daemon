@@ -10,7 +10,7 @@ require (
 	github.com/jaypipes/ghw v0.12.0
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
-	github.com/openshift/ptp-operator v0.0.0-20251126211433-0dee6a03855c
+	github.com/openshift/ptp-operator v0.0.0-20251205063307-b04f1e9f5fc5
 	github.com/prometheus/client_golang v1.16.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stratoberry/go-gpsd v1.1.0
@@ -90,5 +90,3 @@ require (
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 )
-
-replace github.com/openshift/ptp-operator => github.com/josephdrichard/ptp-operator v0.0.0-20251205063307-b04f1e9f5fc5
