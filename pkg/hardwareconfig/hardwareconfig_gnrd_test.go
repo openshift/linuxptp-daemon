@@ -82,7 +82,7 @@ func TestGNRDHardwareConfigFullFlow(t *testing.T) {
 	// Apply hardware configs for profile (this applies defaults and init)
 	t.Logf("\n=== Phase 2: Applying Hardware Config for Profile ===")
 	profile := &ptpv1.PtpProfile{
-		Name: stringPtr("01-tbc-tr"),
+		Name: stringPtr("t-bc_01-tbc-tr"),
 	}
 
 	capturedDpllCommands = nil // Reset to capture only init commands

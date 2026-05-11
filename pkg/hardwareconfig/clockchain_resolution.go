@@ -157,6 +157,19 @@ func findLeadingInterfaceFromUpstreamPortWithResolver(upstreamPort string, resol
 	return leadingInterface, nil
 }
 
+// ProfileNamesMatch reports whether a PtpConfig profile name (stored) matches a
+// HardwareConfig's RelatedPtpProfileName (requested).
+func ProfileNamesMatch(stored, requested string) bool {
+	if strings.TrimSpace(requested) == "" {
+		return false
+	}
+	parts := strings.SplitN(stored, "_", 2)
+	if len(parts) > 1 && parts[1] == requested {
+		return true
+	}
+	return false
+}
+
 // ResolveClockChain resolves a minimal hardwareconfig by deriving structure and behavior
 // from ptpconfig and behavior profile templates.
 // Board label remapping from ConfigMap will be applied if configMapLoader is set.
@@ -182,12 +195,15 @@ func (hcm *HardwareConfigManager) ResolveClockChain(hwConfig *ptpv2alpha1.Hardwa
 			return nil, fmt.Errorf("hardwareconfig %s has clockType but no relatedPtpProfileName specified", hwConfig.Name)
 		}
 
-		// Search through all profiles in PtpConfig to find the matching one
+		// Search through all profiles in PtpConfig to find the matching one.
 		for i := range ptpConfig.Spec.Profile {
-			if ptpConfig.Spec.Profile[i].Name != nil &&
-				*ptpConfig.Spec.Profile[i].Name == relatedProfileName {
+			if ptpConfig.Spec.Profile[i].Name == nil {
+				continue
+			}
+			name := *ptpConfig.Spec.Profile[i].Name
+			if ProfileNamesMatch(name, relatedProfileName) {
 				ptpProfile = &ptpConfig.Spec.Profile[i]
-				glog.Infof("Found matching PTP profile '%s' for hardwareconfig '%s'", relatedProfileName, hwConfig.Name)
+				glog.Infof("Found matching PTP profile '%s' for hardwareconfig '%s'", name, hwConfig.Name)
 				break
 			}
 		}

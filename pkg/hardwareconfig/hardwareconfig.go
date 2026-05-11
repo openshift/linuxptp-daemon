@@ -400,7 +400,7 @@ func (hcm *HardwareConfigManager) HasHardwareConfigForProfile(nodeProfile *ptpv1
 	}
 
 	for _, hwConfig := range hcm.hardwareConfigs {
-		if hwConfig.Spec.RelatedPtpProfileName == *nodeProfile.Name {
+		if ProfileNamesMatch(*nodeProfile.Name, hwConfig.Spec.RelatedPtpProfileName) {
 			return true
 		}
 	}
@@ -415,7 +415,7 @@ func (hcm *HardwareConfigManager) GetHardwareConfigsForProfile(nodeProfile *ptpv
 
 	var relevantConfigs []ptpv2alpha1.HardwareProfile
 	for _, hwConfig := range hcm.hardwareConfigs {
-		if hwConfig.Spec.RelatedPtpProfileName == *nodeProfile.Name {
+		if ProfileNamesMatch(*nodeProfile.Name, hwConfig.Spec.RelatedPtpProfileName) {
 			relevantConfigs = append(relevantConfigs, hwConfig.Spec.Profile)
 		}
 	}
@@ -432,7 +432,7 @@ func (hcm *HardwareConfigManager) ApplyHardwareConfigsForProfile(nodeProfile *pt
 	// Find enriched hardware configs for this profile
 	var relevantConfigs []enrichedHardwareConfig
 	for _, hwConfig := range hcm.hardwareConfigs {
-		if hwConfig.Spec.RelatedPtpProfileName == *nodeProfile.Name {
+		if ProfileNamesMatch(*nodeProfile.Name, hwConfig.Spec.RelatedPtpProfileName) {
 			relevantConfigs = append(relevantConfigs, hwConfig)
 		}
 	}
@@ -1841,7 +1841,7 @@ func (hcm *HardwareConfigManager) ApplyConditionForProfile(nodeProfile *ptpv1.Pt
 	// Find enriched hardware configs for this profile
 	var relevantConfigs []enrichedHardwareConfig
 	for _, hwConfig := range hcm.hardwareConfigs {
-		if hwConfig.Spec.RelatedPtpProfileName == *nodeProfile.Name {
+		if ProfileNamesMatch(*nodeProfile.Name, hwConfig.Spec.RelatedPtpProfileName) {
 			relevantConfigs = append(relevantConfigs, hwConfig)
 		}
 	}
@@ -2068,7 +2068,7 @@ func (hcm *HardwareConfigManager) ReadyHardwareConfigForProfile(name string) boo
 		return false
 	}
 	for _, hw := range hcm.hardwareConfigs {
-		if hw.Spec.RelatedPtpProfileName == name {
+		if ProfileNamesMatch(name, hw.Spec.RelatedPtpProfileName) {
 			return true
 		}
 	}
@@ -2214,7 +2214,7 @@ func (hcm *HardwareConfigManager) GetHoldoverParameters(profileName string, cloc
 	defer hcm.mu.RUnlock()
 
 	for _, hwConfig := range hcm.hardwareConfigs {
-		if hwConfig.Spec.RelatedPtpProfileName == profileName {
+		if ProfileNamesMatch(profileName, hwConfig.Spec.RelatedPtpProfileName) {
 			if params, found := hwConfig.holdoverParams[clockID]; found {
 				return params
 			}
