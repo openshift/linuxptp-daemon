@@ -46,7 +46,7 @@ func TestApplyHardwareConfigsForProfile(t *testing.T) {
 		{
 			name:         "successful hardware config application",
 			testDataFile: "testdata/wpc-hwconfig.yaml",
-			profileName:  "01-tbc-tr",
+			profileName:  "t-bc_01-tbc-tr",
 		},
 		{
 			name:         "no matching profile",
@@ -154,7 +154,7 @@ func TestHardwareConfigManagerOperations(t *testing.T) {
 
 	// Test HasHardwareConfigForProfile
 	profile := &ptpv1.PtpProfile{
-		Name: stringPtr("01-tbc-tr"),
+		Name: stringPtr("t-bc_01-tbc-tr"),
 	}
 	assert.True(t, hcm.HasHardwareConfigForProfile(profile))
 
@@ -163,7 +163,7 @@ func TestHardwareConfigManagerOperations(t *testing.T) {
 	assert.False(t, hcm.HasHardwareConfigForProfile(profile))
 
 	// Test GetHardwareConfigsForProfile
-	profile.Name = stringPtr("01-tbc-tr")
+	profile.Name = stringPtr("t-bc_01-tbc-tr")
 	configs := hcm.GetHardwareConfigsForProfile(profile)
 	assert.Len(t, configs, 1)
 	assert.Equal(t, "tbc", *configs[0].Name)
@@ -1443,13 +1443,13 @@ func TestHoldoverParametersExtraction(t *testing.T) {
 	hcm.mu.Unlock()
 
 	// Retrieve using API
-	retrieved1 := hcm.GetHoldoverParameters("test-profile", clockID1)
+	retrieved1 := hcm.GetHoldoverParameters("ptpconfig_test-profile", clockID1)
 	assert.NotNil(t, retrieved1, "Should retrieve holdover params for clock1")
 	if retrieved1 != nil {
 		assert.Equal(t, uint64(200), retrieved1.MaxInSpecOffset, "Retrieved MaxInSpecOffset should match")
 	}
 
-	retrieved2 := hcm.GetHoldoverParameters("test-profile", clockID2)
+	retrieved2 := hcm.GetHoldoverParameters("ptpconfig_test-profile", clockID2)
 	assert.NotNil(t, retrieved2, "Should retrieve holdover params for clock2")
 	if retrieved2 != nil {
 		assert.Equal(t, uint64(100), retrieved2.MaxInSpecOffset, "Retrieved MaxInSpecOffset should use default")
@@ -1460,7 +1460,7 @@ func TestHoldoverParametersExtraction(t *testing.T) {
 	assert.Nil(t, retrieved3, "Should return nil for non-existent profile")
 
 	// Test non-existent clock ID
-	retrieved4 := hcm.GetHoldoverParameters("test-profile", 0xDEADBEEF)
+	retrieved4 := hcm.GetHoldoverParameters("ptpconfig_test-profile", 0xDEADBEEF)
 	assert.Nil(t, retrieved4, "Should return nil for non-existent clock ID")
 
 	t.Logf("✓ Holdover parameter extraction and retrieval working correctly")
