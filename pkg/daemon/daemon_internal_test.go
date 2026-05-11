@@ -954,13 +954,13 @@ func TestProcessTBCTransitionHardwareConfig_HardwareConfigIntegration(t *testing
 
 	// Verify the profile association
 	hasConfig := hcm.HasHardwareConfigForProfile(&ptpv1.PtpProfile{
-		Name: stringPointer("01-tbc-tr"),
+		Name: stringPointer("t-bc_01-tbc-tr"),
 	})
 	assert.True(t, hasConfig, "Should have hardware config for profile 01-tbc-tr")
 
 	// Get configs for the profile
 	profiles := hcm.GetHardwareConfigsForProfile(&ptpv1.PtpProfile{
-		Name: stringPointer("01-tbc-tr"),
+		Name: stringPointer("t-bc_01-tbc-tr"),
 	})
 	assert.Len(t, profiles, 1, "Should get exactly one hardware profile")
 	assert.NotNil(t, profiles[0].Name, "Hardware profile should have a name")
@@ -1042,7 +1042,7 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 			perPortState: map[string]event.PTPState{"ens4f1": event.PTP_NOTSET},
 		},
 		nodeProfile: ptpv1.PtpProfile{
-			Name: stringPointer("01-tbc-tr"), // Matches relatedPtpProfileName from config
+			Name: stringPointer("t-bc_01-tbc-tr"), // Matches relatedPtpProfileName from config (qualified by operator)
 			PtpSettings: map[string]string{
 				"leadingInterface": "ens4f1",
 				"clockId[ens4f1]":  "123456789",

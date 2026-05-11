@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/daemon"
+	hc "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 )
@@ -408,14 +409,8 @@ func (r *HardwareConfigReconciler) recordUpdateFailure(ctx context.Context, conf
 
 // ptpProfileNameMatchesActive reports whether relatedProfile is considered active.
 func ptpProfileNameMatchesActive(relatedProfile string, activePTPProfiles map[string]bool) bool {
-	if activePTPProfiles[relatedProfile] {
-		return true
-	}
-	// Also accept a match when an active profile entry carries the ptpconfig resource name
-	// as a prefix separated by "_".
-	suffix := "_" + relatedProfile
 	for activeProfile := range activePTPProfiles {
-		if strings.HasSuffix(activeProfile, suffix) {
+		if hc.ProfileNamesMatch(activeProfile, relatedProfile) {
 			return true
 		}
 	}
