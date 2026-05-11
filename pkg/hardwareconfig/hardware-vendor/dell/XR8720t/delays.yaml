@@ -52,24 +52,24 @@ connections:
   # NAC to Timing Module routing/wiring
   - from: "NAC0 phase out 1kHz"
     to: "DPLL phase in 1kHz"
-    delayPs: -4000
+    delayPs: -5000
   - from: "NAC0 phase out 1Hz"
     to: "DPLL phase in 1Hz"
-    delayPs: -4000
+    delayPs: -5000
 
 
   # DPLL to NAC (during holdover)
   - from: "DPLL phase out 1kHz"
     to: "NAC0 phase in 1kHz"
-    delayPs: 5000
+    delayPs: -5000
   - from: "DPLL phase out 1Hz"
     to: "NAC0 phase in 1Hz"
-    delayPs: 5000
+    delayPs: -5000
 
 
   - from: "DPLL ESync out"
     to: "CF ESync in"
-    delayPs: 40000
+    delayPs: -25000
 
 
 # 3. Logic: Where do we compensate for the delay
