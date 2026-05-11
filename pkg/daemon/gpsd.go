@@ -221,7 +221,7 @@ func (g *GPSD) CmdRun(stdoutToSocket bool) {
 		// Don't restart after termination
 		if !g.Stopped() {
 			time.Sleep(1 * time.Second)
-			if resetErr := g.resetSerialPort(context.Background()); resetErr != nil {
+			if resetErr := g.resetSerialPort(g.monitorCtx); resetErr != nil {
 				glog.Warningf("gpsd: proceeding with start despite serial port reset failure: %v", resetErr)
 			}
 			err = g.cmd.Start() // this is asynchronous call,
