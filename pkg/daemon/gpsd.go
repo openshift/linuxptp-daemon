@@ -58,6 +58,9 @@ type GPSD struct {
 	monitorCtx           context.Context
 	monitorCancel        context.CancelFunc
 	c                    net.Conn
+	// cmdRunner executes an external command; defaults to exec.CommandContext and
+	// can be overridden in tests to inject a fake command.
+	cmdRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
 // GPSDSubscriber ... event subscriber
@@ -160,6 +163,30 @@ func (g *GPSD) CmdInit() {
 	}
 	g.monitorCtx, g.monitorCancel = context.WithCancel(context.Background())
 	g.cmdLine = fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -G -N %s", g.Name(), g.SerialPort())
+	if g.cmdRunner == nil {
+		g.cmdRunner = exec.CommandContext
+	}
+}
+
+// resetSerialPort resets the serial device to a sane state before starting gpsd.
+// On platforms where GNSS is connected via UART (e.g. HPE), an abrupt gpsd
+// termination can leave the UART in a dirty state that prevents a new gpsd
+// instance from communicating with the GNSS module. Running "stty sane" clears
+// that state. The reset is unconditional — it is also harmless on platforms
+// with USB-connected GNSS devices.
+// If serialPort is empty the reset is skipped with a warning.
+// A reset failure is logged as a warning but never blocks gpsd startup.
+func (g *GPSD) resetSerialPort(ctx context.Context) error {
+	if g.serialPort == "" {
+		glog.Warningf("gpsd: no serial port configured, skipping device reset before gpsd start")
+		return nil
+	}
+	out, err := g.cmdRunner(ctx, "stty", "-F", g.serialPort, "sane").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stty -F %s sane: %w (output: %s)", g.serialPort, err, strings.TrimSpace(string(out)))
+	}
+	glog.Infof("gpsd: serial port %s reset to sane state", g.serialPort)
+	return nil
 }
 
 // ProcessStatus ...
@@ -194,6 +221,9 @@ func (g *GPSD) CmdRun(stdoutToSocket bool) {
 		// Don't restart after termination
 		if !g.Stopped() {
 			time.Sleep(1 * time.Second)
+			if resetErr := g.resetSerialPort(context.Background()); resetErr != nil {
+				glog.Warningf("gpsd: proceeding with start despite serial port reset failure: %v", resetErr)
+			}
 			err = g.cmd.Start() // this is asynchronous call,
 			if err != nil {
 				glog.Errorf("CmdRun() error starting %s: %v", g.Name(), err)
