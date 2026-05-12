@@ -50,9 +50,24 @@ jobs:
        
       - name: Run Tests
         run: make test
+  cloud-event-proxy-e2e:
+    runs-on: ubuntu-latest
+    needs: [build,test]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Run cloud-event-proxy e2e tests
+        run: bash test/cloud-event-proxy/e2e.sh
+
   kind:
     runs-on: ubuntu-latest
-    needs: [build,test]  # Runs after the "build and test " job is completed
+    needs: [build,test]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
