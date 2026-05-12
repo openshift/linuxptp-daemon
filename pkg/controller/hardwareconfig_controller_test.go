@@ -105,7 +105,7 @@ func TestCalculateNodeHardwareConfigs(t *testing.T) {
 		{
 			name:                 "no hardware configs",
 			nodeName:             "test-node",
-			activeProfiles:       []string{"grandmaster"},
+			activeProfiles:       []string{"ptpconfig_grandmaster"},
 			hwConfigs:            []ptpv2alpha1.HardwareConfig{},
 			expectedConfigsCount: 0,
 			expectedConfigNames:  []string{},
@@ -114,7 +114,7 @@ func TestCalculateNodeHardwareConfigs(t *testing.T) {
 		{
 			name:           "single hardware config with matching active profile",
 			nodeName:       "test-node",
-			activeProfiles: []string{"grandmaster"},
+			activeProfiles: []string{"ptpconfig_grandmaster"},
 			hwConfigs: []ptpv2alpha1.HardwareConfig{
 				createTestHardwareConfig("gm-config", "grandmaster-profile", "grandmaster"),
 			},
@@ -125,7 +125,7 @@ func TestCalculateNodeHardwareConfigs(t *testing.T) {
 		{
 			name:           "single hardware config with non-matching active profile",
 			nodeName:       "test-node",
-			activeProfiles: []string{"boundary-clock"},
+			activeProfiles: []string{"ptpconfig_boundary-clock"},
 			hwConfigs: []ptpv2alpha1.HardwareConfig{
 				createTestHardwareConfig("gm-config", "grandmaster-profile", "grandmaster"),
 			},
@@ -136,7 +136,7 @@ func TestCalculateNodeHardwareConfigs(t *testing.T) {
 		{
 			name:           "multiple hardware configs, all matching",
 			nodeName:       "worker-node",
-			activeProfiles: []string{"boundary-clock", "ordinary-clock"},
+			activeProfiles: []string{"ptpconfig_boundary-clock", "ptpconfig_ordinary-clock"},
 			hwConfigs: []ptpv2alpha1.HardwareConfig{
 				createTestHardwareConfig("bc-config", "boundary-clock-profile", "boundary-clock"),
 				createTestHardwareConfig("oc-config", "ordinary-clock-profile", "ordinary-clock"),
@@ -148,7 +148,7 @@ func TestCalculateNodeHardwareConfigs(t *testing.T) {
 		{
 			name:           "multiple hardware configs, partial matching",
 			nodeName:       "worker-node",
-			activeProfiles: []string{"boundary-clock"},
+			activeProfiles: []string{"ptpconfig_boundary-clock"},
 			hwConfigs: []ptpv2alpha1.HardwareConfig{
 				createTestHardwareConfig("bc-config", "boundary-clock-profile", "boundary-clock"),
 				createTestHardwareConfig("oc-config", "ordinary-clock-profile", "ordinary-clock"),
@@ -160,7 +160,7 @@ func TestCalculateNodeHardwareConfigs(t *testing.T) {
 		{
 			name:           "hardware config without related profile",
 			nodeName:       "test-node",
-			activeProfiles: []string{"grandmaster"},
+			activeProfiles: []string{"ptpconfig_grandmaster"},
 			hwConfigs: []ptpv2alpha1.HardwareConfig{
 				createTestHardwareConfig("no-profile-config", "some-profile", ""), // Empty relatedPtpProfileName
 			},
@@ -300,7 +300,7 @@ func TestCheckIfChangedConfigsAffectActiveProfiles(t *testing.T) {
 		},
 		{
 			name:            "config added but not associated with active profile",
-			activeProfiles:  []string{"active-profile"},
+			activeProfiles:  []string{"ptpconfig_active-profile"},
 			oldConfigs:      []ptpv2alpha1.HardwareConfig{},
 			newConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "other-profile")},
 			expectedRestart: false,
@@ -308,7 +308,7 @@ func TestCheckIfChangedConfigsAffectActiveProfiles(t *testing.T) {
 		},
 		{
 			name:            "config added and associated with active profile",
-			activeProfiles:  []string{"active-profile"},
+			activeProfiles:  []string{"ptpconfig_active-profile"},
 			oldConfigs:      []ptpv2alpha1.HardwareConfig{},
 			newConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "active-profile")},
 			expectedRestart: true,
@@ -316,7 +316,7 @@ func TestCheckIfChangedConfigsAffectActiveProfiles(t *testing.T) {
 		},
 		{
 			name:            "config removed and was associated with active profile",
-			activeProfiles:  []string{"active-profile"},
+			activeProfiles:  []string{"ptpconfig_active-profile"},
 			oldConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "active-profile")},
 			newConfigs:      []ptpv2alpha1.HardwareConfig{},
 			expectedRestart: true,
@@ -324,7 +324,7 @@ func TestCheckIfChangedConfigsAffectActiveProfiles(t *testing.T) {
 		},
 		{
 			name:            "config modified and associated with active profile",
-			activeProfiles:  []string{"active-profile"},
+			activeProfiles:  []string{"ptpconfig_active-profile"},
 			oldConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "active-profile")},
 			newConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1-modified", "active-profile")},
 			expectedRestart: true,
@@ -332,7 +332,7 @@ func TestCheckIfChangedConfigsAffectActiveProfiles(t *testing.T) {
 		},
 		{
 			name:            "config unchanged - no restart",
-			activeProfiles:  []string{"active-profile"},
+			activeProfiles:  []string{"ptpconfig_active-profile"},
 			oldConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "active-profile")},
 			newConfigs:      []ptpv2alpha1.HardwareConfig{createTestHardwareConfig("config1", "profile1", "active-profile")},
 			expectedRestart: false,
@@ -340,7 +340,7 @@ func TestCheckIfChangedConfigsAffectActiveProfiles(t *testing.T) {
 		},
 		{
 			name:           "multiple configs, only changed one affects active profile",
-			activeProfiles: []string{"active-profile"},
+			activeProfiles: []string{"ptpconfig_active-profile"},
 			oldConfigs: []ptpv2alpha1.HardwareConfig{
 				createTestHardwareConfig("config1", "profile1", "other-profile"),
 				createTestHardwareConfig("config2", "profile2", "active-profile"),
@@ -391,7 +391,7 @@ func TestReconcileWhenNothingChanged(t *testing.T) {
 func TestReconcileWhenHardwareConfigChanged(t *testing.T) {
 	mockHandler := &MockHardwareConfigHandler{}
 	mockTrigger := &MockHardwareConfigRestartTrigger{
-		CurrentProfiles: []string{"active-profile"},
+		CurrentProfiles: []string{"ptpconfig_active-profile"},
 	}
 
 	reconciler := &HardwareConfigReconciler{
@@ -420,7 +420,7 @@ func TestReconcileWhenHardwareConfigChanged(t *testing.T) {
 func TestReconcileWhenHardwareConfigChangedButNotAssociated(t *testing.T) {
 	mockHandler := &MockHardwareConfigHandler{}
 	mockTrigger := &MockHardwareConfigRestartTrigger{
-		CurrentProfiles: []string{"active-profile"},
+		CurrentProfiles: []string{"ptpconfig_active-profile"},
 	}
 
 	reconciler := &HardwareConfigReconciler{
@@ -481,7 +481,7 @@ func TestReconcileEmptyToSomething(t *testing.T) {
 func TestReconcileMultipleConfigsInSequence(t *testing.T) {
 	mockHandler := &MockHardwareConfigHandler{}
 	mockTrigger := &MockHardwareConfigRestartTrigger{
-		CurrentProfiles: []string{"active-profile"},
+		CurrentProfiles: []string{"ptpconfig_active-profile"},
 	}
 
 	reconciler := &HardwareConfigReconciler{

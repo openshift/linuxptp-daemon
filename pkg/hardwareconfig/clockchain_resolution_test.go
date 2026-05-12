@@ -152,7 +152,7 @@ func TestClockChainResolution(t *testing.T) {
 			var ptpProfile *ptpv1.PtpProfile
 			for i := range ptpConfig.Spec.Profile {
 				if ptpConfig.Spec.Profile[i].Name != nil &&
-					*ptpConfig.Spec.Profile[i].Name == hwConfig.Spec.RelatedPtpProfileName {
+					ProfileNamesMatch(*ptpConfig.Spec.Profile[i].Name, hwConfig.Spec.RelatedPtpProfileName) {
 					ptpProfile = &ptpConfig.Spec.Profile[i]
 					break
 				}
@@ -319,7 +319,7 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 	var ptpProfile *ptpv1.PtpProfile
 	for i := range ptpConfig.Spec.Profile {
 		if ptpConfig.Spec.Profile[i].Name != nil &&
-			*ptpConfig.Spec.Profile[i].Name == hwConfig.Spec.RelatedPtpProfileName {
+			ProfileNamesMatch(*ptpConfig.Spec.Profile[i].Name, hwConfig.Spec.RelatedPtpProfileName) {
 			ptpProfile = &ptpConfig.Spec.Profile[i]
 			break
 		}
@@ -428,4 +428,47 @@ func findConditionByName(conditions []ptpv2alpha1.Condition, name string) *ptpv2
 		}
 	}
 	return nil
+}
+
+func TestProfileNamesMatch(t *testing.T) {
+	tests := []struct {
+		stored    string
+		requested string
+		want      bool
+	}{
+		// Unqualified stored name without prefix does not match (no exact-match branch).
+		{"01-tbc-tr", "01-tbc-tr", false},
+		// PtpConfig resource name carried as prefix (Kubernetes CR names have no underscores,
+		// so the first "_" is always the separator).
+		{"t-bc_01-tbc-tr", "01-tbc-tr", true},
+		{"my-ptpconfig_01-tbc-tr", "01-tbc-tr", true},
+		// Wrong profile name.
+		{"t-bc_01-tbc-tr", "00-tbc-tt", false},
+		// Stored has no prefix and names differ.
+		{"other-profile", "01-tbc-tr", false},
+		// Prefix shares characters with profile but has no "_" separator.
+		{"x01-tbc-tr", "01-tbc-tr", false},
+
+		// Profile name itself contains underscores — only the first "_" is the separator,
+		// so "foo_bar" is the full profile name, not a false sub-match of "bar".
+		{"prefix_foo_bar", "foo_bar", true},
+		{"prefix_foo_bar", "bar", false},
+
+		// False-positive regression: old HasSuffix would match "a_b_c" against "c".
+		{"a_b_c", "c", false},
+
+		// Empty / whitespace requested is always rejected.
+		{"", "", false},
+		{"t-bc_", "", false},
+		{"t-bc_profile", "  ", false},
+		{"", "something", false},
+
+		// Stored is empty, requested is non-empty.
+		{"", "profile", false},
+	}
+
+	for _, tc := range tests {
+		got := ProfileNamesMatch(tc.stored, tc.requested)
+		assert.Equal(t, tc.want, got, "ProfileNamesMatch(%q, %q)", tc.stored, tc.requested)
+	}
 }
