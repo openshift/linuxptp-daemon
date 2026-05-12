@@ -327,7 +327,7 @@ func (e *EventHandler) announceLocalData(cfgName string) {
 	}
 	glog.Infof("EGP %++v", egp)
 	go func() {
-		if err := pmc.RunPMCExpSetExternalGMPropertiesNP(controlledPortsConfig, egp); err != nil {
+		if err := pmc.SetExternalGMPropertiesNP(controlledPortsConfig, egp); err != nil {
 			glog.Errorf("Failed to set external GM properties: %v", err)
 		}
 	}()
@@ -373,12 +373,12 @@ func (e *EventHandler) announceLocalData(cfgName string) {
 	default:
 	}
 	go func() {
-		if err := pmc.RunPMCExpSetGMSettings(controlledPortsConfig, gs); err != nil {
+		if err := pmc.SetGMSettings(controlledPortsConfig, gs); err != nil {
 			glog.Errorf("Failed to set GM settings: %v", err)
 		}
 	}()
 	go func() {
-		if err := pmc.RunPMCExpSetGMSettings(cfgName, gs); err != nil {
+		if err := pmc.SetGMSettings(cfgName, gs); err != nil {
 			glog.Errorf("Failed to set GM settings: %v", err)
 		}
 	}()
@@ -413,7 +413,7 @@ func (e *EventHandler) downstreamAnnounceIWF(ctx context.Context, cfgName string
 	controlledPortsConfig := e.LeadingClockData.controlledPortsConfig
 	e.Unlock()
 
-	upsteamData, fetchErr := pmc.RunPMCExpGetParentTimeAndCurrentDataSets(cfgName)
+	upsteamData, fetchErr := pmc.GetParentTimeAndCurrentDS(cfgName)
 	if fetchErr != nil {
 		glog.Error("Failed to fetch upstream data, downstream data can not be updated.")
 		return
@@ -452,10 +452,10 @@ func (e *EventHandler) downstreamAnnounceIWF(ctx context.Context, cfgName string
 	}
 	glog.Infof("%++v", es)
 	e.announceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName)
-	if err := pmc.RunPMCExpSetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
+	if err := pmc.SetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
 		glog.Error(err)
 	}
-	if err := pmc.RunPMCExpSetGMSettings(controlledPortsConfig, gs); err != nil {
+	if err := pmc.SetGMSettings(controlledPortsConfig, gs); err != nil {
 		glog.Error(err)
 	}
 	glog.Infof("%++v", es)

@@ -26,14 +26,13 @@ const (
 // NewPMCProcess creates a new PMC process instance for monitoring PTP events.
 func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string) *PMCProcess {
 	return &PMCProcess{
-		configFileName:       fmt.Sprintf("ptp4l.%d.config", runID),
-		messageTag:           fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
-		monitorParentData:    true,
-		parentDSCh:           make(chan protocol.ParentDataSet, 10),
-		eventHandler:         eventHandler,
-		clockType:            clockType,
-		getMonitorFn:         pmcPkg.GetPMCMontior,
-		runPMCExpGetParentDS: pmcPkg.RunPMCExpGetParentDS,
+		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
+		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
+		monitorParentData: true,
+		parentDSCh:        make(chan protocol.ParentDataSet, 10),
+		eventHandler:      eventHandler,
+		clockType:         clockType,
+		getMonitorFn:      pmcPkg.GetPMCMontior,
 	}
 }
 
@@ -54,8 +53,7 @@ type PMCProcess struct {
 	messageTag        string
 	eventHandler      *event.EventHandler
 
-	getMonitorFn         func(string) (*expect.GExpect, <-chan error, error)
-	runPMCExpGetParentDS func(string, bool) (protocol.ParentDataSet, error)
+	getMonitorFn func(string) (*expect.GExpect, <-chan error, error)
 }
 
 // getConn returns the current socket connection under lock.
@@ -190,7 +188,7 @@ func (pmc *PMCProcess) Poll() {
 	default:
 	}
 
-	parentDS, err := pmc.runPMCExpGetParentDS(pmc.configFileName, false)
+	parentDS, err := pmcPkg.GetParentDS(pmc.configFileName)
 	if err != nil {
 		glog.Error("pmc poll failure ", err)
 		return

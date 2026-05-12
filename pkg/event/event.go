@@ -79,19 +79,6 @@ var (
 	//  make sure only one clock class update is tried if it fails next  try will pass
 	// this will also stop flooding
 	clockClassRequestCh = make(chan ClockClassRequest, 1)
-
-	PMCGMGetter = func(cfgName string) (protocol.GrandmasterSettings, error) {
-		cfgName = strings.Replace(cfgName, TS2PHCProcessName, PTP4lProcessName, 1)
-		return pmc.RunPMCExpGetGMSettings(cfgName)
-	}
-	PMCGMSetter = func(cfgName string, g protocol.GrandmasterSettings) error {
-		cfgName = strings.Replace(cfgName, TS2PHCProcessName, PTP4lProcessName, 1)
-		err := pmc.RunPMCExpSetGMSettings(cfgName, g)
-		if err != nil {
-			return fmt.Errorf("failed to update GRANDMASTER_SETTINGS_NP: %s", err)
-		}
-		return nil
-	}
 )
 
 const (
@@ -1277,8 +1264,19 @@ func (e *EventHandler) addEvent(event EventChannel) *DataDetails {
 
 // UpdateClockClass ... update clock class
 func (e *EventHandler) UpdateClockClass(clk ClockClassRequest) {
+	getter := func(cfgName string) (protocol.GrandmasterSettings, error) {
+		cfgName = strings.Replace(cfgName, TS2PHCProcessName, PTP4lProcessName, 1)
+		return pmc.GetGMSettings(cfgName)
+	}
+	setter := func(cfgName string, g protocol.GrandmasterSettings) error {
+		cfgName = strings.Replace(cfgName, TS2PHCProcessName, PTP4lProcessName, 1)
+		if err := pmc.SetGMSettings(cfgName, g); err != nil {
+			return fmt.Errorf("failed to update GRANDMASTER_SETTINGS_NP: %s", err)
+		}
+		return nil
+	}
 	classErr, clockClass, clockAccuracy := e.updateClockClass(clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy,
-		PMCGMGetter, PMCGMSetter)
+		getter, setter)
 	glog.Infof("received %s,%v,%s,%v", clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy)
 	if classErr != nil {
 		glog.Errorf("error updating clock class %s", classErr)
