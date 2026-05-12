@@ -5,7 +5,7 @@ metadata:
   namespace: openshift-ptp
 spec:
   profile:
-  - name: 00-tbc-tt
+  - name: t-bc_00-tbc-tt
     ptp4lConf: |
       [eno4]
       masterOnly 1
@@ -131,7 +131,7 @@ spec:
     ptpSettings:
       controllingProfile: 01-tbc-tr
       logReduce: "false"
-  - name: 01-tbc-tr
+  - name: t-bc_01-tbc-tr
     phc2sysOpts: -r -n 24 -N 8 -R 16 -u 0 -m -s eno2
     ptp4lConf: |
       # The interface name is hardware-specific
