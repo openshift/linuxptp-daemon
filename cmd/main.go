@@ -86,8 +86,11 @@ func (cp *cliParams) debugPrint() {
 }
 
 func main() {
-
-	fmt.Printf("Git commit: %s\n", GitCommit)
+	commit := os.Getenv("SOURCE_GIT_COMMIT")
+	if commit == "" {
+		commit = GitCommit
+	}
+	fmt.Printf("Git commit: %s\n", commit)
 	cp := &cliParams{}
 	cp.flagInit()
 
