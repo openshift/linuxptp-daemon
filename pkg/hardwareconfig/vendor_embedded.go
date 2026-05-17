@@ -25,6 +25,12 @@ var dellXR8720tBehaviorProfilesYAML []byte
 //go:embed hardware-vendor/dell/XR8720t/delays.yaml
 var dellXR8720tDelaysYAML []byte
 
+//go:embed hardware-vendor/hpe/EL140-Gen12/behavior-profiles.yaml
+var hpeEL140Gen12BehaviorProfilesYAML []byte
+
+//go:embed hardware-vendor/hpe/EL140-Gen12/delays.yaml
+var hpeEL140Gen12DelaysYAML []byte
+
 // embeddedDefaults maps hwDefPath -> raw YAML contents.
 // Example key: "intel/e810"
 var embeddedDefaults = map[string][]byte{
@@ -35,13 +41,15 @@ var embeddedDefaults = map[string][]byte{
 // embeddedBehaviorProfiles maps hwDefPath -> raw YAML contents for behavior profiles.
 // Example key: "intel/e825"
 var embeddedBehaviorProfiles = map[string][]byte{
-	"intel/e825":   intelE825BehaviorProfilesYAML,
-	"dell/XR8720t": dellXR8720tBehaviorProfilesYAML,
+	"intel/e825":      intelE825BehaviorProfilesYAML,
+	"dell/XR8720t":    dellXR8720tBehaviorProfilesYAML,
+	"hpe/EL140-Gen12": hpeEL140Gen12BehaviorProfilesYAML,
 }
 
 // embeddedDelays maps hwDefPath -> raw YAML contents for delay compensation models.
 // Example key: "intel/e825"
 var embeddedDelays = map[string][]byte{
-	"intel/e825":   intelE825DelaysYAML,
-	"dell/XR8720t": dellXR8720tDelaysYAML,
+	"intel/e825":      intelE825DelaysYAML,
+	"dell/XR8720t":    dellXR8720tDelaysYAML,
+	"hpe/EL140-Gen12": hpeEL140Gen12DelaysYAML,
 }
