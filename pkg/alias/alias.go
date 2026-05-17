@@ -32,6 +32,13 @@ func GetAllAliases() map[string]string {
 	return storeInstance.getAllAliases()
 }
 
+// GetPhcGroup returns the PHC device path for the given interface, or empty
+// string if the interface was not registered. Two interfaces with the same
+// non-empty return value share the same PHC hardware.
+func GetPhcGroup(ifname string) string {
+	return storeInstance.getPhcGroup(ifname)
+}
+
 // Debug ...
 func Debug(logF func(string, ...any)) {
 	for ifName, alias := range storeInstance.aliases {
