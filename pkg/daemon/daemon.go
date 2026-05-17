@@ -669,6 +669,12 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// references).
 	dn.processManager.process = nil
 
+	// Purge the alias store so stale interface→PHC mappings from a previous
+	// config application do not persist. All interfaces will be re-registered
+	// by RenderPtp4lConf (and getInterfacesFromHardwareConfig) below before
+	// any event processing restarts.
+	alias.ClearAliases()
+
 	// All configs will be rebuild, and sockets recreated, so they can all be deleted
 	_ = dn.cleanupTempFiles()
 

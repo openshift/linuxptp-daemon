@@ -42,7 +42,7 @@ func (m *store) calculateAliases() {
 
 	errs := make([]error, 0)
 
-	// storeInstance.aliases = make(map[string]string)
+	m.aliases = make(map[string]string)
 
 	seenAliases := make(map[string][]string)
 	for phcID, group := range m.interfacesByPhc {
