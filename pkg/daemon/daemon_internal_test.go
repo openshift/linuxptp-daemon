@@ -90,7 +90,7 @@ func parseClockIDHex(s string) uint64 {
 	return v
 }
 
-func createMockDpllPinsGetterFromFile(path string) (hardwareconfig.DpllPinsGetter, error) {
+func createMockDpllPinsGetterFromFile(path string) (hardwareconfig.DpllPinsGetter, error) { //nolint:unparam
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
