@@ -29,4 +29,4 @@ coverage-gate:
 	./hack/coverage-gate.sh $(BASE_REF)
 
 lint:
-	golangci-lint run
+	./hack/linter.sh
