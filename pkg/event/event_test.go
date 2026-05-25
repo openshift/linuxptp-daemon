@@ -9,13 +9,15 @@ import (
 	"testing"
 	"time"
 
-	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 	"github.com/stretchr/testify/assert"
+
+	fbprotocol "github.com/facebook/time/ptp/protocol"
 )
 
 func TestMain(m *testing.M) {
@@ -28,11 +30,9 @@ var (
 	staleSocketTimeout = 100 * time.Millisecond
 )
 
-func monkeyPatch() {
-
-	event.PMCGMGetter = func(cfgName string) (protocol.GrandmasterSettings, error) {
-		cfgName = strings.Replace(cfgName, event.TS2PHCProcessName, event.PTP4lProcessName, 1)
-		return protocol.GrandmasterSettings{
+func newTestPMCMock() *pmc.MockClient {
+	return &pmc.MockClient{
+		GMSettingsResult: protocol.GrandmasterSettings{
 			ClockQuality: fbprotocol.ClockQuality{
 				ClockClass:              0,
 				ClockAccuracy:           0,
@@ -48,11 +48,7 @@ func monkeyPatch() {
 				PtpTimescale:          false,
 				TimeSource:            0,
 			},
-		}, nil
-	}
-	event.PMCGMSetter = func(cfgName string, g protocol.GrandmasterSettings) error {
-		cfgName = strings.Replace(cfgName, event.TS2PHCProcessName, event.PTP4lProcessName, 1)
-		return nil
+		},
 	}
 }
 
@@ -71,7 +67,9 @@ type PTPEvents struct {
 }
 
 func TestEventHandler_ProcessEvents(t *testing.T) {
-	monkeyPatch()
+	pmcMock := newTestPMCMock()
+	pmc.SetMock(pmcMock)
+	defer pmc.ResetMock()
 	tests := []PTPEvents{
 		{
 			processName:      event.DPLL,

@@ -327,7 +327,7 @@ func (e *EventHandler) announceLocalData(cfgName string) {
 	}
 	glog.Infof("EGP %++v", egp)
 	go func() {
-		if err := pmc.RunPMCExpSetExternalGMPropertiesNP(controlledPortsConfig, egp); err != nil {
+		if err := pmc.SetExternalGMPropertiesNP(controlledPortsConfig, egp); err != nil {
 			glog.Errorf("Failed to set external GM properties: %v", err)
 		}
 	}()
@@ -373,12 +373,12 @@ func (e *EventHandler) announceLocalData(cfgName string) {
 	default:
 	}
 	go func() {
-		if err := pmc.RunPMCExpSetGMSettings(controlledPortsConfig, gs); err != nil {
+		if err := pmc.SetGMSettings(controlledPortsConfig, gs); err != nil {
 			glog.Errorf("Failed to set GM settings: %v", err)
 		}
 	}()
 	go func() {
-		if err := pmc.RunPMCExpSetGMSettings(cfgName, gs); err != nil {
+		if err := pmc.SetGMSettings(cfgName, gs); err != nil {
 			glog.Errorf("Failed to set GM settings: %v", err)
 		}
 	}()
@@ -413,7 +413,7 @@ func (e *EventHandler) downstreamAnnounceIWF(ctx context.Context, cfgName string
 	controlledPortsConfig := e.LeadingClockData.controlledPortsConfig
 	e.Unlock()
 
-	upsteamData, fetchErr := pmc.RunPMCExpGetParentTimeAndCurrentDataSets(cfgName)
+	upsteamData, fetchErr := pmc.GetParentTimeAndCurrentDS(cfgName)
 	if fetchErr != nil {
 		glog.Error("Failed to fetch upstream data, downstream data can not be updated.")
 		return
@@ -452,10 +452,10 @@ func (e *EventHandler) downstreamAnnounceIWF(ctx context.Context, cfgName string
 	}
 	glog.Infof("%++v", es)
 	e.announceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName)
-	if err := pmc.RunPMCExpSetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
+	if err := pmc.SetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
 		glog.Error(err)
 	}
-	if err := pmc.RunPMCExpSetGMSettings(controlledPortsConfig, gs); err != nil {
+	if err := pmc.SetGMSettings(controlledPortsConfig, gs); err != nil {
 		glog.Error(err)
 	}
 	glog.Infof("%++v", es)
@@ -639,15 +639,24 @@ func (e *EventHandler) getLeadingInterfaceBC() string {
 func (e *EventHandler) convergeConfig(event EventChannel) EventChannel {
 	if event.ProcessName == PTP4lProcessName {
 		iface := event.IFace
+		ifacePhc := alias.GetPhcGroup(iface)
+		glog.Infof("convergeConfig: ptp4l iface=%s phcGroup=%q original cfgName=%s", iface, ifacePhc, event.CfgName)
 		for cfg, dd := range e.data {
 			for _, item := range dd {
 				if item.ProcessName != DPLL {
 					continue
 				}
 				for _, dp := range item.Details {
-					if alias.GetAlias(dp.IFace) == alias.GetAlias(iface) {
+					dpPhc := alias.GetPhcGroup(dp.IFace)
+					aliasMatch := alias.GetAlias(dp.IFace) == alias.GetAlias(iface)
+					samePhc := dpPhc != "" && dpPhc == ifacePhc
+					glog.Infof("convergeConfig: checking DPLL iface=%s phcGroup=%q alias=%q vs ptp4l alias=%q aliasMatch=%v samePhc=%v",
+						dp.IFace, dpPhc, alias.GetAlias(dp.IFace), alias.GetAlias(iface), aliasMatch, samePhc)
+					if aliasMatch || samePhc {
 						// We want to process ptp4l having a separate config with ts2phc and dpll events having ts2phc config
 						// so in the rare occurrence of ptp4l state change we modify the event.CfgName
+						glog.Infof("convergeConfig: remapping ptp4l event cfgName %s -> %s (iface %s matched DPLL iface %s)",
+							event.CfgName, cfg, iface, dp.IFace)
 						event.CfgName = cfg
 					}
 				}

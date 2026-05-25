@@ -13,6 +13,7 @@ import (
 type store struct {
 	sync.RWMutex
 	interfacesByPhc map[string][]string
+	phcByIface      map[string]string
 	aliases         map[string]string
 }
 
@@ -20,6 +21,13 @@ func (m *store) addInterface(phc string, ifName string) {
 	m.Lock()
 	defer m.Unlock()
 	m.interfacesByPhc[phc] = append(m.interfacesByPhc[phc], ifName)
+	m.phcByIface[ifName] = phc
+}
+
+func (m *store) getPhcGroup(ifName string) string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.phcByIface[ifName]
 }
 
 // calculateAliases calculates and sets the aliases.
@@ -34,7 +42,7 @@ func (m *store) calculateAliases() {
 
 	errs := make([]error, 0)
 
-	// storeInstance.aliases = make(map[string]string)
+	m.aliases = make(map[string]string)
 
 	seenAliases := make(map[string][]string)
 	for phcID, group := range m.interfacesByPhc {
@@ -113,6 +121,7 @@ func (m *store) clear() {
 	defer m.Unlock()
 	m.aliases = make(map[string]string)
 	m.interfacesByPhc = make(map[string][]string)
+	m.phcByIface = make(map[string]string)
 }
 
 func (m *store) getAllAliases() map[string]string {
@@ -125,4 +134,8 @@ func (m *store) getAllAliases() map[string]string {
 	return result
 }
 
-var storeInstance = store{aliases: make(map[string]string), interfacesByPhc: make(map[string][]string)}
+var storeInstance = store{
+	aliases:         make(map[string]string),
+	interfacesByPhc: make(map[string][]string),
+	phcByIface:      make(map[string]string),
+}
