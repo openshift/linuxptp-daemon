@@ -111,7 +111,12 @@ var ptpTmpFiles = []string{
 
 var vTbcHasHardwareConfig = false
 
-const socketDialTimeout = 5 * time.Second
+const (
+	socketDialTimeout = 5 * time.Second
+	// liveStartCommand is sent on each ptp4l process connection after the live
+	// gate opens. It tells CEP that all subsequent data is live (post-replay).
+	liveStartCommand = "CMD LIVE_START"
+)
 
 func dialSocket() (net.Conn, error) {
 	c, err := net.DialTimeout("unix", eventSocket, socketDialTimeout)
@@ -126,9 +131,12 @@ func dialSocket() (net.Conn, error) {
 // over a short-lived dedicated connection to the event socket. The sidecar will exec itself
 // for a clean restart, then re-read all configuration from disk (ConfigMap + ptp4l config files).
 //
-// This must be called after applyNodePTPProfiles() has written all config files and started
-// all PTP processes, so that the sidecar restarts into a consistent state.
-func sendSidecarRestart() error {
+// Before sending CMD RESTART, the live gate is reset so that ptp4l process connections
+// block until the next /emit-logs (replay) completes. This guarantees CEP sees replay
+// state before any live data.
+func (dn *Daemon) sendSidecarRestart() error {
+	dn.resetLiveGate()
+
 	c, err := net.Dial("unix", eventSocket)
 	if err != nil {
 		return err
@@ -150,6 +158,7 @@ type ProcessManager struct {
 	process         []*ptpProcess
 	eventChannel    chan event.EventChannel
 	ptpEventHandler *event.EventHandler
+	daemon          *Daemon
 }
 
 // NewProcessManager is used by unit tests
@@ -378,6 +387,67 @@ type Daemon struct {
 	saFileWatcher  *fsnotify.Watcher
 	ptpClient      *ptpclient.Clientset
 	unknownPlugins []string
+
+	// liveGate blocks ptp4l process connections from writing to the event
+	// socket until the replay (/emit-logs) completes. This ensures CEP
+	// processes replay state before any live data arrives.
+	liveGateMu   sync.Mutex
+	liveGate     chan struct{}
+	liveGateOnce *sync.Once
+}
+
+// resetLiveGate creates a new blocking gate. All ptp4l process connections
+// will block on this gate until openLiveGate is called (by the /emit-logs handler).
+func (dn *Daemon) resetLiveGate() {
+	dn.liveGateMu.Lock()
+	dn.liveGate = make(chan struct{})
+	dn.liveGateOnce = &sync.Once{}
+	dn.liveGateMu.Unlock()
+	glog.Info("liveGate: reset (blocked)")
+}
+
+// openLiveGate unblocks all ptp4l process connections waiting on the gate.
+// Safe to call multiple times (uses sync.Once).
+func (dn *Daemon) openLiveGate() {
+	dn.liveGateMu.Lock()
+	once := dn.liveGateOnce
+	gate := dn.liveGate
+	dn.liveGateMu.Unlock()
+	if once != nil && gate != nil {
+		once.Do(func() {
+			close(gate)
+			glog.Info("liveGate: opened (replay complete, live data may flow)")
+		})
+	}
+}
+
+// liveGateTimeout is the safety timeout for waitForLiveGate. If the gate
+// is not opened within this duration, live data proceeds without the replay
+// guarantee. Exposed as a var so tests can shorten it.
+var liveGateTimeout = 60 * time.Second
+
+// waitForLiveGate blocks until the gate opens, exitCh fires, or a safety
+// timeout expires. Returns true if gate opened, false if exit/timeout.
+func (dn *Daemon) waitForLiveGate(exitCh chan bool) bool {
+	dn.liveGateMu.Lock()
+	gate := dn.liveGate
+	dn.liveGateMu.Unlock()
+	if gate == nil {
+		glog.V(4).Info("waitForLiveGate: gate is nil, returning immediately")
+		return true
+	}
+	glog.V(4).Info("waitForLiveGate: blocking until gate opens")
+	select {
+	case <-gate:
+		glog.V(4).Info("waitForLiveGate: gate opened, proceeding")
+		return true
+	case <-exitCh:
+		glog.V(4).Info("waitForLiveGate: exitCh fired, aborting")
+		return false
+	case <-time.After(liveGateTimeout):
+		glog.Warning("liveGate: timeout after 60s, proceeding without replay guarantee")
+		return true
+	}
 }
 
 // UpdateHardwareConfig implements controller.HardwareConfigUpdateHandler.
@@ -511,7 +581,7 @@ func New(
 		}
 	}
 
-	return &Daemon{
+	dn := &Daemon{
 		nodeName:              nodeName,
 		namespace:             namespace,
 		stdoutToSocket:        stdoutToSocket,
@@ -529,6 +599,8 @@ func New(
 		stopCh:                stopCh,
 		saFileWatcher:         saFileWatch,
 	}
+	pm.daemon = dn
+	return dn
 }
 
 // Run in a for loop to listen for any LinuxPTPConfUpdate changes
@@ -634,6 +706,7 @@ func printWhenNotEmpty(output string) {
 // SetProcessManager in tests
 func (dn *Daemon) SetProcessManager(p *ProcessManager) {
 	dn.processManager = p
+	p.daemon = dn
 	dn.readyTracker.processManager = p
 }
 
@@ -790,7 +863,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
 	*dn.refreshNodePtpDevice = true
 	dn.readyTracker.setConfig(true)
-	return sendSidecarRestart()
+	return dn.sendSidecarRestart()
 }
 
 func reconcileRelatedProfiles(profiles []ptpv1.PtpProfile) map[string]int {
@@ -1351,9 +1424,11 @@ func processStatus(c net.Conn, processName, messageTag string, status int64) {
 	// ptp4l[5196819.100]: [ptp4l.0.config] PTP_PROCESS_STOPPED:0/1
 
 	if c == nil {
+		glog.V(4).Infof("processStatus: process=%s config=%s status=%d via=prometheus", processName, cfgName, status)
 		UpdateProcessStatusMetrics(processName, cfgName, status)
 		return
 	}
+	glog.V(4).Infof("processStatus: process=%s config=%s status=%d via=socket", processName, cfgName, status)
 	logProcessStatus(processName, cfgName, status, c)
 }
 
@@ -1597,51 +1672,107 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 				doneCh <- struct{}{}
 			}()
 		} else {
-			go func() {
-			connect:
-				select {
-				case <-p.exitCh:
-					doneCh <- struct{}{}
-				default:
-					p.c, err = dialSocket()
-					if err != nil {
-						goto connect
-					}
-				}
-				scanner := bufio.NewScanner(cmdReader)
-				processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
-				for _, d := range p.depProcess {
-					if d != nil {
-						d.ProcessStatus(p.c, PtpProcessUp)
-					}
-				}
+			// lineCh bridges the scanner goroutine (which must start immediately
+			// to drain ptp4l's stdout pipe) with the socket-writer goroutine
+			// (which waits for the live gate before forwarding to CEP).
+			lineCh := make(chan string, 256)
 
+			// Scanner goroutine: reads ptp4l stdout without delay so the pipe
+			// never backs up, processes metrics and prints to pod logs.
+			go func() {
+				scanner := bufio.NewScanner(cmdReader)
 				for scanner.Scan() {
 					output := scanner.Text()
 					if p.name == chronydProcessName {
 						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
 					}
 					output = pm.ProcessLog(p.name, output)
-					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface
 					output = p.replaceClockID(output)
 					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 
-					// for ts2phc, we need to extract metrics to identify GM state
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
 						if profileClockType == TBC {
 							p.tBCTransitionCheck(output, pm)
 						}
 					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-						p.announceHAFailOver(p.c, output) // do not use go routine since order of execution is important here
+						p.announceHAFailOver(nil, output)
+					}
+					select {
+					case lineCh <- output:
+					default:
+						glog.Warning("liveGate: lineCh full, dropping line for socket forwarding")
+					}
+				}
+				close(lineCh)
+			}()
+
+			// Socket-writer goroutine: connects to the event socket, waits for
+			// the live gate (replay) to complete, then forwards lines to CEP.
+			go func() {
+			connect:
+				glog.V(4).Infof("socket-writer[%s]: attempting dial to event socket", p.name)
+				select {
+				case <-p.exitCh:
+					glog.V(4).Infof("socket-writer[%s]: exitCh during dial, returning", p.name)
+					doneCh <- struct{}{}
+					return
+				default:
+					p.c, err = dialSocket()
+					if err != nil {
+						glog.V(4).Infof("socket-writer[%s]: dial failed: %v, retrying", p.name, err)
+						goto connect
+					}
+				}
+				glog.V(4).Infof("socket-writer[%s]: dial succeeded, waiting for liveGate", p.name)
+				if !p.dn.waitForLiveGate(p.exitCh) {
+					glog.V(4).Infof("socket-writer[%s]: liveGate returned false, returning", p.name)
+					doneCh <- struct{}{}
+					return
+				}
+				glog.V(4).Infof("socket-writer[%s]: liveGate passed, sending LIVE_START", p.name)
+				if _, err2 := fmt.Fprintf(p.c, "%s\n", liveStartCommand); err2 != nil {
+					glog.Errorf("failed to write LIVE_START marker: %v", err2)
+					goto connect
+				}
+				glog.V(4).Infof("socket-writer[%s]: LIVE_START sent, draining stale buffer", p.name)
+				drained := 0
+			drainLoop:
+				for {
+					select {
+					case _, ok := <-lineCh:
+						if !ok {
+							glog.V(4).Infof("socket-writer[%s]: lineCh closed during drain", p.name)
+							doneCh <- struct{}{}
+							return
+						}
+						drained++
+					default:
+						break drainLoop
+					}
+				}
+				glog.V(4).Infof("socket-writer[%s]: drained %d stale lines, sending processStatus UP", p.name, drained)
+
+				processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
+				for _, d := range p.depProcess {
+					if d != nil {
+						d.ProcessStatus(p.c, PtpProcessUp)
+					}
+				}
+				glog.V(4).Infof("socket-writer[%s]: starting line forwarding loop", p.name)
+
+				for output := range lineCh {
+					if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
+						p.announceHAFailOver(p.c, output)
 					}
 					line := removeMessageSuffix(output) + "\n"
 					_, err2 := p.c.Write([]byte(line))
 					if err2 != nil {
-						glog.Errorf("Write %s error %s:", output, err2)
+						glog.V(4).Infof("socket-writer[%s]: write error: %v, reconnecting. line=%s", p.name, err2, output)
 						goto connect
 					}
 				}
+				glog.V(4).Infof("socket-writer[%s]: lineCh closed, forwarding done", p.name)
 				doneCh <- struct{}{}
 			}()
 		}
@@ -1662,8 +1793,10 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 				glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
 			}
 			if stdoutToSocket && p.c != nil {
+				glog.V(4).Infof("cmdRun[%s]: process ended, sending DOWN via socket", p.name)
 				processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
 			} else {
+				glog.V(4).Infof("cmdRun[%s]: process ended, sending DOWN via prometheus", p.name)
 				processStatus(nil, p.name, p.messageTag, PtpProcessDown)
 			}
 			p.updateGMStatusOnProcessDown(p.name)
@@ -1683,6 +1816,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			cmd = newCmd
 		}
 		if stdoutToSocket && p.c != nil {
+			glog.V(4).Infof("cmdRun[%s]: closing old socket connection before restart", p.name)
 			if err2 := p.c.Close(); err2 != nil {
 				glog.Errorf("closing connection returned error %s", err2)
 			}
