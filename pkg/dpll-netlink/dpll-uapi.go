@@ -30,6 +30,29 @@ const DpllPhaseOffsetDivider = 1000
 // temperature value.
 const DpllTemperatureDivider = 1000
 
+// DpllPinMeasuredFrequencyDivider allows userspace to calculate a value of
+// measured input frequency as a fractional value with three digit decimal
+// precision (millihertz).
+// Value of (DPLL_A_PIN_MEASURED_FREQUENCY / DpllPinMeasuredFrequencyDivider)
+// is an integer part of a measured frequency value.
+// Value of (DPLL_A_PIN_MEASURED_FREQUENCY % DpllPinMeasuredFrequencyDivider)
+// is a fractional part of a measured frequency value.
+const DpllPinMeasuredFrequencyDivider = 1000
+
+// Defines possible operational states of a pin with respect to its parent DPLL device.
+// Unlike pin state (administrative intent), operstate reflects actual hardware status.
+const (
+	// PinOperstateActive indicates the pin is qualified and actively used by the DPLL.
+	PinOperstateActive = 1
+	// PinOperstateStandby indicates the pin is qualified but not actively used by the DPLL.
+	PinOperstateStandby = 2
+	// PinOperstateNoSignal indicates the pin does not have a valid signal.
+	PinOperstateNoSignal = 3
+	// PinOperstateQualFailed indicates the pin signal failed qualification
+	// (e.g. frequency or phase monitor).
+	PinOperstateQualFailed = 4
+)
+
 // DpllAttributes provides the dpll_a attribute-set
 const (
 	DpllAttributes = iota
@@ -46,6 +69,9 @@ const (
 	DpllClockQualityLevel
 	DpllPhaseOffsetMonitor
 	DpllPhaseOffsetAverageFactor
+	// DpllFrequencyMonitor is the netlink attribute ID for the frequency-monitor
+	// feature flag on a DPLL device (uses the feature-state enum).
+	DpllFrequencyMonitor
 )
 
 // DpllPinTypes defines the attribute-set for dpll_a_pin
@@ -75,13 +101,34 @@ const (
 	DpllPinPhaseAdjustMax
 	DpllPinPhaseAdjust
 	DpllPinPhaseOffset
+	// DpllPinFractionalFrequencyOffset is the netlink attribute ID for the FFO
+	// (Fractional Frequency Offset) of a pin in PPM (parts per million).
+	// At the top-level pin scope this represents the RX vs TX symbol rate offset
+	// on the media associated with the pin.
+	// Inside the pin-parent-device nest it represents the frequency offset between
+	// the pin and its parent DPLL device.
+	// This is a lower-precision version of DpllPinFractionalFrequencyOffsetPPT.
 	DpllPinFractionalFrequencyOffset
 	DpllPinEsyncFrequency
 	DpllPinEsyncFrequencySupported
 	DpllPinEsyncPulse
 	DpllPinReferenceSync
 	DpllPinPhaseAdjustGran
+	// DpllPinFractionalFrequencyOffsetPPT is the netlink attribute ID for the FFO
+	// (Fractional Frequency Offset) of a pin in PPT (parts per trillion, 10^-12).
+	// At the top-level pin scope this represents the RX vs TX symbol rate offset
+	// on the media associated with the pin.
+	// Inside the pin-parent-device nest it represents the frequency offset between
+	// the pin and its parent DPLL device.
+	// This is a higher-precision version of DpllPinFractionalFrequencyOffset.
 	DpllPinFractionalFrequencyOffsetPPT
+	// DpllPinMeasuredFrequency is the netlink attribute ID for the measured
+	// frequency of an input pin in millihertz. Divide by
+	// DpllPinMeasuredFrequencyDivider to obtain Hz with mHz fractional precision.
+	DpllPinMeasuredFrequency
+	// DpllPinOperstate is the netlink attribute ID for the operational state of a
+	// pin with respect to its parent DPLL device (pin-operstate enum).
+	DpllPinOperstate
 )
 
 // DpllCmds defines DPLL subsystem commands encoding
@@ -145,13 +192,53 @@ const (
 	PhaseOffsetMonitorDisabled
 )
 
+// unknownStr is the fallback human-readable value returned by Get* helpers
+// when an enum value has no known mapping.
+const unknownStr = "unknown"
+
+// Feature-state string constants shared by phase-offset-monitor and frequency-monitor.
+const (
+	featureStateEnabled  = "enabled"
+	featureStateDisabled = "disabled"
+)
+
+// Pin operstate string constants.
+const (
+	pinOperstateActive     = "active"
+	pinOperstateStandby    = "standby"
+	pinOperstateNoSignal   = "no-signal"
+	pinOperstateQualFailed = "qual-failed"
+)
+
 // GetPhaseOffsetMonitor returns phase offset monitor as a string
 func GetPhaseOffsetMonitor(po uint32) string {
 	phaseOffsetMonitorMap := map[uint32]string{
-		PhaseOffsetMonitorEnabled:  "enabled",
-		PhaseOffsetMonitorDisabled: "disabled",
+		PhaseOffsetMonitorEnabled:  featureStateEnabled,
+		PhaseOffsetMonitorDisabled: featureStateDisabled,
 	}
 	return phaseOffsetMonitorMap[po]
+}
+
+// GetFrequencyMonitor returns the frequency-monitor feature state as a human-readable string.
+// Uses the feature-state enum (same as phase-offset-monitor): "enabled", "disabled", or "unknown".
+func GetFrequencyMonitor(s uint32) string {
+	return GetPhaseOffsetMonitor(s)
+}
+
+// GetPinOperstate returns the pin operational state as a human-readable string.
+// Returns "active", "standby", "no-signal", "qual-failed", or "" for unknown values.
+func GetPinOperstate(s uint32) string {
+	operstateMap := map[uint32]string{
+		PinOperstateActive:     pinOperstateActive,
+		PinOperstateStandby:    pinOperstateStandby,
+		PinOperstateNoSignal:   pinOperstateNoSignal,
+		PinOperstateQualFailed: pinOperstateQualFailed,
+	}
+	r, found := operstateMap[s]
+	if found {
+		return r
+	}
+	return unknownStr
 }
 
 // ClockQualityLevel defines possible clock quality levels when on holdover
@@ -193,7 +280,7 @@ func GetClockQualityLevel(cq uint32) string {
 	if found {
 		return cqStr
 	}
-	return ""
+	return unknownStr
 }
 
 // DpllTypeAttribute defines DPLL types
@@ -217,7 +304,7 @@ func GetLockStatus(ls uint32) string {
 	if found {
 		return status
 	}
-	return ""
+	return unknownStr
 }
 
 // GetDpllType returns DPLL type as a string
@@ -230,7 +317,7 @@ func GetDpllType(tp uint32) string {
 	if found {
 		return typ
 	}
-	return ""
+	return unknownStr
 }
 
 // GetMode returns DPLL mode as a string
@@ -243,7 +330,7 @@ func GetMode(md uint32) string {
 	if found {
 		return mode
 	}
-	return ""
+	return unknownStr
 }
 
 // DpllStatusHR represents human-readable DPLL status
@@ -261,6 +348,7 @@ type DpllStatusHR struct {
 	ClockQualityLevel        string    `json:"clockQualityLevel,omitempty"`
 	PhaseOffsetMonitor       string    `json:"phaseOffsetMonitor,omitempty"`
 	PhaseOffsetAverageFactor uint32    `json:"phaseOffsetAverageFactor,omitempty"`
+	FrequencyMonitor         string    `json:"frequencyMonitor,omitempty"`
 }
 
 // GetDpllStatusHR returns human-readable DPLL status
@@ -283,6 +371,7 @@ func GetDpllStatusHR(reply *DoDeviceGetReply, timestamp time.Time) ([]byte, erro
 		ClockQualityLevel:        GetClockQualityLevels(reply.ClockQualityLevel),
 		PhaseOffsetMonitor:       GetPhaseOffsetMonitor(reply.PhaseOffsetMonitor),
 		PhaseOffsetAverageFactor: reply.PhaseOffsetAverageFactor,
+		FrequencyMonitor:         GetFrequencyMonitor(reply.FrequencyMonitor),
 	}
 	return json.Marshal(hr)
 }
@@ -312,15 +401,20 @@ type PinInfoHR struct {
 	ReferenceSync                []ReferenceSync     `json:"referenceSync,omitempty"`
 	PhaseAdjustGran              uint32              `json:"phaseAdjustGran,omitempty"`
 	FractionalFrequencyOffsetPPT int                 `json:"fractionalFrequencyOffsetPPT,omitempty"`
+	MeasuredFrequencyHz          float64             `json:"measuredFrequencyHz,omitempty"`
+	Operstate                    string              `json:"operstate,omitempty"`
 }
 
 // PinParentDeviceHR contains nested netlink attributes.
 type PinParentDeviceHR struct {
-	ParentID      uint32  `json:"parentID"`
-	Direction     string  `json:"direction"`
-	Prio          *uint32 `json:"prio,omitempty"`
-	State         string  `json:"state"`
-	PhaseOffsetPs float64 `json:"phaseOffsetPs"`
+	ParentID                     uint32  `json:"parentID"`
+	Direction                    string  `json:"direction"`
+	Prio                         *uint32 `json:"prio,omitempty"`
+	State                        string  `json:"state"`
+	PhaseOffsetPs                float64 `json:"phaseOffsetPs"`
+	Operstate                    string  `json:"operstate,omitempty"`
+	FractionalFrequencyOffset    int     `json:"fractionalFrequencyOffset,omitempty"`
+	FractionalFrequencyOffsetPPT int     `json:"fractionalFrequencyOffsetPPT,omitempty"`
 }
 
 // PinParentPin contains nested netlink attributes.
@@ -347,7 +441,7 @@ func GetPinState(s uint32) string {
 	if found {
 		return r
 	}
-	return ""
+	return unknownStr
 }
 
 // Defines possible pin types
@@ -372,7 +466,7 @@ func GetPinType(tp uint32) string {
 	if found {
 		return typ
 	}
-	return ""
+	return unknownStr
 }
 
 // Defines pin directions
@@ -391,7 +485,7 @@ func GetPinDirection(d uint32) string {
 	if found {
 		return dir
 	}
-	return ""
+	return unknownStr
 }
 
 // String returns a concise debug representation aligned with PinParentDeviceHR
@@ -543,14 +637,19 @@ func GetPinInfoHR(reply *PinInfo, timestamp time.Time) ([]byte, error) {
 		ReferenceSync:                make([]ReferenceSync, 0),
 		PhaseAdjustGran:              reply.PhaseAdjustGran,
 		FractionalFrequencyOffsetPPT: reply.FractionalFrequencyOffsetPPT,
+		MeasuredFrequencyHz:          float64(reply.MeasuredFrequency) / DpllPinMeasuredFrequencyDivider,
+		Operstate:                    GetPinOperstate(reply.Operstate),
 	}
 	for i := 0; i < len(reply.ParentDevice); i++ {
 		hr.ParentDevice = append(hr.ParentDevice, PinParentDeviceHR{
-			ParentID:      reply.ParentDevice[i].ParentID,
-			Direction:     GetPinDirection(reply.ParentDevice[i].Direction),
-			Prio:          reply.ParentDevice[i].Prio,
-			State:         GetPinState(reply.ParentDevice[i].State),
-			PhaseOffsetPs: float64(reply.ParentDevice[i].PhaseOffset) / DpllPhaseOffsetDivider,
+			ParentID:                     reply.ParentDevice[i].ParentID,
+			Direction:                    GetPinDirection(reply.ParentDevice[i].Direction),
+			Prio:                         reply.ParentDevice[i].Prio,
+			State:                        GetPinState(reply.ParentDevice[i].State),
+			PhaseOffsetPs:                float64(reply.ParentDevice[i].PhaseOffset) / DpllPhaseOffsetDivider,
+			Operstate:                    GetPinOperstate(reply.ParentDevice[i].Operstate),
+			FractionalFrequencyOffset:    reply.ParentDevice[i].FractionalFrequencyOffset,
+			FractionalFrequencyOffsetPPT: reply.ParentDevice[i].FractionalFrequencyOffsetPPT,
 		})
 	}
 	for i := 0; i < len(reply.ParentPin); i++ {
