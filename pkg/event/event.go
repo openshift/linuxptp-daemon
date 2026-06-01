@@ -1293,6 +1293,8 @@ func getMetricName(valueType ValueType) string {
 
 // SetPortRole saves the port role change event
 func (e *EventHandler) SetPortRole(cfgName, portNane string, event *parser.PTPEvent) {
+	e.Lock()
+	defer e.Unlock()
 	if e.portRole == nil {
 		e.portRole = make(map[string]map[string]*parser.PTPEvent)
 	}

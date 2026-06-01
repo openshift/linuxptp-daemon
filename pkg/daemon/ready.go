@@ -81,21 +81,38 @@ type metricHandler struct {
 }
 
 func (h metricHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	glog.V(4).Info("/emit-logs: handler invoked")
 	if isReady, _ := h.tracker.Ready(); !isReady {
+		glog.V(4).Info("/emit-logs: not ready, opening gate early and returning 204")
 		w.WriteHeader(http.StatusNoContent)
+		// Open the gate even when not ready: processes need to start writing
+		// to collect metrics and become ready. No stale state exists yet, so
+		// there is nothing harmful to replay.
+		if dn := h.tracker.processManager.daemon; dn != nil {
+			dn.openLiveGate()
+		}
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 
-	go func() {
-		eventHandler := h.tracker.processManager.ptpEventHandler
-		eventHandler.EmitClockSyncLogs()
-		eventHandler.EmitPortRoleLogs()
+	// Emit replay data synchronously so the live gate is only opened after
+	// all replay state has been written to the socket.
+	glog.V(4).Info("/emit-logs: starting synchronous replay (EmitClockSyncLogs + EmitPortRoleLogs)")
+	eventHandler := h.tracker.processManager.ptpEventHandler
+	eventHandler.EmitClockSyncLogs()
+	eventHandler.EmitPortRoleLogs()
+	glog.V(4).Info("/emit-logs: synchronous replay complete, opening liveGate")
 
-		processManager := h.tracker.processManager
-		go processManager.EmitProcessStatusLogs()
-		go processManager.EmitClockClassLogs()
-	}()
+	// Open the live gate: ptp4l processes may now write to the socket.
+	if dn := h.tracker.processManager.daemon; dn != nil {
+		dn.openLiveGate()
+	}
+
+	// Non-critical emits can remain async.
+	glog.V(4).Info("/emit-logs: firing async emits (ProcessStatusLogs, ClockClassLogs)")
+	processManager := h.tracker.processManager
+	go processManager.EmitProcessStatusLogs()
+	go processManager.EmitClockClassLogs()
 }
 
 // StartReadyServer ...
