@@ -19,6 +19,7 @@ type E810Opts struct {
 	EnableDefaultConfig bool          `json:"enableDefaultConfig"`
 	UblxCmds            UblxCmdList   `json:"ublxCmds"`
 	PhaseInputs         []PhaseInputs `json:"interconnections"`
+	Gnss                GnssOptions   `json:"gnss"`
 }
 
 // GetPhaseInputs implements PhaseInputsProvider
@@ -47,6 +48,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	checkPinIndex(nodeProfile)
 
 	var e810Opts E810Opts
+	e810Opts.Gnss.LeapSources = defaultLeapSourceOptions()
 	var err error
 
 	e810Opts.EnableDefaultConfig = false
@@ -163,6 +165,8 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					glog.Errorf("e810 failed to set Pin configuration for %s: %s", device, err)
 				}
 			}
+
+			updateLeapManagerSources(e810Opts.Gnss.LeapSources)
 		}
 	}
 	return nil
