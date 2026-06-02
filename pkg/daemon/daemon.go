@@ -131,12 +131,9 @@ func dialSocket() (net.Conn, error) {
 // over a short-lived dedicated connection to the event socket. The sidecar will exec itself
 // for a clean restart, then re-read all configuration from disk (ConfigMap + ptp4l config files).
 //
-// Before sending CMD RESTART, the live gate is reset so that ptp4l process connections
-// block until the next /emit-logs (replay) completes. This guarantees CEP sees replay
-// state before any live data.
+// The live gate is reset earlier in applyNodePTPProfiles (before processes start)
+// so that socket-writers block until the next /emit-logs (replay) completes.
 func (dn *Daemon) sendSidecarRestart() error {
-	dn.resetLiveGate()
-
 	c, err := net.Dial("unix", eventSocket)
 	if err != nil {
 		return err
@@ -426,27 +423,21 @@ func (dn *Daemon) openLiveGate() {
 // guarantee. Exposed as a var so tests can shorten it.
 var liveGateTimeout = 60 * time.Second
 
-// waitForLiveGate blocks until the gate opens, exitCh fires, or a safety
-// timeout expires. Returns true if gate opened, false if exit/timeout.
-func (dn *Daemon) waitForLiveGate(exitCh chan bool) bool {
+// waitForLiveGate blocks until the gate opens or a safety timeout expires.
+func (dn *Daemon) waitForLiveGate() {
 	dn.liveGateMu.Lock()
 	gate := dn.liveGate
 	dn.liveGateMu.Unlock()
 	if gate == nil {
 		glog.V(4).Info("waitForLiveGate: gate is nil, returning immediately")
-		return true
+		return
 	}
 	glog.V(4).Info("waitForLiveGate: blocking until gate opens")
 	select {
 	case <-gate:
 		glog.V(4).Info("waitForLiveGate: gate opened, proceeding")
-		return true
-	case <-exitCh:
-		glog.V(4).Info("waitForLiveGate: exitCh fired, aborting")
-		return false
 	case <-time.After(liveGateTimeout):
 		glog.Warning("liveGate: timeout after 60s, proceeding without replay guarantee")
-		return true
 	}
 }
 
@@ -826,6 +817,9 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	}
 
 	glog.Infof("All profiles applied, starting %d processes", len(dn.processManager.process))
+	// Reset the live gate BEFORE starting processes so that socket-writers
+	// block until /emit-logs completes replay after the sidecar restart.
+	dn.resetLiveGate()
 	// Start all the process
 	for _, p := range dn.processManager.process {
 		if p != nil {
@@ -1725,11 +1719,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 					}
 				}
 				glog.V(4).Infof("socket-writer[%s]: dial succeeded, waiting for liveGate", p.name)
-				if !p.dn.waitForLiveGate(p.exitCh) {
-					glog.V(4).Infof("socket-writer[%s]: liveGate returned false, returning", p.name)
-					doneCh <- struct{}{}
-					return
-				}
+				p.dn.waitForLiveGate()
 				glog.V(4).Infof("socket-writer[%s]: liveGate passed, sending LIVE_START", p.name)
 				if _, err2 := fmt.Fprintf(p.c, "%s\n", liveStartCommand); err2 != nil {
 					glog.Errorf("failed to write LIVE_START marker: %v", err2)

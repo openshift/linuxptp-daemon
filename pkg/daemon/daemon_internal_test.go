@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1799,27 +1800,27 @@ func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 
 func TestLiveGate_NilGateReturnsImmediately(t *testing.T) {
 	dn := &Daemon{} // liveGate is nil by default
-	exitCh := make(chan bool)
-	assert.True(t, dn.waitForLiveGate(exitCh), "nil gate should return true immediately")
+	assert.Nil(t, dn.liveGate, "nil gate means disabled")
+	dn.waitForLiveGate()
 }
 
 func TestLiveGate_OpenBeforeWait(t *testing.T) {
 	dn := &Daemon{}
 	dn.resetLiveGate()
+	assert.NotNil(t, dn.liveGate, "gate should exist after reset")
 	dn.openLiveGate()
 
-	exitCh := make(chan bool)
-	assert.True(t, dn.waitForLiveGate(exitCh), "already-open gate should return true immediately")
+	dn.waitForLiveGate()
 }
 
 func TestLiveGate_WaitThenOpen(t *testing.T) {
 	dn := &Daemon{}
 	dn.resetLiveGate()
 
-	exitCh := make(chan bool)
 	result := make(chan bool, 1)
 	go func() {
-		result <- dn.waitForLiveGate(exitCh)
+		dn.waitForLiveGate()
+		result <- true
 	}()
 
 	// Gate is closed — result should not be ready yet
@@ -1839,34 +1840,27 @@ func TestLiveGate_WaitThenOpen(t *testing.T) {
 	}
 }
 
-func TestLiveGate_ExitChUnblocks(t *testing.T) {
+func TestLiveGate_ClosedGateBlocksUntilTimeout(t *testing.T) {
+	origTimeout := liveGateTimeout
+	liveGateTimeout = 80 * time.Millisecond
+	defer func() { liveGateTimeout = origTimeout }()
+
 	dn := &Daemon{}
 	dn.resetLiveGate()
 
-	exitCh := make(chan bool, 1)
-	result := make(chan bool, 1)
-	go func() {
-		result <- dn.waitForLiveGate(exitCh)
-	}()
-
-	exitCh <- true
-
-	select {
-	case r := <-result:
-		assert.False(t, r, "exitCh should cause waitForLiveGate to return false")
-	case <-time.After(2 * time.Second):
-		t.Fatal("waitForLiveGate did not return after exitCh signal")
-	}
+	start := time.Now()
+	dn.waitForLiveGate()
+	assert.GreaterOrEqual(t, time.Since(start).Milliseconds(), int64(70),
+		"should block for approximately the timeout duration")
 }
 
 func TestLiveGate_DoubleOpenIsSafe(t *testing.T) {
 	dn := &Daemon{}
 	dn.resetLiveGate()
 	dn.openLiveGate()
-	dn.openLiveGate() // second call must not panic
+	assert.NotPanics(t, func() { dn.openLiveGate() }, "double open must not panic")
 
-	exitCh := make(chan bool)
-	assert.True(t, dn.waitForLiveGate(exitCh))
+	dn.waitForLiveGate()
 }
 
 func TestLiveGate_ResetReblocks(t *testing.T) {
@@ -1874,15 +1868,15 @@ func TestLiveGate_ResetReblocks(t *testing.T) {
 	dn.resetLiveGate()
 	dn.openLiveGate()
 
-	exitCh := make(chan bool)
-	assert.True(t, dn.waitForLiveGate(exitCh), "gate should be open")
+	dn.waitForLiveGate()
 
 	// Reset creates a new blocked gate
 	dn.resetLiveGate()
 
 	result := make(chan bool, 1)
 	go func() {
-		result <- dn.waitForLiveGate(exitCh)
+		dn.waitForLiveGate()
+		result <- true
 	}()
 
 	select {
@@ -1909,7 +1903,8 @@ func TestLiveGate_MultipleWaitersAllUnblock(t *testing.T) {
 	results := make(chan bool, n)
 	for i := 0; i < n; i++ {
 		go func() {
-			results <- dn.waitForLiveGate(make(chan bool))
+			dn.waitForLiveGate()
+			results <- true
 		}()
 	}
 
@@ -2010,7 +2005,6 @@ func TestLiveGateIntegration_FullDaemonCEPFlow(t *testing.T) {
 	// Daemon side: simulated ptp4l stdout → scanner goroutine → lineCh
 	ptp4lR, ptp4lW := io.Pipe()
 	lineCh := make(chan string, 256)
-	exitCh := make(chan bool)
 	scannerDone := make(chan struct{})
 	writerDone := make(chan struct{})
 
@@ -2045,9 +2039,7 @@ func TestLiveGateIntegration_FullDaemonCEPFlow(t *testing.T) {
 		}
 		defer c.Close()
 
-		if !dn.waitForLiveGate(exitCh) {
-			return
-		}
+		dn.waitForLiveGate()
 		if _, wErr := fmt.Fprintf(c, "%s\n", liveStartCommand); wErr != nil {
 			t.Errorf("LIVE_START write error: %v", wErr)
 			return
@@ -2259,9 +2251,7 @@ func TestLiveGateIntegration_ReplayThenLive(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		if !dn.waitForLiveGate(make(chan bool)) {
-			return
-		}
+		dn.waitForLiveGate()
 		fmt.Fprintf(c, "%s\n", liveStartCommand)
 		for _, line := range liveLines {
 			fmt.Fprintf(c, "%s\n", line)
@@ -2344,24 +2334,22 @@ func TestLiveGateIntegration_OrderingPreventsCorruption(t *testing.T) {
 	dn := &Daemon{}
 	dn.resetLiveGate()
 
-	// Stale replay: port role that would poison metrics if it arrived after live data
 	replayLines := []string{
 		"ptp4l[0.000]: [ptp4l.0.config] port 1 (ens1f0): SLAVE to FAULTY on FAULT_DETECTED (FT_UNSPECIFIED)",
 	}
-	// Live data: offset showing LOCKED state
 	liveLines := []string{
 		"ptp4l[10.000]: [ptp4l.0.config] master offset 3 s2 freq -998 path delay 99",
 		"ptp4l[11.000]: [ptp4l.0.config] master offset 2 s2 freq -997 path delay 100",
 	}
 
-	// Collect messages in order from ALL accepted connections.
 	type taggedMsg struct {
 		connIdx int
 		msg     string
 	}
 	allMsgs := make(chan taggedMsg, 100)
+	replayReadDone := make(chan struct{})
+	var accepted int32
 	var cepWg sync.WaitGroup
-	connIdx := 0
 
 	go func() {
 		for {
@@ -2369,28 +2357,47 @@ func TestLiveGateIntegration_OrderingPreventsCorruption(t *testing.T) {
 			if acceptErr != nil {
 				return
 			}
-			idx := connIdx
-			connIdx++
+			ci := int(atomic.AddInt32(&accepted, 1) - 1)
 			cepWg.Add(1)
-			go func(c net.Conn, ci int) {
+			go func(c net.Conn, idx int) {
 				defer cepWg.Done()
 				defer c.Close()
 				s := bufio.NewScanner(c)
 				for s.Scan() {
-					allMsgs <- taggedMsg{connIdx: ci, msg: s.Text()}
+					allMsgs <- taggedMsg{connIdx: idx, msg: s.Text()}
 				}
-			}(fd, idx)
+				if idx == 1 {
+					close(replayReadDone)
+				}
+			}(fd, ci)
 		}
 	}()
 
-	// Simulate the /emit-logs handler behavior:
-	// 1. Write replay data through a separate connection (conn B)
-	// 2. Open the live gate
+	// Daemon socket-writer (conn-0): connects first, blocks on gate
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		c, dialErr := net.DialTimeout("unix", socketPath, 5*time.Second)
+		if dialErr != nil {
+			t.Errorf("socket-writer dial: %v", dialErr)
+			return
+		}
+		defer c.Close()
+		dn.waitForLiveGate()
+		fmt.Fprintf(c, "%s\n", liveStartCommand)
+		for _, line := range liveLines {
+			fmt.Fprintf(c, "%s\n", line)
+		}
+	}()
+
+	// /emit-logs handler (conn-1): writes replay data, waits for receipt, opens gate
 	emitDone := make(chan struct{})
 	go func() {
 		defer close(emitDone)
-		// Small delay to ensure socket-writer has connected and is blocked on gate
-		time.Sleep(20 * time.Millisecond)
+		// Wait until live writer's connection is accepted (conn-0)
+		for atomic.LoadInt32(&accepted) < 1 {
+			time.Sleep(time.Millisecond)
+		}
 
 		replayConn, dialErr := net.DialTimeout("unix", socketPath, 2*time.Second)
 		if dialErr != nil {
@@ -2403,27 +2410,10 @@ func TestLiveGateIntegration_OrderingPreventsCorruption(t *testing.T) {
 		}
 		replayConn.Close()
 
-		// Gate opens AFTER replay is fully written — this is the fix
+		// Wait for the replay reader goroutine to fully consume the data.
+		// In production, kernel socket buffering makes this near-instantaneous.
+		<-replayReadDone
 		dn.openLiveGate()
-	}()
-
-	// Daemon socket-writer (conn A): blocks on gate, then sends LIVE_START + live data
-	writerDone := make(chan struct{})
-	go func() {
-		defer close(writerDone)
-		c, dialErr := net.DialTimeout("unix", socketPath, 5*time.Second)
-		if dialErr != nil {
-			t.Errorf("socket-writer dial: %v", dialErr)
-			return
-		}
-		defer c.Close()
-		if !dn.waitForLiveGate(make(chan bool)) {
-			return
-		}
-		fmt.Fprintf(c, "%s\n", liveStartCommand)
-		for _, line := range liveLines {
-			fmt.Fprintf(c, "%s\n", line)
-		}
 	}()
 
 	select {
@@ -2433,17 +2423,18 @@ func TestLiveGateIntegration_OrderingPreventsCorruption(t *testing.T) {
 	}
 	<-emitDone
 
+	for atomic.LoadInt32(&accepted) < 2 {
+		time.Sleep(time.Millisecond)
+	}
 	listener.Close()
 	cepWg.Wait()
 	close(allMsgs)
 
-	// Collect all messages in receipt order
 	var ordered []taggedMsg
 	for m := range allMsgs {
 		ordered = append(ordered, m)
 	}
 
-	// Find positions of key messages
 	replayIdx := -1
 	liveStartIdx := -1
 	firstLiveDataIdx := -1
@@ -2465,7 +2456,6 @@ func TestLiveGateIntegration_OrderingPreventsCorruption(t *testing.T) {
 		t.Logf("  [%d] conn-%d: %s", i, m.connIdx, m.msg)
 	}
 
-	// The gate guarantees: replay completes BEFORE LIVE_START BEFORE live data
 	assert.Greater(t, replayIdx, -1, "replay line should be present")
 	assert.Greater(t, liveStartIdx, -1, "LIVE_START should be present")
 	assert.Greater(t, firstLiveDataIdx, -1, "live data should be present")
@@ -2735,10 +2725,10 @@ func TestLiveGate_TimeoutReturnsTrue(t *testing.T) {
 	dn.resetLiveGate()
 	// Gate is never opened — should timeout and return true.
 
-	exitCh := make(chan bool)
 	result := make(chan bool, 1)
 	go func() {
-		result <- dn.waitForLiveGate(exitCh)
+		dn.waitForLiveGate()
+		result <- true
 	}()
 
 	// Should NOT return within 50ms (gate is still closed, timeout hasn't fired)
