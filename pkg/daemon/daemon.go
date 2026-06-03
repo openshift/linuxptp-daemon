@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"cmp"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -1605,8 +1606,112 @@ func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.Plugin
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
-//
-//nolint:gocyclo // complexity is acceptable for this function
+// processOutput handles shared per-line processing for all process types:
+// chronyd prefix, plugin processing, clock ID replacement, log filtering,
+// metrics extraction, TBC transition check, and HA failover.
+func (p *ptpProcess) processOutput(output string, pm *plugin.PluginManager, profileClockType string) string {
+	if p.name == chronydProcessName {
+		output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
+	}
+	output = pm.ProcessLog(p.name, output)
+	output = p.replaceClockID(output)
+	printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
+	p.processPTPMetrics(output)
+	if p.name == ptp4lProcessName {
+		if profileClockType == TBC {
+			p.tBCTransitionCheck(output, pm)
+		}
+	} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
+		p.announceHAFailOver(nil, output)
+	}
+	return output
+}
+
+// runScanner reads process stdout without delay so the pipe never backs
+// up, processes each line, and pushes the result to lineCh for the
+// socket-writer. It closes lineCh when the scanner finishes.
+func (p *ptpProcess) runScanner(cmdReader io.Reader, lineCh chan<- string, pm *plugin.PluginManager, profileClockType string) {
+	scanner := bufio.NewScanner(cmdReader)
+	for scanner.Scan() {
+		output := p.processOutput(scanner.Text(), pm, profileClockType)
+		select {
+		case lineCh <- output:
+		default:
+			glog.Warning("liveGate: lineCh full, dropping line for socket forwarding")
+		}
+	}
+	close(lineCh)
+}
+
+// runSocketWriter connects to the event socket, waits for the live gate
+// (replay) to complete, drains stale lines, then forwards live lines to
+// CEP. On write failure it reconnects automatically.
+func (p *ptpProcess) runSocketWriter(lineCh <-chan string, doneCh chan<- struct{}) {
+	var err error
+connect:
+	glog.V(4).Infof("socket-writer[%s]: attempting dial to event socket", p.name)
+	select {
+	case <-p.exitCh:
+		glog.V(4).Infof("socket-writer[%s]: exitCh during dial, returning", p.name)
+		doneCh <- struct{}{}
+		return
+	default:
+		p.c, err = dialSocket()
+		if err != nil {
+			glog.V(4).Infof("socket-writer[%s]: dial failed: %v, retrying", p.name, err)
+			goto connect
+		}
+	}
+	glog.V(4).Infof("socket-writer[%s]: dial succeeded, waiting for liveGate", p.name)
+	p.dn.waitForLiveGate()
+	glog.V(4).Infof("socket-writer[%s]: liveGate passed, sending LIVE_START", p.name)
+	if _, err2 := fmt.Fprintf(p.c, "%s\n", liveStartCommand); err2 != nil {
+		glog.Errorf("failed to write LIVE_START marker: %v", err2)
+		goto connect
+	}
+	glog.V(4).Infof("socket-writer[%s]: LIVE_START sent, draining stale buffer", p.name)
+	{
+		drained := 0
+	drainLoop:
+		for {
+			select {
+			case _, ok := <-lineCh:
+				if !ok {
+					glog.V(4).Infof("socket-writer[%s]: lineCh closed during drain", p.name)
+					doneCh <- struct{}{}
+					return
+				}
+				drained++
+			default:
+				break drainLoop
+			}
+		}
+		glog.V(4).Infof("socket-writer[%s]: drained %d stale lines, sending processStatus UP", p.name, drained)
+	}
+
+	processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
+	for _, d := range p.depProcess {
+		if d != nil {
+			d.ProcessStatus(p.c, PtpProcessUp)
+		}
+	}
+	glog.V(4).Infof("socket-writer[%s]: starting line forwarding loop", p.name)
+
+	for output := range lineCh {
+		if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
+			p.announceHAFailOver(p.c, output)
+		}
+		line := removeMessageSuffix(output) + "\n"
+		_, err2 := p.c.Write([]byte(line))
+		if err2 != nil {
+			glog.V(4).Infof("socket-writer[%s]: write error: %v, reconnecting. line=%s", p.name, err2, output)
+			goto connect
+		}
+	}
+	glog.V(4).Infof("socket-writer[%s]: lineCh closed, forwarding done", p.name)
+	doneCh <- struct{}{}
+}
+
 func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 	cmd := p.cmd
 	stopped := p.getAndSetStopped(false)
@@ -1614,7 +1719,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 		glog.Infof("%s is already running", p.name)
 		return
 	}
-	doneCh := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
+	doneCh := make(chan struct{})
 	defer func() {
 		if stdoutToSocket && p.c != nil {
 			if err := p.c.Close(); err != nil {
@@ -1638,7 +1743,6 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			break
 		}
 
-		// don't discard process stderr output
 		cmd.Stderr = cmd.Stdout
 
 		if !stdoutToSocket {
@@ -1646,136 +1750,25 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			processStatus(nil, p.name, p.messageTag, PtpProcessUp)
 			go func() {
 				for scanner.Scan() {
-					output := scanner.Text()
-					if p.name == chronydProcessName {
-						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
-					}
-					output = pm.ProcessLog(p.name, output)
-					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface
-					output = p.replaceClockID(output)
-					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
-					p.processPTPMetrics(output)
-					if p.name == ptp4lProcessName {
-						if profileClockType == TBC {
-							p.tBCTransitionCheck(output, pm)
-						}
-					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-						p.announceHAFailOver(nil, output) // do not use go routine since order of execution is important here
-					}
+					p.processOutput(scanner.Text(), pm, profileClockType)
 				}
 				doneCh <- struct{}{}
 			}()
 		} else {
-			// lineCh bridges the scanner goroutine (which must start immediately
-			// to drain ptp4l's stdout pipe) with the socket-writer goroutine
-			// (which waits for the live gate before forwarding to CEP).
 			lineCh := make(chan string, 256)
-
-			// Scanner goroutine: reads ptp4l stdout without delay so the pipe
-			// never backs up, processes metrics and prints to pod logs.
-			go func() {
-				scanner := bufio.NewScanner(cmdReader)
-				for scanner.Scan() {
-					output := scanner.Text()
-					if p.name == chronydProcessName {
-						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
-					}
-					output = pm.ProcessLog(p.name, output)
-					output = p.replaceClockID(output)
-					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
-
-					p.processPTPMetrics(output)
-					if p.name == ptp4lProcessName {
-						if profileClockType == TBC {
-							p.tBCTransitionCheck(output, pm)
-						}
-					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-						p.announceHAFailOver(nil, output)
-					}
-					select {
-					case lineCh <- output:
-					default:
-						glog.Warning("liveGate: lineCh full, dropping line for socket forwarding")
-					}
-				}
-				close(lineCh)
-			}()
-
-			// Socket-writer goroutine: connects to the event socket, waits for
-			// the live gate (replay) to complete, then forwards lines to CEP.
-			go func() {
-			connect:
-				glog.V(4).Infof("socket-writer[%s]: attempting dial to event socket", p.name)
-				select {
-				case <-p.exitCh:
-					glog.V(4).Infof("socket-writer[%s]: exitCh during dial, returning", p.name)
-					doneCh <- struct{}{}
-					return
-				default:
-					p.c, err = dialSocket()
-					if err != nil {
-						glog.V(4).Infof("socket-writer[%s]: dial failed: %v, retrying", p.name, err)
-						goto connect
-					}
-				}
-				glog.V(4).Infof("socket-writer[%s]: dial succeeded, waiting for liveGate", p.name)
-				p.dn.waitForLiveGate()
-				glog.V(4).Infof("socket-writer[%s]: liveGate passed, sending LIVE_START", p.name)
-				if _, err2 := fmt.Fprintf(p.c, "%s\n", liveStartCommand); err2 != nil {
-					glog.Errorf("failed to write LIVE_START marker: %v", err2)
-					goto connect
-				}
-				glog.V(4).Infof("socket-writer[%s]: LIVE_START sent, draining stale buffer", p.name)
-				drained := 0
-			drainLoop:
-				for {
-					select {
-					case _, ok := <-lineCh:
-						if !ok {
-							glog.V(4).Infof("socket-writer[%s]: lineCh closed during drain", p.name)
-							doneCh <- struct{}{}
-							return
-						}
-						drained++
-					default:
-						break drainLoop
-					}
-				}
-				glog.V(4).Infof("socket-writer[%s]: drained %d stale lines, sending processStatus UP", p.name, drained)
-
-				processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
-				for _, d := range p.depProcess {
-					if d != nil {
-						d.ProcessStatus(p.c, PtpProcessUp)
-					}
-				}
-				glog.V(4).Infof("socket-writer[%s]: starting line forwarding loop", p.name)
-
-				for output := range lineCh {
-					if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-						p.announceHAFailOver(p.c, output)
-					}
-					line := removeMessageSuffix(output) + "\n"
-					_, err2 := p.c.Write([]byte(line))
-					if err2 != nil {
-						glog.V(4).Infof("socket-writer[%s]: write error: %v, reconnecting. line=%s", p.name, err2, output)
-						goto connect
-					}
-				}
-				glog.V(4).Infof("socket-writer[%s]: lineCh closed, forwarding done", p.name)
-				doneCh <- struct{}{}
-			}()
+			go p.runScanner(cmdReader, lineCh, pm, profileClockType)
+			go p.runSocketWriter(lineCh, doneCh)
 		}
-		// Don't restart after termination
+
 		if !p.Stopped() {
 			glog.Infof("starting %s...", p.name)
 			p.cmd = cmd
-			err = cmd.Start() // this is asynchronous call,
+			err = cmd.Start()
 			if err != nil {
 				glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
 			}
 
-			<-doneCh // goroutine is done
+			<-doneCh
 			err = cmd.Wait()
 
 			glog.Infof("done waiting for %s...", p.name)
@@ -1795,8 +1788,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 		if profileClockType == TBC && p.name == ptp4lProcessName {
 			pm.AfterRunPTPCommand(&p.nodeProfile, "reset-to-default")
 		}
-		time.Sleep(connectionRetryInterval) // Delay to prevent flooding restarts if startup fails
-		// Don't restart after termination
+		time.Sleep(connectionRetryInterval)
 		if p.Stopped() {
 			glog.Infof("Not recreating %s...", p.name)
 			break
