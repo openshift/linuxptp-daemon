@@ -1943,7 +1943,15 @@ func TestLiveGate_MultipleWaitersAllUnblock(t *testing.T) {
 
 func shortTestSocketPath(t *testing.T) string {
 	t.Helper()
-	return t.TempDir() + "/e.sock"
+	// Use os.MkdirTemp with a short prefix to stay within the 104-byte
+	// Unix socket path limit on macOS. t.TempDir() embeds the full test
+	// name, which can exceed this limit for long test names.
+	dir, err := os.MkdirTemp("", "s")
+	if err != nil {
+		t.Fatalf("shortTestSocketPath: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir + "/e.sock"
 }
 
 // TestLiveGateIntegration_FullDaemonCEPFlow simulates the complete ptp4l →
@@ -2663,7 +2671,7 @@ func TestEmitLogsHandler_Ready_EmitsReplayThenOpensGate(t *testing.T) {
 	dn.resetLiveGate()
 
 	// Provide a real socket so EmitPortRoleLogs can connect without retry delays.
-	socketPath := t.TempDir() + "/e.sock"
+	socketPath := shortTestSocketPath(t)
 	ln, err := net.Listen("unix", socketPath)
 	assert.NoError(t, err)
 	defer ln.Close()
@@ -2742,5 +2750,374 @@ func TestLiveGate_TimeoutReturnsTrue(t *testing.T) {
 		assert.True(t, r, "timeout should return true (proceed without guarantee)")
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("waitForLiveGate did not return after timeout")
+	}
+}
+
+// TestSocketWriter_Drain verifies that lines buffered in lineCh while
+// the gate was closed are drained (discarded) by the socket-writer and
+// NOT forwarded to the socket. Only lines produced after the drain
+// should appear on the CEP side.
+func TestSocketWriter_Drain(t *testing.T) {
+	socketPath := shortTestSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	dn := &Daemon{}
+	dn.resetLiveGate()
+
+	lineCh := make(chan string, 256)
+
+	staleLines := []string{
+		"ptp4l[0.001]: [ptp4l.0.config] master offset 999 s2 freq -5000 path delay 200",
+		"ptp4l[0.002]: [ptp4l.0.config] master offset 998 s2 freq -4999 path delay 201",
+		"ptp4l[0.003]: [ptp4l.0.config] master offset 997 s2 freq -4998 path delay 202",
+	}
+	liveLines := []string{
+		"ptp4l[10.000]: [ptp4l.0.config] master offset 3 s2 freq -998 path delay 99",
+		"ptp4l[11.000]: [ptp4l.0.config] master offset 2 s2 freq -997 path delay 100",
+	}
+
+	// Buffer stale lines BEFORE the gate opens.
+	for _, line := range staleLines {
+		lineCh <- line
+	}
+
+	// CEP side: accept one connection, read all messages.
+	cepMsgs := make(chan []string, 1)
+	go func() {
+		fd, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			cepMsgs <- nil
+			return
+		}
+		defer fd.Close()
+		var msgs []string
+		s := bufio.NewScanner(fd)
+		for s.Scan() {
+			msgs = append(msgs, s.Text())
+		}
+		cepMsgs <- msgs
+	}()
+
+	// Socket-writer goroutine: mirrors the real daemon code path.
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		c, dialErr := net.DialTimeout("unix", socketPath, 5*time.Second)
+		if dialErr != nil {
+			t.Errorf("socket-writer dial: %v", dialErr)
+			return
+		}
+		defer c.Close()
+
+		dn.waitForLiveGate()
+		fmt.Fprintf(c, "%s\n", liveStartCommand)
+
+		// Drain stale lines (same logic as daemon.go drainLoop)
+		drained := 0
+	drainLoop:
+		for {
+			select {
+			case _, ok := <-lineCh:
+				if !ok {
+					return
+				}
+				drained++
+			default:
+				break drainLoop
+			}
+		}
+		t.Logf("drained %d stale lines", drained)
+
+		// Forward live lines
+		for line := range lineCh {
+			fmt.Fprintf(c, "%s\n", line)
+		}
+	}()
+
+	// Open the gate (stale lines are already buffered).
+	dn.openLiveGate()
+
+	// Feed live lines after a short delay to ensure drain has completed.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		for _, line := range liveLines {
+			lineCh <- line
+		}
+		close(lineCh)
+	}()
+
+	select {
+	case <-writerDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout: socket-writer did not finish")
+	}
+
+	select {
+	case msgs := <-cepMsgs:
+		if !assert.NotNil(t, msgs, "CEP should have received messages") {
+			return
+		}
+		t.Logf("CEP received %d messages: %v", len(msgs), msgs)
+
+		// LIVE_START should be first
+		assert.Equal(t, liveStartCommand, msgs[0], "first message should be CMD LIVE_START")
+
+		// Stale lines must NOT appear
+		for _, stale := range staleLines {
+			for _, m := range msgs {
+				assert.NotEqual(t, stale, m, "stale line should have been drained, not forwarded")
+			}
+		}
+
+		// Live lines must appear
+		for _, live := range liveLines {
+			found := false
+			for _, m := range msgs {
+				if m == live {
+					found = true
+					break
+				}
+			}
+			assert.True(t, found, "live line missing from CEP: %s", live)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout: CEP did not finish reading")
+	}
+}
+
+// TestSocketWriter_Reconnect verifies that when a socket write fails
+// mid-stream, the socket-writer reconnects and delivers subsequent
+// lines on the new connection.
+func TestSocketWriter_Reconnect(t *testing.T) {
+	socketPath := shortTestSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	dn := &Daemon{}
+	dn.resetLiveGate()
+	dn.openLiveGate() // gate is already open for this test
+
+	lineCh := make(chan string, 256)
+	doneCh := make(chan struct{}, 1)
+
+	lines := []string{
+		"ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100",
+		"ptp4l[2.000]: [ptp4l.0.config] master offset 3 s2 freq -998 path delay 99",
+		"ptp4l[3.000]: [ptp4l.0.config] master offset 1 s2 freq -996 path delay 98",
+	}
+
+	// Track messages across all connections
+	type connMsgs struct {
+		idx  int
+		msgs []string
+	}
+	allResults := make(chan connMsgs, 10)
+	var connCount int32
+
+	// CEP accept loop: first connection will be closed after accepting
+	// to simulate a write failure; second connection reads normally.
+	go func() {
+		for {
+			fd, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			ci := int(atomic.AddInt32(&connCount, 1))
+			if ci == 1 {
+				// First connection: close immediately to trigger write failure
+				time.Sleep(10 * time.Millisecond)
+				fd.Close()
+				allResults <- connMsgs{idx: ci, msgs: nil}
+				continue
+			}
+			go func(c net.Conn, idx int) {
+				defer c.Close()
+				var msgs []string
+				s := bufio.NewScanner(c)
+				for s.Scan() {
+					msgs = append(msgs, s.Text())
+				}
+				allResults <- connMsgs{idx: idx, msgs: msgs}
+			}(fd, ci)
+		}
+	}()
+
+	// Socket-writer with reconnect logic (mirrors daemon.go)
+	go func() {
+	connect:
+		select {
+		case <-doneCh:
+			return
+		default:
+		}
+		c, dialErr := net.DialTimeout("unix", socketPath, 5*time.Second)
+		if dialErr != nil {
+			time.Sleep(10 * time.Millisecond)
+			goto connect
+		}
+		dn.waitForLiveGate()
+		if _, err2 := fmt.Fprintf(c, "%s\n", liveStartCommand); err2 != nil {
+			c.Close()
+			goto connect
+		}
+		for line := range lineCh {
+			_, err2 := fmt.Fprintf(c, "%s\n", line)
+			if err2 != nil {
+				c.Close()
+				goto connect
+			}
+		}
+		c.Close()
+		doneCh <- struct{}{}
+	}()
+
+	// Feed lines with a delay so the first write hits the closed connection
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		for _, line := range lines {
+			lineCh <- line
+			time.Sleep(10 * time.Millisecond)
+		}
+		close(lineCh)
+	}()
+
+	select {
+	case <-doneCh:
+		t.Log("socket-writer completed with reconnect")
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout: socket-writer did not finish")
+	}
+	listener.Close()
+
+	// Collect results. The second connection should have received at least some lines.
+	var secondConn *connMsgs
+	timeout := time.After(2 * time.Second)
+	for secondConn == nil {
+		select {
+		case r := <-allResults:
+			if r.idx == 2 {
+				secondConn = &r
+			}
+		case <-timeout:
+			t.Fatal("timeout: did not receive second connection results")
+		}
+	}
+
+	assert.NotNil(t, secondConn, "second connection should exist after reconnect")
+	assert.Greater(t, len(secondConn.msgs), 0, "second connection should have received messages")
+	t.Logf("second connection received %d messages: %v", len(secondConn.msgs), secondConn.msgs)
+
+	// At least the LIVE_START marker should be present on reconnect
+	hasLiveStart := false
+	for _, m := range secondConn.msgs {
+		if m == liveStartCommand {
+			hasLiveStart = true
+			break
+		}
+	}
+	assert.True(t, hasLiveStart, "reconnected connection should have LIVE_START")
+}
+
+// TestSocketWriter_SuffixStrip verifies that removeMessageSuffix strips
+// severity tags and template braces from lines before they are forwarded
+// through the socket.
+func TestSocketWriter_SuffixStrip(t *testing.T) {
+	socketPath := shortTestSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	dn := &Daemon{}
+	dn.resetLiveGate()
+	dn.openLiveGate()
+
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{
+			input:    "ptp4l[2464681.628]: [phc2sys.1.config:7] master offset -4 s2 freq -26835 path delay 525",
+			expected: "ptp4l[2464681.628]: [phc2sys.1.config] master offset -4 s2 freq -26835 path delay 525",
+		},
+		{
+			input:    "ptp4l[2464681.628]: [phc2sys.1.config:{level}] master offset -4 s2 freq -26835 path delay 525",
+			expected: "ptp4l[2464681.628]: [phc2sys.1.config] master offset -4 s2 freq -26835 path delay 525",
+		},
+		{
+			input:    "ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100",
+			expected: "ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100",
+		},
+	}
+
+	lineCh := make(chan string, 256)
+
+	// CEP side
+	cepMsgs := make(chan []string, 1)
+	go func() {
+		fd, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			cepMsgs <- nil
+			return
+		}
+		defer fd.Close()
+		var msgs []string
+		s := bufio.NewScanner(fd)
+		for s.Scan() {
+			msgs = append(msgs, s.Text())
+		}
+		cepMsgs <- msgs
+	}()
+
+	// Socket-writer that applies removeMessageSuffix (mirrors daemon.go line 1758)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		c, dialErr := net.DialTimeout("unix", socketPath, 5*time.Second)
+		if dialErr != nil {
+			t.Errorf("dial failed: %v", dialErr)
+			return
+		}
+		defer c.Close()
+
+		dn.waitForLiveGate()
+		fmt.Fprintf(c, "%s\n", liveStartCommand)
+		for output := range lineCh {
+			line := removeMessageSuffix(output) + "\n"
+			c.Write([]byte(line))
+		}
+	}()
+
+	// Feed test inputs
+	for _, tc := range tests {
+		lineCh <- tc.input
+	}
+	close(lineCh)
+
+	select {
+	case <-writerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout: socket-writer did not finish")
+	}
+
+	select {
+	case msgs := <-cepMsgs:
+		if !assert.NotNil(t, msgs, "CEP should have received messages") {
+			return
+		}
+		// First message is LIVE_START
+		assert.Equal(t, liveStartCommand, msgs[0])
+		// Remaining messages should be the suffix-stripped versions
+		for i, tc := range tests {
+			msgIdx := i + 1 // skip LIVE_START
+			if assert.Greater(t, len(msgs), msgIdx, "should have enough messages") {
+				assert.Equal(t, tc.expected, msgs[msgIdx],
+					"line %d: removeMessageSuffix should strip suffix before forwarding", i)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout: CEP did not finish reading")
 	}
 }
