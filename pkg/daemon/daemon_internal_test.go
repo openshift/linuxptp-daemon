@@ -31,6 +31,8 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+const testPtp4lOffsetLine = "ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100"
+
 // vendor defaults are embedded; no filesystem setup needed
 
 // NewDaemonForTests creates a Daemon instance for testing
@@ -2017,7 +2019,7 @@ func TestLiveGateIntegration_FullDaemonCEPFlow(t *testing.T) {
 	writerDone := make(chan struct{})
 
 	livePtp4lLines := []string{
-		"ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100",
+		testPtp4lOffsetLine,
 		"ptp4l[2.000]: [ptp4l.0.config] master offset 3 s2 freq -998 path delay 99",
 		"ptp4l[3.000]: [ptp4l.0.config] master offset -1 s2 freq -995 path delay 101",
 		"ptp4l[4.000]: [ptp4l.0.config] selected best master clock 001122.fffe.334455",
@@ -2181,7 +2183,7 @@ func TestLiveGateIntegration_ReplayThenLive(t *testing.T) {
 		"phc2sys[0.001]: [ptp4l.0.config] CLOCK_REALTIME phc offset 0 s2 freq -100 delay 500",
 	}
 	liveLines := []string{
-		"ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100",
+		testPtp4lOffsetLine,
 		"ptp4l[2.000]: [ptp4l.0.config] selected best master clock 001122.fffe.334455",
 	}
 
@@ -2906,7 +2908,7 @@ func TestSocketWriter_Reconnect(t *testing.T) {
 	doneCh := make(chan struct{}, 1)
 
 	lines := []string{
-		"ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100",
+		testPtp4lOffsetLine,
 		"ptp4l[2.000]: [ptp4l.0.config] master offset 3 s2 freq -998 path delay 99",
 		"ptp4l[3.000]: [ptp4l.0.config] master offset 1 s2 freq -996 path delay 98",
 	}
@@ -3049,8 +3051,8 @@ func TestSocketWriter_SuffixStrip(t *testing.T) {
 			expected: "ptp4l[2464681.628]: [phc2sys.1.config] master offset -4 s2 freq -26835 path delay 525",
 		},
 		{
-			input:    "ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100",
-			expected: "ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100",
+			input:    testPtp4lOffsetLine,
+			expected: testPtp4lOffsetLine,
 		},
 	}
 
