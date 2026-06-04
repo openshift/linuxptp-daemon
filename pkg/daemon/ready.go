@@ -89,7 +89,7 @@ func (h metricHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		// to collect metrics and become ready. No stale state exists yet, so
 		// there is nothing harmful to replay.
 		if dn := h.tracker.processManager.daemon; dn != nil {
-			dn.openLiveGate()
+			dn.liveGate.Open()
 		}
 		return
 	}
@@ -105,7 +105,7 @@ func (h metricHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 
 	// Open the live gate: ptp4l processes may now write to the socket.
 	if dn := h.tracker.processManager.daemon; dn != nil {
-		dn.openLiveGate()
+		dn.liveGate.Open()
 	}
 
 	// Non-critical emits can remain async.
