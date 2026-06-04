@@ -350,6 +350,56 @@ func (p *ptpProcess) setStopped(val bool) {
 	p.execMutex.Unlock()
 }
 
+type liveGate struct {
+	lock sync.RWMutex
+	c    chan struct{}
+	once func()
+}
+
+// Reset creates a new blocking gate. All ptp4l process connections
+// will block on this gate until openLiveGate is called (by the /emit-logs handler).
+func (l *liveGate) Reset() {
+	if !l.lock.TryLock() {
+		return
+	}
+	defer l.lock.Unlock()
+	l.c = make(chan struct{})
+	l.once = sync.OnceFunc(func() {
+		close(l.c)
+	})
+	glog.Info("liveGate: reset (blocked)")
+}
+
+// Open unblocks all ptp4l process connections waiting on the gate.
+// Safe to call multiple times (uses sync.Once).
+func (l *liveGate) Open() {
+	l.lock.RLock()
+	defer l.lock.RUnlock()
+	if l.once != nil {
+		l.once()
+	}
+}
+
+// liveGateTimeout is the safety timeout for waitForLiveGate. If the gate
+// is not opened within this duration, live data proceeds without the replay
+// guarantee. Exposed as a var so tests can shorten it.
+var liveGateTimeout = 60 * time.Second
+
+// Wait blocks until the gate opens or a safety timeout expires.
+func (l *liveGate) Wait(timeout time.Duration) {
+	l.lock.RLock()
+	defer l.lock.RUnlock()
+	if l.c == nil {
+		return
+	}
+	select {
+	case <-l.c:
+		glog.V(4).Info("waitForLiveGate: gate opened, proceeding")
+	case <-time.After(timeout):
+		glog.Warning("liveGate: timeout after 60s, proceeding without replay guarantee")
+	}
+}
+
 // Daemon is the main structure for linuxptp instance.
 // It contains all the necessary data to run linuxptp instance.
 type Daemon struct {
@@ -381,65 +431,13 @@ type Daemon struct {
 	pmcPollInterval int
 
 	// Allow vendors to include plugins
-	pluginManager  plugin.PluginManager
-	saFileWatcher  *fsnotify.Watcher
-	ptpClient      *ptpclient.Clientset
-	unknownPlugins []string
+	pluginManager plugin.PluginManager
+	saFileWatcher *fsnotify.Watcher
 
 	// liveGate blocks ptp4l process connections from writing to the event
 	// socket until the replay (/emit-logs) completes. This ensures CEP
 	// processes replay state before any live data arrives.
-	liveGateMu   sync.Mutex
-	liveGate     chan struct{}
-	liveGateOnce *sync.Once
-}
-
-// resetLiveGate creates a new blocking gate. All ptp4l process connections
-// will block on this gate until openLiveGate is called (by the /emit-logs handler).
-func (dn *Daemon) resetLiveGate() {
-	dn.liveGateMu.Lock()
-	dn.liveGate = make(chan struct{})
-	dn.liveGateOnce = &sync.Once{}
-	dn.liveGateMu.Unlock()
-	glog.Info("liveGate: reset (blocked)")
-}
-
-// openLiveGate unblocks all ptp4l process connections waiting on the gate.
-// Safe to call multiple times (uses sync.Once).
-func (dn *Daemon) openLiveGate() {
-	dn.liveGateMu.Lock()
-	once := dn.liveGateOnce
-	gate := dn.liveGate
-	dn.liveGateMu.Unlock()
-	if once != nil && gate != nil {
-		once.Do(func() {
-			close(gate)
-			glog.Info("liveGate: opened (replay complete, live data may flow)")
-		})
-	}
-}
-
-// liveGateTimeout is the safety timeout for waitForLiveGate. If the gate
-// is not opened within this duration, live data proceeds without the replay
-// guarantee. Exposed as a var so tests can shorten it.
-var liveGateTimeout = 60 * time.Second
-
-// waitForLiveGate blocks until the gate opens or a safety timeout expires.
-func (dn *Daemon) waitForLiveGate() {
-	dn.liveGateMu.Lock()
-	gate := dn.liveGate
-	dn.liveGateMu.Unlock()
-	if gate == nil {
-		glog.V(4).Info("waitForLiveGate: gate is nil, returning immediately")
-		return
-	}
-	glog.V(4).Info("waitForLiveGate: blocking until gate opens")
-	select {
-	case <-gate:
-		glog.V(4).Info("waitForLiveGate: gate opened, proceeding")
-	case <-time.After(liveGateTimeout):
-		glog.Warning("liveGate: timeout after 60s, proceeding without replay guarantee")
-	}
+	liveGate *liveGate
 }
 
 // UpdateHardwareConfig implements controller.HardwareConfigUpdateHandler.
@@ -577,6 +575,7 @@ func New(
 		readyTracker:          tracker,
 		stopCh:                stopCh,
 		saFileWatcher:         saFileWatch,
+		liveGate:              &liveGate{},
 	}
 	pm.daemon = dn
 	return dn
@@ -801,7 +800,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	glog.Infof("All profiles applied, starting %d processes", len(dn.processManager.process))
 	// Reset the live gate BEFORE starting processes so that socket-writers
 	// block until /emit-logs completes replay after the sidecar restart.
-	dn.resetLiveGate()
+	dn.liveGate.Reset()
 	// Start all the process
 	for _, p := range dn.processManager.process {
 		if p != nil {
@@ -1628,7 +1627,7 @@ connect:
 		}
 	}
 	glog.V(4).Infof("socket-writer[%s]: dial succeeded, waiting for liveGate", p.name)
-	p.dn.waitForLiveGate()
+	p.dn.liveGate.Wait(liveGateTimeout)
 	glog.V(4).Infof("socket-writer[%s]: liveGate passed, sending LIVE_START", p.name)
 	if _, err2 := fmt.Fprintf(p.c, "%s\n", liveStartCommand); err2 != nil {
 		glog.Errorf("failed to write LIVE_START marker: %v", err2)
