@@ -43,6 +43,7 @@ func NewDaemonForTests(tracker *ReadyTracker, processManager *ProcessManager) *D
 		readyTracker:          tracker,
 		processManager:        processManager,
 		hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(fakeClient, "default"),
+		liveGate:              &liveGate{},
 	}
 }
 
@@ -1801,27 +1802,33 @@ func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 // --- liveGate unit tests ---
 
 func TestLiveGate_NilGateReturnsImmediately(t *testing.T) {
-	dn := &Daemon{} // liveGate is nil by default
-	assert.Nil(t, dn.liveGate, "nil gate means disabled")
-	dn.waitForLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	assert.Nil(t, dn.liveGate.c, "nil gate means disabled")
+	dn.liveGate.Wait(liveGateTimeout)
 }
 
 func TestLiveGate_OpenBeforeWait(t *testing.T) {
-	dn := &Daemon{}
-	dn.resetLiveGate()
-	assert.NotNil(t, dn.liveGate, "gate should exist after reset")
-	dn.openLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
+	assert.NotNil(t, dn.liveGate.c, "gate should exist after reset")
+	dn.liveGate.Open()
 
-	dn.waitForLiveGate()
+	dn.liveGate.Wait(liveGateTimeout)
 }
 
 func TestLiveGate_WaitThenOpen(t *testing.T) {
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 
 	result := make(chan bool, 1)
 	go func() {
-		dn.waitForLiveGate()
+		dn.liveGate.Wait(liveGateTimeout)
 		result <- true
 	}()
 
@@ -1832,7 +1839,7 @@ func TestLiveGate_WaitThenOpen(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	dn.openLiveGate()
+	dn.liveGate.Open()
 
 	select {
 	case r := <-result:
@@ -1847,37 +1854,43 @@ func TestLiveGate_ClosedGateBlocksUntilTimeout(t *testing.T) {
 	liveGateTimeout = 80 * time.Millisecond
 	defer func() { liveGateTimeout = origTimeout }()
 
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 
 	start := time.Now()
-	dn.waitForLiveGate()
+	dn.liveGate.Wait(liveGateTimeout)
 	assert.GreaterOrEqual(t, time.Since(start).Milliseconds(), int64(70),
 		"should block for approximately the timeout duration")
 }
 
 func TestLiveGate_DoubleOpenIsSafe(t *testing.T) {
-	dn := &Daemon{}
-	dn.resetLiveGate()
-	dn.openLiveGate()
-	assert.NotPanics(t, func() { dn.openLiveGate() }, "double open must not panic")
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
+	dn.liveGate.Open()
+	assert.NotPanics(t, func() { dn.liveGate.Open() }, "double open must not panic")
 
-	dn.waitForLiveGate()
+	dn.liveGate.Wait(liveGateTimeout)
 }
 
 func TestLiveGate_ResetReblocks(t *testing.T) {
-	dn := &Daemon{}
-	dn.resetLiveGate()
-	dn.openLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
+	dn.liveGate.Open()
 
-	dn.waitForLiveGate()
+	dn.liveGate.Wait(liveGateTimeout)
 
 	// Reset creates a new blocked gate
-	dn.resetLiveGate()
+	dn.liveGate.Reset()
 
 	result := make(chan bool, 1)
 	go func() {
-		dn.waitForLiveGate()
+		dn.liveGate.Wait(liveGateTimeout)
 		result <- true
 	}()
 
@@ -1887,7 +1900,7 @@ func TestLiveGate_ResetReblocks(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	dn.openLiveGate()
+	dn.liveGate.Open()
 
 	select {
 	case r := <-result:
@@ -1898,14 +1911,16 @@ func TestLiveGate_ResetReblocks(t *testing.T) {
 }
 
 func TestLiveGate_MultipleWaitersAllUnblock(t *testing.T) {
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 
 	const n = 5
 	results := make(chan bool, n)
 	for i := 0; i < n; i++ {
 		go func() {
-			dn.waitForLiveGate()
+			dn.liveGate.Wait(liveGateTimeout)
 			results <- true
 		}()
 	}
@@ -1914,7 +1929,7 @@ func TestLiveGate_MultipleWaitersAllUnblock(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, 0, len(results), "no waiter should return before gate opens")
 
-	dn.openLiveGate()
+	dn.liveGate.Open()
 
 	for i := 0; i < n; i++ {
 		select {
@@ -1968,15 +1983,17 @@ func TestLiveGateIntegration_FullDaemonCEPFlow(t *testing.T) {
 	assert.NoError(t, err)
 	defer listener.Close()
 
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 
 	// Daemon HTTP server (/emit-logs opens the gate)
 	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	assert.NoError(t, err)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/emit-logs", func(w http.ResponseWriter, _ *http.Request) {
-		dn.openLiveGate()
+		dn.liveGate.Open()
 		w.WriteHeader(http.StatusOK)
 	})
 	httpSrv := &http.Server{Handler: mux}
@@ -2049,7 +2066,7 @@ func TestLiveGateIntegration_FullDaemonCEPFlow(t *testing.T) {
 		}
 		defer c.Close()
 
-		dn.waitForLiveGate()
+		dn.liveGate.Wait(liveGateTimeout)
 		if _, wErr := fmt.Fprintf(c, "%s\n", liveStartCommand); wErr != nil {
 			t.Errorf("LIVE_START write error: %v", wErr)
 			return
@@ -2111,8 +2128,10 @@ func TestLiveGateIntegration_FullDaemonCEPFlow(t *testing.T) {
 // is blocked waiting for the live gate. This was the original bug: a single
 // goroutine both waited for the gate AND read stdout, causing ptp4l to freeze.
 func TestLiveGateIntegration_ScannerDrainsWhileGateBlocked(t *testing.T) {
-	dn := &Daemon{}
-	dn.resetLiveGate() // gate is CLOSED
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset() // gate is CLOSED
 
 	ptp4lR, ptp4lW := io.Pipe()
 	lineCh := make(chan string, 256)
@@ -2175,8 +2194,10 @@ func TestLiveGateIntegration_ReplayThenLive(t *testing.T) {
 	assert.NoError(t, err)
 	defer listener.Close()
 
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 
 	replayLines := []string{
 		"ptp4l[0.000]: [ptp4l.0.config] port 1 (ens1f0): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
@@ -2204,7 +2225,7 @@ func TestLiveGateIntegration_ReplayThenLive(t *testing.T) {
 			}
 			replayConn.Close()
 		}
-		dn.openLiveGate()
+		dn.liveGate.Open()
 		w.WriteHeader(http.StatusOK)
 	})
 	httpSrv := &http.Server{Handler: mux}
@@ -2261,7 +2282,7 @@ func TestLiveGateIntegration_ReplayThenLive(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		dn.waitForLiveGate()
+		dn.liveGate.Wait(liveGateTimeout)
 		fmt.Fprintf(c, "%s\n", liveStartCommand)
 		for _, line := range liveLines {
 			fmt.Fprintf(c, "%s\n", line)
@@ -2341,8 +2362,10 @@ func TestLiveGateIntegration_OrderingPreventsCorruption(t *testing.T) {
 	assert.NoError(t, err)
 	defer listener.Close()
 
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 
 	replayLines := []string{
 		"ptp4l[0.000]: [ptp4l.0.config] port 1 (ens1f0): SLAVE to FAULTY on FAULT_DETECTED (FT_UNSPECIFIED)",
@@ -2393,7 +2416,7 @@ func TestLiveGateIntegration_OrderingPreventsCorruption(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		dn.waitForLiveGate()
+		dn.liveGate.Wait(liveGateTimeout)
 		fmt.Fprintf(c, "%s\n", liveStartCommand)
 		for _, line := range liveLines {
 			fmt.Fprintf(c, "%s\n", line)
@@ -2412,7 +2435,7 @@ func TestLiveGateIntegration_OrderingPreventsCorruption(t *testing.T) {
 		replayConn, dialErr := net.DialTimeout("unix", socketPath, 2*time.Second)
 		if dialErr != nil {
 			t.Errorf("replay dial failed: %v", dialErr)
-			dn.openLiveGate()
+			dn.liveGate.Open()
 			return
 		}
 		for _, line := range replayLines {
@@ -2423,7 +2446,7 @@ func TestLiveGateIntegration_OrderingPreventsCorruption(t *testing.T) {
 		// Wait for the replay reader goroutine to fully consume the data.
 		// In production, kernel socket buffering makes this near-instantaneous.
 		<-replayReadDone
-		dn.openLiveGate()
+		dn.liveGate.Open()
 	}()
 
 	select {
@@ -2489,8 +2512,10 @@ func TestLiveGateIntegration_TriggerLogsFailureRecovery(t *testing.T) {
 	assert.NoError(t, err)
 	defer listener.Close()
 
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 
 	// Reserve an address but DON'T serve yet — TriggerLogs will fail.
 	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
@@ -2545,25 +2570,7 @@ func TestLiveGateIntegration_TriggerLogsFailureRecovery(t *testing.T) {
 			// Short gate timeout: if CEP closed the connection (TriggerLogs
 			// failed), the gate won't open for this attempt. Rather than
 			// blocking for 60s, use a short select.
-			gateOpen := false
-			func() {
-				dn.liveGateMu.Lock()
-				gate := dn.liveGate
-				dn.liveGateMu.Unlock()
-				if gate == nil {
-					gateOpen = true
-					return
-				}
-				select {
-				case <-gate:
-					gateOpen = true
-				case <-time.After(2 * time.Second):
-				}
-			}()
-			if !gateOpen {
-				c.Close()
-				continue
-			}
+			dn.liveGate.Wait(2 * time.Second)
 			_, wErr := fmt.Fprintf(c, "%s\nlive data\n", liveStartCommand)
 			c.Close()
 			if wErr == nil {
@@ -2589,7 +2596,7 @@ func TestLiveGateIntegration_TriggerLogsFailureRecovery(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/emit-logs", func(w http.ResponseWriter, _ *http.Request) {
-		dn.openLiveGate()
+		dn.liveGate.Open()
 		w.WriteHeader(http.StatusOK)
 	})
 	srv := &http.Server{Handler: mux}
@@ -2640,8 +2647,10 @@ func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
 // --- /emit-logs handler unit tests ---
 
 func TestEmitLogsHandler_NotReady_OpensGateAndReturns204(t *testing.T) {
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 
 	tracker := &ReadyTracker{
 		config: false, // not ready
@@ -2658,12 +2667,10 @@ func TestEmitLogsHandler_NotReady_OpensGateAndReturns204(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, rec.Code, "not-ready should return 204")
 
-	// liveGate must be open (channel closed)
-	dn.liveGateMu.Lock()
-	gate := dn.liveGate
-	dn.liveGateMu.Unlock()
+	dn.liveGate.lock.RLock()
+	defer dn.liveGate.lock.RUnlock()
 	select {
-	case <-gate:
+	case <-dn.liveGate.c:
 		// expected: gate is closed (open)
 	default:
 		t.Fatal("liveGate should be open after not-ready /emit-logs")
@@ -2671,8 +2678,10 @@ func TestEmitLogsHandler_NotReady_OpensGateAndReturns204(t *testing.T) {
 }
 
 func TestEmitLogsHandler_Ready_EmitsReplayThenOpensGate(t *testing.T) {
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 
 	// Provide a real socket so EmitPortRoleLogs can connect without retry delays.
 	socketPath := shortTestSocketPath(t)
@@ -2715,11 +2724,10 @@ func TestEmitLogsHandler_Ready_EmitsReplayThenOpensGate(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code, "ready should return 200")
 
 	// liveGate must be open after synchronous replay completes
-	dn.liveGateMu.Lock()
-	gate := dn.liveGate
-	dn.liveGateMu.Unlock()
+	dn.liveGate.lock.RLock()
+	defer dn.liveGate.lock.RUnlock()
 	select {
-	case <-gate:
+	case <-dn.liveGate.c:
 		// expected: gate is open
 	default:
 		t.Fatal("liveGate should be open after ready /emit-logs completes synchronous replay")
@@ -2727,17 +2735,15 @@ func TestEmitLogsHandler_Ready_EmitsReplayThenOpensGate(t *testing.T) {
 }
 
 func TestLiveGate_TimeoutReturnsTrue(t *testing.T) {
-	origTimeout := liveGateTimeout
-	liveGateTimeout = 100 * time.Millisecond
-	defer func() { liveGateTimeout = origTimeout }()
-
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 	// Gate is never opened — should timeout and return true.
 
 	result := make(chan bool, 1)
 	go func() {
-		dn.waitForLiveGate()
+		dn.liveGate.Wait(50 * time.Millisecond)
 		result <- true
 	}()
 
@@ -2767,8 +2773,10 @@ func TestSocketWriter_Drain(t *testing.T) {
 	assert.NoError(t, err)
 	defer listener.Close()
 
-	dn := &Daemon{}
-	dn.resetLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
 
 	lineCh := make(chan string, 256)
 
@@ -2815,7 +2823,7 @@ func TestSocketWriter_Drain(t *testing.T) {
 		}
 		defer c.Close()
 
-		dn.waitForLiveGate()
+		dn.liveGate.Wait(liveGateTimeout)
 		fmt.Fprintf(c, "%s\n", liveStartCommand)
 
 		// Drain stale lines (same logic as daemon.go drainLoop)
@@ -2841,7 +2849,7 @@ func TestSocketWriter_Drain(t *testing.T) {
 	}()
 
 	// Open the gate (stale lines are already buffered).
-	dn.openLiveGate()
+	dn.liveGate.Open()
 
 	// Feed live lines after a short delay to ensure drain has completed.
 	go func() {
@@ -2900,9 +2908,11 @@ func TestSocketWriter_Reconnect(t *testing.T) {
 	assert.NoError(t, err)
 	defer listener.Close()
 
-	dn := &Daemon{}
-	dn.resetLiveGate()
-	dn.openLiveGate() // gate is already open for this test
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
+	dn.liveGate.Open() // gate is already open for this test
 
 	lineCh := make(chan string, 256)
 	doneCh := make(chan struct{}, 1)
@@ -2962,7 +2972,7 @@ func TestSocketWriter_Reconnect(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 			goto connect
 		}
-		dn.waitForLiveGate()
+		dn.liveGate.Wait(liveGateTimeout)
 		if _, err2 := fmt.Fprintf(c, "%s\n", liveStartCommand); err2 != nil {
 			c.Close()
 			goto connect
@@ -3034,9 +3044,11 @@ func TestSocketWriter_SuffixStrip(t *testing.T) {
 	assert.NoError(t, err)
 	defer listener.Close()
 
-	dn := &Daemon{}
-	dn.resetLiveGate()
-	dn.openLiveGate()
+	dn := &Daemon{
+		liveGate: &liveGate{},
+	}
+	dn.liveGate.Reset()
+	dn.liveGate.Open()
 
 	tests := []struct {
 		input    string
@@ -3086,7 +3098,7 @@ func TestSocketWriter_SuffixStrip(t *testing.T) {
 		}
 		defer c.Close()
 
-		dn.waitForLiveGate()
+		dn.liveGate.Wait(liveGateTimeout)
 		fmt.Fprintf(c, "%s\n", liveStartCommand)
 		for output := range lineCh {
 			line := removeMessageSuffix(output) + "\n"
