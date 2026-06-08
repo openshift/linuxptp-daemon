@@ -87,7 +87,7 @@ func TestDpllOffsetChecksWithFlags(t *testing.T) {
 }
 
 func TestDpllSendEventWithFlags(t *testing.T) {
-	eventChannel := make(chan event.EventChannel, 10)
+	eventChannel := make(chan event.Event, 10)
 	d := &DpllConfig{
 		iface:           "test-iface",
 		flags:           FlagOnlyPhaseStatus, // No freq, no offset
@@ -105,16 +105,18 @@ func TestDpllSendEventWithFlags(t *testing.T) {
 
 	select {
 	case e := <-eventChannel:
-		assert.Equal(t, event.DPLL, e.ProcessName)
+		assert.Equal(t, event.DPLL, e.Source)
 		assert.Equal(t, "test-iface", e.IFace)
 
-		_, hasFreq := e.Values[event.FREQUENCY_STATUS]
+		ptpData := e.Data.(*event.PTPData)
+
+		_, hasFreq := ptpData.Values[event.FREQUENCY_STATUS]
 		assert.False(t, hasFreq, "should not have frequency status")
 
-		_, hasOffset := e.Values[event.OFFSET]
+		_, hasOffset := ptpData.Values[event.OFFSET]
 		assert.False(t, hasOffset, "should not have offset")
 
-		phase, hasPhase := e.Values[event.PHASE_STATUS]
+		phase, hasPhase := ptpData.Values[event.PHASE_STATUS]
 		assert.True(t, hasPhase, "should have phase status")
 		assert.Equal(t, int64(DPLL_LOCKED), phase)
 
@@ -290,34 +292,4 @@ func TestActivePhaseOffsetPin(t *testing.T) {
 			assert.Equal(t, tt.expectedOk, ok, "match result")
 		})
 	}
-}
-
-// TestDpllSubscriberNotifySkipsWhenCurrentStatePTP_UNKNOWN covers dpll.go:284 — when the
-// depending process state is still PTP_UNKNOWN, Notify must not apply the new state (so loss
-// of GNSS does not incorrectly drive PTP_FREERUN into the map / sourceLost).
-func TestDpllSubscriberNotifySkipsWhenCurrentStatePTP_UNKNOWN(t *testing.T) {
-	d := &DpllConfig{
-		isMonitoring: true,
-		sourceLost:   false,
-		dependsOn:    []event.EventSource{event.GNSS},
-	}
-	sub := DpllSubscriber{source: event.GNSS, dpll: d, id: "test-gnss"}
-
-	dependingProcessStateMap.Lock()
-	dependingProcessStateMap.states[event.GNSS] = event.PTP_UNKNOWN
-	dependingProcessStateMap.Unlock()
-	t.Cleanup(func() {
-		dependingProcessStateMap.Lock()
-		delete(dependingProcessStateMap.states, event.GNSS)
-		dependingProcessStateMap.Unlock()
-	})
-
-	sub.Notify(event.GNSS, event.PTP_FREERUN)
-
-	dependingProcessStateMap.Lock()
-	st := dependingProcessStateMap.states[event.GNSS]
-	dependingProcessStateMap.Unlock()
-
-	assert.Equal(t, event.PTP_UNKNOWN, st)
-	assert.False(t, d.sourceLost, "Notify must not run GNSS sourceLost logic when current state is PTP_UNKNOWN")
 }

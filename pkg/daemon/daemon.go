@@ -154,7 +154,7 @@ func (dn *Daemon) sendSidecarRestart() error {
 // or stopped simultaneously.
 type ProcessManager struct {
 	process         []*ptpProcess
-	eventChannel    chan event.EventChannel
+	eventChannel    chan event.Event
 	ptpEventHandler *event.EventHandler
 	daemon          *Daemon
 }
@@ -191,7 +191,7 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 		glog.Error("process is not initialized in SetTestData()")
 		return
 	}
-	eventChannel := make(chan event.EventChannel)
+	eventChannel := make(chan event.Event)
 	closeManager := make(chan bool)
 	p.process[0].name = name
 	p.process[0].messageTag = msgTag
@@ -305,7 +305,7 @@ type ptpProcess struct {
 	processConfigPath     string
 	configName            string
 	messageTag            string
-	eventCh               chan event.EventChannel
+	eventCh               chan event.Event
 	exitCh                chan bool
 	execMutex             sync.Mutex
 	stopped               bool
@@ -546,7 +546,7 @@ func New(
 	}
 	InitializeOffsetMaps()
 	pluginManager, unknownPlugins := registerPlugins(plugins)
-	eventChannel := make(chan event.EventChannel, 100)
+	eventChannel := make(chan event.Event, 100)
 	pm := &ProcessManager{
 		process:         nil,
 		eventChannel:    eventChannel,
@@ -1511,15 +1511,17 @@ func (p *ptpProcess) sendPtp4lOffsetEvent() {
 	avgOffset := int64(p.tBCAttributes.offsetEventWindow.Mean())
 	glog.Infof("PTP4l offset event: %d", avgOffset)
 	select {
-	case p.eventCh <- event.EventChannel{
-		ProcessName: event.PTP4l,
-		State:       p.tBCAttributes.lastReportedState,
-		CfgName:     p.configName,
-		IFace:       p.tBCAttributes.activeTRPort(),
-		ClockType:   p.clockType,
-		Time:        time.Now().UnixMilli(),
-		Values: map[event.ValueType]any{
-			event.OFFSET: avgOffset,
+	case p.eventCh <- event.Event{
+		Source:    event.PTP4l,
+		CfgName:   p.configName,
+		IFace:     p.tBCAttributes.activeTRPort(),
+		ClockType: p.clockType,
+		Time:      time.Now().UnixMilli(),
+		Data: &event.PTPData{
+			State: p.tBCAttributes.lastReportedState,
+			Values: map[event.ValueType]any{
+				event.OFFSET: avgOffset,
+			},
 		},
 	}:
 	default:
@@ -1941,14 +1943,12 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 			values[k] = v
 		}
 		select {
-		case p.eventCh <- event.EventChannel{
-			ProcessName: event.TS2PHC,
-			State:       ptpState,
-			CfgName:     p.configName,
-			IFace:       iface,
-			Values:      values,
-			ClockType:   p.clockType,
-			Time:        time.Now().UnixMilli(),
+		case p.eventCh <- event.Event{
+			Source:    event.TS2PHC,
+			CfgName:   p.configName,
+			IFace:     iface,
+			ClockType: p.clockType,
+			Time:      time.Now().UnixMilli(),
 			WriteToLog: func() bool { // only write to log if there is something extra
 				if len(extraValue) > 0 {
 					return true
@@ -1956,6 +1956,10 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 				return false
 			}(),
 			Reset: false,
+			Data: &event.PTPData{
+				State:  ptpState,
+				Values: values,
+			},
 		}:
 		default:
 		}
@@ -2166,10 +2170,10 @@ func (p *ptpProcess) updateGMStatusOnProcessDown(process string) {
 		// Reset the entire event subsystem
 		// (this nullifies the remaining pieces in the event data if ts2phc was killed during ptp profile change)
 		select {
-		case p.eventCh <- event.EventChannel{
-			ProcessName: event.TS2PHC,
-			CfgName:     p.configName,
-			Reset:       true,
+		case p.eventCh <- event.Event{
+			Source:  event.TS2PHC,
+			CfgName: p.configName,
+			Reset:   true,
 		}:
 		default:
 		}
@@ -2270,13 +2274,11 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 	if len(extraValue) > 0 {
 		glog.Info(extraValue)
 		select {
-		case p.eventCh <- event.EventChannel{
-			ProcessName: event.SYNCE,
-			State:       state,
-			CfgName:     p.configName,
-			IFace:       iface,
-			Values:      extraValue,
-			Time:        time.Now().UnixMilli(),
+		case p.eventCh <- event.Event{
+			Source:  event.SYNCE,
+			CfgName: p.configName,
+			IFace:   iface,
+			Time:    time.Now().UnixMilli(),
 			WriteToLog: func() bool { // only write to log if there is something extra
 				if len(extraValue) > 0 {
 					return true
@@ -2284,6 +2286,10 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 				return false
 			}(),
 			Reset: false,
+			Data: &event.PTPData{
+				State:  state,
+				Values: extraValue,
+			},
 		}:
 		default:
 		}
@@ -2385,19 +2391,21 @@ func (p *ptpProcess) sendPtp4lEvent() {
 	}
 	_ = clockID // Ensure linter sees the variable as used
 	select {
-	case p.eventCh <- event.EventChannel{
-		ProcessName: event.PTP4l,
-		State:       p.tBCAttributes.lastReportedState,
-		CfgName:     p.configName,
-		IFace:       p.tBCAttributes.activeTRPort(),
-		ClockType:   p.clockType,
-		Time:        time.Now().UnixMilli(),
-		Reset:       false,
-		SourceLost:  p.tBCAttributes.lastReportedState != event.PTP_LOCKED,
-		OutOfSpec:   false,
-		Values: map[event.ValueType]any{
-			event.ControlledPortsConfig: p.tBCAttributes.ttPortsConfigFile,
-			event.ClockIDKey:            clockID,
+	case p.eventCh <- event.Event{
+		Source:    event.PTP4l,
+		CfgName:   p.configName,
+		IFace:     p.tBCAttributes.activeTRPort(),
+		ClockType: p.clockType,
+		Time:      time.Now().UnixMilli(),
+		Reset:     false,
+		Data: &event.PTPData{
+			State:      p.tBCAttributes.lastReportedState,
+			SourceLost: p.tBCAttributes.lastReportedState != event.PTP_LOCKED,
+			OutOfSpec:  false,
+			Values: map[event.ValueType]any{
+				event.ControlledPortsConfig: p.tBCAttributes.ttPortsConfigFile,
+				event.ClockIDKey:            clockID,
+			},
 		},
 	}:
 	default:

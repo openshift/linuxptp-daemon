@@ -75,15 +75,40 @@ func (d *Data) GetDataDetails(iface string) *DataDetails {
 	return nil
 }
 
-func (d *Data) AddEvent(event EventChannel) {
+// AddEvent records an incoming event into the data store.
+func (d *Data) AddEvent(event Event) {
+	var state PTPState
+	var sourceLost bool
+	var offset int64
+	var hasOffset bool
+
+	switch data := event.Data.(type) {
+	case *GNSSData:
+		sourceLost = data.SourceLost
+		offset = data.Offset
+		hasOffset = true
+		if data.GPSStatus >= 3 && !data.SourceLost {
+			state = PTP_LOCKED
+		} else {
+			state = PTP_FREERUN
+		}
+	case *PTPData:
+		state = data.State
+		sourceLost = data.SourceLost
+		if off, fnd := data.Values[OFFSET]; fnd {
+			offset = off.(int64)
+			hasOffset = true
+		}
+	}
+
 	// When a source-lost event arrives, propagate to all details that still
 	// show LOCKED. The active TR port may differ from ports that received
 	// earlier offset events, leaving stale LOCKED states on inactive details
 	// that would otherwise fool isSourceLostBC.
-	if event.SourceLost {
+	if sourceLost {
 		for _, dd := range d.Details {
 			if dd.IFace != event.IFace && dd.State == PTP_LOCKED {
-				dd.State = event.State
+				dd.State = state
 				dd.sourceLost = true
 				dd.time = event.Time
 			}
@@ -93,25 +118,17 @@ func (d *Data) AddEvent(event EventChannel) {
 	for _, dd := range d.Details {
 		if dd.IFace == event.IFace {
 			if dd.time <= event.Time {
-				if dd.State != event.State {
-					if len(StateRegisterer.Subscribers) > 0 {
-						go StateRegisterer.notify(event.ProcessName, event.State)
-					}
-				}
-				dd.State = event.State
-				dd.sourceLost = event.SourceLost
+				dd.State = state
+				dd.sourceLost = sourceLost
 				dd.ClockType = event.ClockType
 				dd.time = event.Time
 				dd.logData = event.GetLogData()
-				off, fnd := event.Values[OFFSET]
-				if fnd {
-					offset := off.(int64)
+				if hasOffset {
 					dd.Offset = offset
 					d.window.Insert(float64(offset))
 				}
-
 			} else {
-				glog.Infof("discarding stale event for process %s, last event @ %d, current event @ %d", event.ProcessName, dd.time, event.Time)
+				glog.Infof("discarding stale event for process %s, last event @ %d, current event @ %d", event.Source, dd.time, event.Time)
 			}
 			return
 		}
@@ -123,21 +140,18 @@ func (d *Data) AddEvent(event EventChannel) {
 		IFace:      event.IFace,
 		time:       event.Time,
 		logData:    event.GetLogData(),
-		State:      event.State,
-		sourceLost: event.SourceLost,
+		State:      state,
+		sourceLost: sourceLost,
 	}
-	// ptp4l signalSource, as GNSS signal source, can be a Leading source
-	leading, found := event.Values[LeadingSource]
-	if found && leading.(bool) {
-		glog.Info(details.IFace, " is set as the leading source ")
-		details.signalSource = PTP4l
+	if ptp, ok := event.Data.(*PTPData); ok {
+		leading, found := ptp.Values[LeadingSource]
+		if found && leading.(bool) {
+			glog.Info(details.IFace, " is set as the leading source ")
+			details.signalSource = PTP4l
+		}
 	}
 	d.logData = details.logData
 	d.Details = append(d.Details, details)
-	if len(StateRegisterer.Subscribers) > 0 {
-		glog.Infof("notify state changed for %s", event.ProcessName)
-		go StateRegisterer.notify(event.ProcessName, event.State)
-	}
 }
 
 // ToString ... data

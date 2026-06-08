@@ -542,7 +542,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:          make(chan event.EventChannel, 1),              //nolint:govet // needed for test setup
+			eventCh:          make(chan event.Event, 1),                     //nolint:govet // needed for test setup
 			configName:       "test-config",                                 //nolint:govet // needed for test setup
 			clockType:        event.BC,                                      //nolint:govet // needed for test setup
 			tbcStateDetector: createMockPTPStateDetectorForHardwareConfig(), // Use mock detector
@@ -596,7 +596,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:          make(chan event.EventChannel, 1),
+			eventCh:          make(chan event.Event, 1),
 			configName:       "test-config",
 			clockType:        event.BC,
 			offset:           5.0,
@@ -676,7 +676,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:          make(chan event.EventChannel, 1),
+			eventCh:          make(chan event.Event, 1),
 			configName:       "test-config",
 			clockType:        event.BC,
 			tbcStateDetector: detector,
@@ -821,9 +821,9 @@ func TestTBCTransitionCheck_PathSelection(t *testing.T) {
 						"clockId[ens4f0]":  "123456789",
 					},
 				},
-				eventCh:    make(chan event.EventChannel, 1), //nolint:govet // needed for test setup
-				configName: "test-config",                    //nolint:govet // needed for test setup
-				clockType:  event.BC,                         //nolint:govet // needed for test setup
+				eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
+				configName: "test-config",             //nolint:govet // needed for test setup
+				clockType:  event.BC,                  //nolint:govet // needed for test setup
 			}
 
 			// Set state detector based on test case
@@ -1058,7 +1058,7 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 				"clockId[ens4f1]":  "123456789",
 			},
 		},
-		eventCh:          make(chan event.EventChannel, 100), // Large buffer for all events
+		eventCh:          make(chan event.Event, 100), // Large buffer for all events
 		configName:       "test-config",
 		clockType:        event.BC,
 		tbcStateDetector: detector, // Use real detector with real config
@@ -1181,7 +1181,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:    make(chan event.EventChannel, 1),
+			eventCh:    make(chan event.Event, 1),
 			configName: "test-config",
 			clockType:  event.BC,
 			offset:     5.0, // Set offset < threshold (10.0) to allow event to be sent
@@ -1236,7 +1236,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:    make(chan event.EventChannel, 1),
+			eventCh:    make(chan event.Event, 1),
 			configName: "test-config",
 			clockType:  event.BC,
 		}
@@ -1275,7 +1275,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:    make(chan event.EventChannel, 1),
+			eventCh:    make(chan event.Event, 1),
 			configName: "test-config",
 			clockType:  event.BC,
 		}
@@ -1363,7 +1363,7 @@ func TestTBCDualUpstream_PortALost_PortBTakesOver(t *testing.T) {
 			Name:        stringPointer("test-profile"),
 			PtpSettings: map[string]string{"leadingInterface": "eno5", "clockId[eno5]": "123456789"},
 		},
-		eventCh:          make(chan event.EventChannel, 10),
+		eventCh:          make(chan event.Event, 10),
 		configName:       "test-config",
 		clockType:        event.BC,
 		offset:           5.0,
@@ -1430,7 +1430,7 @@ func TestTBCDualUpstream_BothPortsLost(t *testing.T) {
 			Name:        stringPointer("test-profile"),
 			PtpSettings: map[string]string{"leadingInterface": "eno5", "clockId[eno5]": "123456789"},
 		},
-		eventCh:          make(chan event.EventChannel, 10),
+		eventCh:          make(chan event.Event, 10),
 		configName:       "test-config",
 		clockType:        event.BC,
 		tbcStateDetector: detector,
@@ -1480,7 +1480,7 @@ func TestTBCDualUpstream_RecoveryAfterBothLost(t *testing.T) {
 			Name:        stringPointer("test-profile"),
 			PtpSettings: map[string]string{"leadingInterface": "eno5", "clockId[eno5]": "123456789"},
 		},
-		eventCh:          make(chan event.EventChannel, 10),
+		eventCh:          make(chan event.Event, 10),
 		configName:       "test-config",
 		clockType:        event.BC,
 		offset:           5.0,
@@ -2616,7 +2616,7 @@ func TestLiveGateIntegration_TriggerLogsFailureRecovery(t *testing.T) {
 func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
 	// Create a minimal event handler (no socket needed — the event package
 	// tests already cover the socket write path via EmitClockClass).
-	eventChannel := make(chan event.EventChannel)
+	eventChannel := make(chan event.Event)
 	closeCh := make(chan bool, 1)
 	handler := event.Init("testnode", false, "", eventChannel, closeCh, nil, nil, nil)
 

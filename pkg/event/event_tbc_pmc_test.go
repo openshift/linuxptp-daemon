@@ -30,9 +30,6 @@ func ensureLeapMocked(t *testing.T) {
 }
 
 func newPMCTestEventHandler() *EventHandler {
-	if StateRegisterer == nil {
-		StateRegisterer = NewStateNotifier()
-	}
 	return &EventHandler{
 		data:             map[string][]*Data{},
 		clkSyncState:     map[string]*clockSyncState{},

@@ -301,11 +301,10 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	}
 
 	logOut := make(chan string, 100)
-	eChannel := make(chan event.EventChannel, 100)
+	eChannel := make(chan event.Event, 100)
 	closeChn := make(chan bool)
 	go listenToEvents(closeChn, logOut)
 	eventManager := event.Init("node", true, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
-	eventManager.MockEnable()
 	go eventManager.ProcessEvents()
 	assert.NoError(t, leap.MockLeapFile())
 	defer func() {
@@ -431,19 +430,34 @@ func ProcessTestEvents(c net.Conn, logOut chan<- string) {
 }
 
 func sendEvents(cfgName string, iface string, processName event.EventSource, state event.PTPState,
-	values map[event.ValueType]interface{}, outOfSpec bool, sourceLost bool) event.EventChannel {
+	values map[event.ValueType]interface{}, outOfSpec bool, sourceLost bool) event.Event {
 	glog.Info("sending Nav status event to event handler Process")
-	return event.EventChannel{
-		ProcessName: processName,
-		State:       state,
-		IFace:       iface,
-		CfgName:     cfgName,
-		Values:      values,
-		SourceLost:  sourceLost,
-		ClockType:   "GM",
-		Time:        0,
-		OutOfSpec:   outOfSpec,
-		WriteToLog:  true,
-		Reset:       false,
+	e := event.Event{
+		Source:     processName,
+		IFace:      iface,
+		CfgName:    cfgName,
+		ClockType:  "GM",
+		Time:       0,
+		WriteToLog: true,
+		Reset:      false,
 	}
+	if processName == event.GNSS {
+		var gpsStatus int64
+		if gps, ok := values[event.GPS_STATUS]; ok {
+			gpsStatus = int64(gps.(int))
+		}
+		var offset int64
+		if off, ok := values[event.OFFSET]; ok {
+			offset = off.(int64)
+		}
+		e.Data = &event.GNSSData{GPSStatus: gpsStatus, Offset: offset, SourceLost: sourceLost}
+	} else {
+		e.Data = &event.PTPData{
+			State:      state,
+			Values:     values,
+			OutOfSpec:  outOfSpec,
+			SourceLost: sourceLost,
+		}
+	}
+	return e
 }
