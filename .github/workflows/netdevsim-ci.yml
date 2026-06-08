@@ -17,7 +17,7 @@ env:
   DKMS_REPO: https://github.com/redhat-cne/netdevsim-dkms.git
   DKMS_BRANCH: main
   PTP_REPO: https://github.com/edcdavid/ptp-operator-upstream.git
-  PTP_BRANCH: netdevsim-dkms
+  PTP_BRANCH: main
 
 jobs:
   # ------------------------------------------------------------------

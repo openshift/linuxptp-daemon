@@ -431,7 +431,12 @@ func (d *DpllConfig) ActivePhaseOffsetPin(pin *nl.PinInfo) (int, bool) {
 		return -1, false
 	}
 	for i, p := range pin.ParentDevice {
-		if p.State != nl.PinStateConnected || p.Direction != nl.PinDirectionInput {
+		// Legacy behavior: An input pin was considered "connected" if it acted as a source.
+		// New behavior: An input pin is the device synchronization source when its OperState is "active".
+		// Note: In this scenario, the administrative state never exceeds "selectable".
+		if (p.State != nl.PinStateConnected && p.Operstate != nl.PinOperstateActive) || p.Direction != nl.PinDirectionInput {
+			glog.Infof("pin id %d parentID=%d skipped: direction=%s adminState=%s operstate=%s",
+				pin.ID, p.ParentID, nl.GetPinDirection(p.Direction), nl.GetPinState(p.State), nl.GetPinOperstate(p.Operstate))
 			continue
 		}
 		for _, dev := range d.devices {
