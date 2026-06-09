@@ -319,7 +319,7 @@ func (l *liveGate) Reset() {
 	l.once = sync.OnceFunc(func() {
 		close(l.c)
 	})
-	glog.Info("liveGate: reset (blocked)")
+	glog.V(14).Info("liveGate: reset (blocked)")
 }
 
 // Open unblocks all ptp4l process connections waiting on the gate.
@@ -346,7 +346,7 @@ func (l *liveGate) Wait(timeout time.Duration) {
 	}
 	select {
 	case <-l.c:
-		glog.V(4).Info("waitForLiveGate: gate opened, proceeding")
+		glog.V(14).Info("waitForLiveGate: gate opened, proceeding")
 	case <-time.After(timeout):
 		glog.Warning("liveGate: timeout after 60s, proceeding without replay guarantee")
 	}
@@ -1057,11 +1057,11 @@ func processStatus(c net.Conn, processName, messageTag string, status int64) {
 	// ptp4l[5196819.100]: [ptp4l.0.config] PTP_PROCESS_STOPPED:0/1
 
 	if c == nil {
-		glog.V(4).Infof("processStatus: process=%s config=%s status=%d via=prometheus", processName, cfgName, status)
+		glog.V(14).Infof("processStatus: process=%s config=%s status=%d via=prometheus", processName, cfgName, status)
 		UpdateProcessStatusMetrics(processName, cfgName, status)
 		return
 	}
-	glog.V(4).Infof("processStatus: process=%s config=%s status=%d via=socket", processName, cfgName, status)
+	glog.V(14).Infof("processStatus: process=%s config=%s status=%d via=socket", processName, cfgName, status)
 	logProcessStatus(processName, cfgName, status, c)
 }
 
@@ -1170,27 +1170,27 @@ func (p *ptpProcess) runScanner(cmdReader io.Reader, lineCh chan<- string, pm *p
 func (p *ptpProcess) runSocketWriter(lineCh <-chan string, doneCh chan<- struct{}) {
 	var err error
 connect:
-	glog.V(4).Infof("socket-writer[%s]: attempting dial to event socket", p.name)
+	glog.V(14).Infof("socket-writer[%s]: attempting dial to event socket", p.name)
 	select {
 	case <-p.exitCh:
-		glog.V(4).Infof("socket-writer[%s]: exitCh during dial, returning", p.name)
+		glog.V(14).Infof("socket-writer[%s]: exitCh during dial, returning", p.name)
 		doneCh <- struct{}{}
 		return
 	default:
 		p.c, err = dialSocket()
 		if err != nil {
-			glog.V(4).Infof("socket-writer[%s]: dial failed: %v, retrying", p.name, err)
+			glog.V(14).Infof("socket-writer[%s]: dial failed: %v, retrying", p.name, err)
 			goto connect
 		}
 	}
-	glog.V(4).Infof("socket-writer[%s]: dial succeeded, waiting for liveGate", p.name)
+	glog.V(14).Infof("socket-writer[%s]: dial succeeded, waiting for liveGate", p.name)
 	p.dn.liveGate.Wait(liveGateTimeout)
-	glog.V(4).Infof("socket-writer[%s]: liveGate passed, sending LIVE_START", p.name)
+	glog.V(14).Infof("socket-writer[%s]: liveGate passed, sending LIVE_START", p.name)
 	if _, err2 := fmt.Fprintf(p.c, "%s\n", liveStartCommand); err2 != nil {
 		glog.Errorf("failed to write LIVE_START marker: %v", err2)
 		goto connect
 	}
-	glog.V(4).Infof("socket-writer[%s]: LIVE_START sent, draining stale buffer", p.name)
+	glog.V(14).Infof("socket-writer[%s]: LIVE_START sent, draining stale buffer", p.name)
 	{
 		drained := 0
 	drainLoop:
@@ -1198,7 +1198,7 @@ connect:
 			select {
 			case _, ok := <-lineCh:
 				if !ok {
-					glog.V(4).Infof("socket-writer[%s]: lineCh closed during drain", p.name)
+					glog.V(14).Infof("socket-writer[%s]: lineCh closed during drain", p.name)
 					doneCh <- struct{}{}
 					return
 				}
@@ -1207,7 +1207,7 @@ connect:
 				break drainLoop
 			}
 		}
-		glog.V(4).Infof("socket-writer[%s]: drained %d stale lines, sending processStatus UP", p.name, drained)
+		glog.V(14).Infof("socket-writer[%s]: drained %d stale lines, sending processStatus UP", p.name, drained)
 	}
 
 	processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
@@ -1216,7 +1216,7 @@ connect:
 			d.ProcessStatus(p.c, PtpProcessUp)
 		}
 	}
-	glog.V(4).Infof("socket-writer[%s]: starting line forwarding loop", p.name)
+	glog.V(14).Infof("socket-writer[%s]: starting line forwarding loop", p.name)
 
 	for output := range lineCh {
 		if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
@@ -1225,11 +1225,11 @@ connect:
 		line := removeMessageSuffix(output) + "\n"
 		_, err2 := p.c.Write([]byte(line))
 		if err2 != nil {
-			glog.V(4).Infof("socket-writer[%s]: write error: %v, reconnecting. line=%s", p.name, err2, output)
+			glog.Errorf("socket-writer[%s]: write error: %v, reconnecting. line=%s", p.name, err2, output)
 			goto connect
 		}
 	}
-	glog.V(4).Infof("socket-writer[%s]: lineCh closed, forwarding done", p.name)
+	glog.V(14).Infof("socket-writer[%s]: lineCh closed, forwarding done", p.name)
 	doneCh <- struct{}{}
 }
 
@@ -1297,10 +1297,10 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 				glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
 			}
 			if stdoutToSocket && p.c != nil {
-				glog.V(4).Infof("cmdRun[%s]: process ended, sending DOWN via socket", p.name)
+				glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via socket", p.name)
 				processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
 			} else {
-				glog.V(4).Infof("cmdRun[%s]: process ended, sending DOWN via prometheus", p.name)
+				glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via prometheus", p.name)
 				processStatus(nil, p.name, p.messageTag, PtpProcessDown)
 			}
 			p.updateGMStatusOnProcessDown(p.name)
@@ -1319,7 +1319,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			cmd = newCmd
 		}
 		if stdoutToSocket && p.c != nil {
-			glog.V(4).Infof("cmdRun[%s]: closing old socket connection before restart", p.name)
+			glog.V(14).Infof("cmdRun[%s]: closing old socket connection before restart", p.name)
 			if err2 := p.c.Close(); err2 != nil {
 				glog.Errorf("closing connection returned error %s", err2)
 			}
