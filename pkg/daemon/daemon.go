@@ -439,6 +439,16 @@ func (dn *Daemon) getInterfacesFromHardwareConfig(nodeProfile *ptpv1.PtpProfile)
 			// Get PHC ID for the interface
 			phcID := ptpnetwork.GetPhcId(networkInterface)
 
+			// Register in the alias store so convergeConfig can match this
+			// interface against ptp4l interfaces that share the same PHC (e.g.
+			// eno1 vs eth3 on an 8-port NIC where naming prefixes differ).
+			if phcID != "" {
+				alias.AddInterface(phcID, networkInterface)
+				glog.Infof("getInterfacesFromHardwareConfig: registered iface %s phc %s in alias store", networkInterface, phcID)
+			} else {
+				glog.Warningf("getInterfacesFromHardwareConfig: could not get PHC ID for iface %s, convergeConfig PHC fallback will not work", networkInterface)
+			}
+
 			interfaces = append(interfaces, config.Iface{
 				Name:     networkInterface,
 				Source:   eventSource,
@@ -653,6 +663,12 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// collector (assuming there are no other
 	// references).
 	dn.processManager.process = nil
+
+	// Purge the alias store so stale interface→PHC mappings from a previous
+	// config application do not persist. All interfaces will be re-registered
+	// by RenderPtp4lConf (and getInterfacesFromHardwareConfig) below before
+	// any event processing restarts.
+	alias.ClearAliases()
 
 	// All configs will be rebuild, and sockets recreated, so they can all be deleted
 	_ = dn.cleanupTempFiles()
