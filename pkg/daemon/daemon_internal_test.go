@@ -4,7 +4,6 @@ package daemon
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -26,17 +25,6 @@ import (
 )
 
 const testPtp4lOffsetLine = "ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100"
-
-// NewDaemonForTests creates a Daemon instance for testing
-func NewDaemonForTests(tracker *ReadyTracker, processManager *ProcessManager) *Daemon {
-	tracker.processManager = processManager
-	return &Daemon{
-		readyTracker:   tracker,
-		processManager: processManager,
-		liveGate:       &liveGate{},
-	}
-}
-
 
 func loadProfile(path string) (*ptpv1.PtpProfile, error) {
 	profileData, err := os.ReadFile(path)

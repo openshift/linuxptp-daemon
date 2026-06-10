@@ -124,7 +124,6 @@ func (dn *Daemon) sendSidecarRestart() error {
 	return nil
 }
 
-
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
 // Processes in ProcessManager will be started
@@ -155,6 +154,7 @@ func NewDaemonForTests(tracker *ReadyTracker, processManager *ProcessManager) *D
 	return &Daemon{
 		readyTracker:   tracker,
 		processManager: processManager,
+		liveGate:       &liveGate{},
 	}
 }
 
