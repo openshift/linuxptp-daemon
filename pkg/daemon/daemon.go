@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"cmp"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -111,7 +112,12 @@ var ptpTmpFiles = []string{
 
 var vTbcHasHardwareConfig = false
 
-const socketDialTimeout = 5 * time.Second
+const (
+	socketDialTimeout = 5 * time.Second
+	// liveStartCommand is sent on each ptp4l process connection after the live
+	// gate opens. It tells CEP that all subsequent data is live (post-replay).
+	liveStartCommand = "CMD LIVE_START"
+)
 
 func dialSocket() (net.Conn, error) {
 	c, err := net.DialTimeout("unix", eventSocket, socketDialTimeout)
@@ -126,9 +132,9 @@ func dialSocket() (net.Conn, error) {
 // over a short-lived dedicated connection to the event socket. The sidecar will exec itself
 // for a clean restart, then re-read all configuration from disk (ConfigMap + ptp4l config files).
 //
-// This must be called after applyNodePTPProfiles() has written all config files and started
-// all PTP processes, so that the sidecar restarts into a consistent state.
-func sendSidecarRestart() error {
+// The live gate is reset earlier in applyNodePTPProfiles (before processes start)
+// so that socket-writers block until the next /emit-logs (replay) completes.
+func (dn *Daemon) sendSidecarRestart() error {
 	c, err := net.Dial("unix", eventSocket)
 	if err != nil {
 		return err
@@ -150,6 +156,7 @@ type ProcessManager struct {
 	process         []*ptpProcess
 	eventChannel    chan event.EventChannel
 	ptpEventHandler *event.EventHandler
+	daemon          *Daemon
 }
 
 // NewProcessManager is used by unit tests
@@ -343,6 +350,56 @@ func (p *ptpProcess) setStopped(val bool) {
 	p.execMutex.Unlock()
 }
 
+type liveGate struct {
+	lock sync.RWMutex
+	c    chan struct{}
+	once func()
+}
+
+// Reset creates a new blocking gate. All ptp4l process connections
+// will block on this gate until openLiveGate is called (by the /emit-logs handler).
+func (l *liveGate) Reset() {
+	if !l.lock.TryLock() {
+		return
+	}
+	defer l.lock.Unlock()
+	l.c = make(chan struct{})
+	l.once = sync.OnceFunc(func() {
+		close(l.c)
+	})
+	glog.V(14).Info("liveGate: reset (blocked)")
+}
+
+// Open unblocks all ptp4l process connections waiting on the gate.
+// Safe to call multiple times (uses sync.Once).
+func (l *liveGate) Open() {
+	l.lock.RLock()
+	defer l.lock.RUnlock()
+	if l.once != nil {
+		l.once()
+	}
+}
+
+// liveGateTimeout is the safety timeout for waitForLiveGate. If the gate
+// is not opened within this duration, live data proceeds without the replay
+// guarantee. Exposed as a var so tests can shorten it.
+var liveGateTimeout = 60 * time.Second
+
+// Wait blocks until the gate opens or a safety timeout expires.
+func (l *liveGate) Wait(timeout time.Duration) {
+	l.lock.RLock()
+	defer l.lock.RUnlock()
+	if l.c == nil {
+		return
+	}
+	select {
+	case <-l.c:
+		glog.V(14).Info("waitForLiveGate: gate opened, proceeding")
+	case <-time.After(timeout):
+		glog.Warning("liveGate: timeout after 60s, proceeding without replay guarantee")
+	}
+}
+
 // Daemon is the main structure for linuxptp instance.
 // It contains all the necessary data to run linuxptp instance.
 type Daemon struct {
@@ -376,6 +433,11 @@ type Daemon struct {
 	// Allow vendors to include plugins
 	pluginManager plugin.PluginManager
 	saFileWatcher *fsnotify.Watcher
+
+	// liveGate blocks ptp4l process connections from writing to the event
+	// socket until the replay (/emit-logs) completes. This ensures CEP
+	// processes replay state before any live data arrives.
+	liveGate *liveGate
 }
 
 // UpdateHardwareConfig implements controller.HardwareConfigUpdateHandler.
@@ -508,7 +570,7 @@ func New(
 		}
 	}
 
-	return &Daemon{
+	dn := &Daemon{
 		nodeName:              nodeName,
 		namespace:             namespace,
 		stdoutToSocket:        stdoutToSocket,
@@ -523,7 +585,10 @@ func New(
 		readyTracker:          tracker,
 		stopCh:                stopCh,
 		saFileWatcher:         saFileWatch,
+		liveGate:              &liveGate{},
 	}
+	pm.daemon = dn
+	return dn
 }
 
 // Run in a for loop to listen for any LinuxPTPConfUpdate changes
@@ -629,6 +694,7 @@ func printWhenNotEmpty(output string) {
 // SetProcessManager in tests
 func (dn *Daemon) SetProcessManager(p *ProcessManager) {
 	dn.processManager = p
+	p.daemon = dn
 	dn.readyTracker.processManager = p
 }
 
@@ -748,6 +814,9 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	}
 
 	glog.Infof("All profiles applied, starting %d processes", len(dn.processManager.process))
+	// Reset the live gate BEFORE starting processes so that socket-writers
+	// block until /emit-logs completes replay after the sidecar restart.
+	dn.liveGate.Reset()
 	// Start all the process
 	for _, p := range dn.processManager.process {
 		if p != nil {
@@ -785,7 +854,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
 	*dn.refreshNodePtpDevice = true
 	dn.readyTracker.setConfig(true)
-	return sendSidecarRestart()
+	return dn.sendSidecarRestart()
 }
 
 func reconcileRelatedProfiles(profiles []ptpv1.PtpProfile) map[string]int {
@@ -1330,9 +1399,11 @@ func processStatus(c net.Conn, processName, messageTag string, status int64) {
 	// ptp4l[5196819.100]: [ptp4l.0.config] PTP_PROCESS_STOPPED:0/1
 
 	if c == nil {
+		glog.V(14).Infof("processStatus: process=%s config=%s status=%d via=prometheus", processName, cfgName, status)
 		UpdateProcessStatusMetrics(processName, cfgName, status)
 		return
 	}
+	glog.V(14).Infof("processStatus: process=%s config=%s status=%d via=socket", processName, cfgName, status)
 	logProcessStatus(processName, cfgName, status, c)
 }
 
@@ -1515,8 +1586,112 @@ func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.Plugin
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
-//
-//nolint:gocyclo // complexity is acceptable for this function
+// processOutput handles shared per-line processing for all process types:
+// chronyd prefix, plugin processing, clock ID replacement, log filtering,
+// metrics extraction, TBC transition check, and HA failover.
+func (p *ptpProcess) processOutput(output string, pm *plugin.PluginManager, profileClockType string) string {
+	if p.name == chronydProcessName {
+		output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
+	}
+	output = pm.ProcessLog(p.name, output)
+	output = p.replaceClockID(output)
+	printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
+	p.processPTPMetrics(output)
+	if p.name == ptp4lProcessName {
+		if profileClockType == TBC {
+			p.tBCTransitionCheck(output, pm)
+		}
+	} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
+		p.announceHAFailOver(nil, output)
+	}
+	return output
+}
+
+// runScanner reads process stdout without delay so the pipe never backs
+// up, processes each line, and pushes the result to lineCh for the
+// socket-writer. It closes lineCh when the scanner finishes.
+func (p *ptpProcess) runScanner(cmdReader io.Reader, lineCh chan<- string, pm *plugin.PluginManager, profileClockType string) {
+	scanner := bufio.NewScanner(cmdReader)
+	for scanner.Scan() {
+		output := p.processOutput(scanner.Text(), pm, profileClockType)
+		select {
+		case lineCh <- output:
+		default:
+			glog.Warning("liveGate: lineCh full, dropping line for socket forwarding")
+		}
+	}
+	close(lineCh)
+}
+
+// runSocketWriter connects to the event socket, waits for the live gate
+// (replay) to complete, drains stale lines, then forwards live lines to
+// CEP. On write failure it reconnects automatically.
+func (p *ptpProcess) runSocketWriter(lineCh <-chan string, doneCh chan<- struct{}) {
+	var err error
+connect:
+	glog.V(14).Infof("socket-writer[%s]: attempting dial to event socket", p.name)
+	select {
+	case <-p.exitCh:
+		glog.V(14).Infof("socket-writer[%s]: exitCh during dial, returning", p.name)
+		doneCh <- struct{}{}
+		return
+	default:
+		p.c, err = dialSocket()
+		if err != nil {
+			glog.V(14).Infof("socket-writer[%s]: dial failed: %v, retrying", p.name, err)
+			goto connect
+		}
+	}
+	glog.V(14).Infof("socket-writer[%s]: dial succeeded, waiting for liveGate", p.name)
+	p.dn.liveGate.Wait(liveGateTimeout)
+	glog.V(14).Infof("socket-writer[%s]: liveGate passed, sending LIVE_START", p.name)
+	if _, err2 := fmt.Fprintf(p.c, "%s\n", liveStartCommand); err2 != nil {
+		glog.Errorf("failed to write LIVE_START marker: %v", err2)
+		goto connect
+	}
+	glog.V(14).Infof("socket-writer[%s]: LIVE_START sent, draining stale buffer", p.name)
+	{
+		drained := 0
+	drainLoop:
+		for {
+			select {
+			case _, ok := <-lineCh:
+				if !ok {
+					glog.V(14).Infof("socket-writer[%s]: lineCh closed during drain", p.name)
+					doneCh <- struct{}{}
+					return
+				}
+				drained++
+			default:
+				break drainLoop
+			}
+		}
+		glog.V(14).Infof("socket-writer[%s]: drained %d stale lines, sending processStatus UP", p.name, drained)
+	}
+
+	processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
+	for _, d := range p.depProcess {
+		if d != nil {
+			d.ProcessStatus(p.c, PtpProcessUp)
+		}
+	}
+	glog.V(14).Infof("socket-writer[%s]: starting line forwarding loop", p.name)
+
+	for output := range lineCh {
+		if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
+			p.announceHAFailOver(p.c, output)
+		}
+		line := removeMessageSuffix(output) + "\n"
+		_, err2 := p.c.Write([]byte(line))
+		if err2 != nil {
+			glog.Errorf("socket-writer[%s]: write error: %v, reconnecting. line=%s", p.name, err2, output)
+			goto connect
+		}
+	}
+	glog.V(14).Infof("socket-writer[%s]: lineCh closed, forwarding done", p.name)
+	doneCh <- struct{}{}
+}
+
 func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 	cmd := p.cmd
 	stopped := p.getAndSetStopped(false)
@@ -1524,7 +1699,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 		glog.Infof("%s is already running", p.name)
 		return
 	}
-	doneCh := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
+	doneCh := make(chan struct{})
 	defer func() {
 		if stdoutToSocket && p.c != nil {
 			if err := p.c.Close(); err != nil {
@@ -1548,7 +1723,6 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			break
 		}
 
-		// don't discard process stderr output
 		cmd.Stderr = cmd.Stdout
 
 		if !stdoutToSocket {
@@ -1556,84 +1730,25 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			processStatus(nil, p.name, p.messageTag, PtpProcessUp)
 			go func() {
 				for scanner.Scan() {
-					output := scanner.Text()
-					if p.name == chronydProcessName {
-						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
-					}
-					output = pm.ProcessLog(p.name, output)
-					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface
-					output = p.replaceClockID(output)
-					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
-					p.processPTPMetrics(output)
-					if p.name == ptp4lProcessName {
-						if profileClockType == TBC {
-							p.tBCTransitionCheck(output, pm)
-						}
-					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-						p.announceHAFailOver(nil, output) // do not use go routine since order of execution is important here
-					}
+					p.processOutput(scanner.Text(), pm, profileClockType)
 				}
 				doneCh <- struct{}{}
 			}()
 		} else {
-			go func() {
-			connect:
-				select {
-				case <-p.exitCh:
-					doneCh <- struct{}{}
-				default:
-					p.c, err = dialSocket()
-					if err != nil {
-						goto connect
-					}
-				}
-				scanner := bufio.NewScanner(cmdReader)
-				processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
-				for _, d := range p.depProcess {
-					if d != nil {
-						d.ProcessStatus(p.c, PtpProcessUp)
-					}
-				}
-
-				for scanner.Scan() {
-					output := scanner.Text()
-					if p.name == chronydProcessName {
-						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
-					}
-					output = pm.ProcessLog(p.name, output)
-					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface
-					output = p.replaceClockID(output)
-					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
-
-					// for ts2phc, we need to extract metrics to identify GM state
-					p.processPTPMetrics(output)
-					if p.name == ptp4lProcessName {
-						if profileClockType == TBC {
-							p.tBCTransitionCheck(output, pm)
-						}
-					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-						p.announceHAFailOver(p.c, output) // do not use go routine since order of execution is important here
-					}
-					line := removeMessageSuffix(output) + "\n"
-					_, err2 := p.c.Write([]byte(line))
-					if err2 != nil {
-						glog.Errorf("Write %s error %s:", output, err2)
-						goto connect
-					}
-				}
-				doneCh <- struct{}{}
-			}()
+			lineCh := make(chan string, 256)
+			go p.runScanner(cmdReader, lineCh, pm, profileClockType)
+			go p.runSocketWriter(lineCh, doneCh)
 		}
-		// Don't restart after termination
+
 		if !p.Stopped() {
 			glog.Infof("starting %s...", p.name)
 			p.cmd = cmd
-			err = cmd.Start() // this is asynchronous call,
+			err = cmd.Start()
 			if err != nil {
 				glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
 			}
 
-			<-doneCh // goroutine is done
+			<-doneCh
 			err = cmd.Wait()
 
 			glog.Infof("done waiting for %s...", p.name)
@@ -1641,8 +1756,10 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 				glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
 			}
 			if stdoutToSocket && p.c != nil {
+				glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via socket", p.name)
 				processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
 			} else {
+				glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via prometheus", p.name)
 				processStatus(nil, p.name, p.messageTag, PtpProcessDown)
 			}
 			p.updateGMStatusOnProcessDown(p.name)
@@ -1651,8 +1768,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 		if profileClockType == TBC && p.name == ptp4lProcessName {
 			pm.AfterRunPTPCommand(&p.nodeProfile, "reset-to-default")
 		}
-		time.Sleep(connectionRetryInterval) // Delay to prevent flooding restarts if startup fails
-		// Don't restart after termination
+		time.Sleep(connectionRetryInterval)
 		if p.Stopped() {
 			glog.Infof("Not recreating %s...", p.name)
 			break
@@ -1662,6 +1778,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			cmd = newCmd
 		}
 		if stdoutToSocket && p.c != nil {
+			glog.V(14).Infof("cmdRun[%s]: closing old socket connection before restart", p.name)
 			if err2 := p.c.Close(); err2 != nil {
 				glog.Errorf("closing connection returned error %s", err2)
 			}
