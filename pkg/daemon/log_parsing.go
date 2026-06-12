@@ -117,8 +117,14 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		if ptpMetrics.Iface != "" && configName != "" {
 			masterOffsetIface.set(configName, ptpMetrics.Iface)
 		}
+		if ptpMetrics.Source == "master" && process.dn != nil {
+			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
+		}
 		process.sendPtp4lOffsetEvent()
 	case ts2phcProcessName:
+		if process.dn != nil {
+			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
+		}
 		// Send event for ts2phc
 		eventSource := process.ifaces.GetEventSource(process.ifaces.GetPhcID2IFace(ptpMetrics.Iface))
 		values := map[event.ValueType]interface{}{
