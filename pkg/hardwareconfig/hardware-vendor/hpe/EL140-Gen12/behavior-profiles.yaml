@@ -9,7 +9,7 @@ behaviorProfiles:
     pinRoles:
       gnssInputPin: GNSS_1PPS_IN  # DPLL pin used for GNSS input (that should be disabled for T-BC)
       ptpInputPin: 1PPS_IN0 # DPLL pin used for PTP input
-    
+
     # Source template - will be instantiated with resolved variables
     sources:
       - name: PTP
@@ -32,6 +32,27 @@ behaviorProfiles:
                 state: disconnected
               pps:
                 state: disconnected
+          - dpll:
+              subsystem: "{subsystem}"
+              boardLabel: "{ptpInputPin}"
+              eec:
+                state: disconnected
+              pps:
+                state: selectable
+          - dpll:
+              subsystem: "{subsystem}"
+              boardLabel: GNSS_10M_IN
+              eec:
+                state: disconnected
+              pps:
+                state: disconnected
+          - dpll:
+              subsystem: "{subsystem}"
+              boardLabel: 1PPS_IN1
+              eec:
+                state: disconnected
+              pps:
+                state: selectable
           - ptpPin:
               name: SDP2
               func: Disabled

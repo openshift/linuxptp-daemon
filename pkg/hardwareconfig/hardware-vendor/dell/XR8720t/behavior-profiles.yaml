@@ -32,6 +32,27 @@ behaviorProfiles:
                 state: disconnected
               pps:
                 state: disconnected
+          - dpll:
+              subsystem: "{subsystem}"
+              boardLabel: "{ptpInputPin}"
+              eec:
+                state: disconnected
+              pps:
+                state: selectable
+          - dpll:
+              subsystem: "{subsystem}"
+              boardLabel: GNSS_10M_IN
+              eec:
+                state: disconnected
+              pps:
+                state: disconnected
+          - dpll:
+              subsystem: "{subsystem}"
+              boardLabel: ETH01_SDP_TIMESYNC_2
+              eec:
+                state: disconnected
+              pps:
+                state: selectable
           - ptpPin:
               name: SDP2
               func: Disabled
