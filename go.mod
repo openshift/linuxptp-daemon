@@ -5,15 +5,18 @@ go 1.25.0
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/bigkevmcd/go-configparser v0.0.0-20240624060122-ccd05f93a9d2
+	github.com/cloudevents/sdk-go/v2 v2.15.2
 	github.com/facebook/time v0.0.0-20241030181404-3e1b98825c29
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/golang/glog v1.2.5
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
+	github.com/google/uuid v1.6.0
 	github.com/jaypipes/ghw v0.12.0
 	github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20260401142638-ef75480586ac
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.8.0
 	github.com/prometheus/client_golang v1.23.2
+	github.com/redhat-cne/sdk-go v1.23.6
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stratoberry/go-gpsd v1.1.0
 	github.com/stretchr/testify v1.11.1
@@ -47,7 +50,6 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/goterm v0.0.0-20190703233501-fc88cf888a3f // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/jaypipes/pcidb v1.0.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -65,6 +67,8 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/zap v1.27.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
