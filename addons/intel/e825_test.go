@@ -445,6 +445,7 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 		{
 			name:             "TGM Profile",
 			profile:          "./testdata/e825-tgm.yaml",
+			expectedPinSets:  2,
 			expectedDpllCmds: 1,
 		},
 		{
