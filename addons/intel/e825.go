@@ -62,6 +62,27 @@ func tbcConfigured(nodeProfile *ptpv1.PtpProfile) bool {
 	return nodeProfile.PtpSettings["clockType"] == "T-BC"
 }
 
+func leadingInterfaceForPinReset(nodeProfile *ptpv1.PtpProfile, devices []string) string {
+	if nodeProfile.PtpSettings != nil {
+		if device := nodeProfile.PtpSettings["leadingInterface"]; device != "" {
+			return device
+		}
+	}
+	if len(devices) > 0 {
+		return devices[0]
+	}
+	return ""
+}
+
+func applyNicPinReset(device string) {
+	if device == "" {
+		return
+	}
+	if err := pinConfig.applyPinSet(device, bcDpllPinReset); err != nil {
+		glog.Errorf("Could not apply BC pin reset to %s: %s", device, err)
+	}
+}
+
 // OnPTPConfigChangeE825 performs actions on PTP config change for e825 plugin
 func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	pluginData := (*data).(*E825PluginData)
@@ -153,6 +174,10 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 
 			updateLeapManagerSources(e825Opts.Gnss.LeapSources)
 
+			if !e825Opts.Gnss.Disabled {
+				applyNicPinReset(leadingInterfaceForPinReset(nodeProfile, allDevices))
+			}
+
 			// BC sanity check and pin setup
 			if tbcConfigured(nodeProfile) {
 				if _, ok := nodeProfile.PtpSettings["upstreamPort"]; !ok {
@@ -162,11 +187,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					// TODO: We could actually figure this out based on upstreamPort... And the fact that there's only one NAC per GNR-D
 					return errors.New("GNR-D T-BC must set leadingInterface")
 				}
-				device := nodeProfile.PtpSettings["leadingInterface"]
-				err = pinConfig.applyPinSet(device, bcDpllPinReset)
-				if err != nil {
-					glog.Errorf("Could not apply BC pin reset to %s: %s", device, err)
-				}
+				applyNicPinReset(nodeProfile.PtpSettings["leadingInterface"])
 				if inputPinErr := pluginData.setupDpllInputPins(); inputPinErr != nil {
 					glog.Errorf("Could not enable DPLL input pins for T-BC: %s", inputPinErr)
 				}

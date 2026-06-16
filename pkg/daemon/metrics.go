@@ -263,7 +263,7 @@ func updatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, freq
 
 // extractMetrics ...
 func extractMetrics(messageTag string, processName string, ifaces config.IFaces, output string, updateMetrics bool) (configName, source string, offset float64, state string, iface string) {
-	glog.V(4).Infof("DEBUG extractMetrics: process=%s updateMetrics=%v tag=%s", processName, updateMetrics, messageTag)
+	glog.V(14).Infof("DEBUG extractMetrics: process=%s updateMetrics=%v tag=%s", processName, updateMetrics, messageTag)
 	configName = strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
 	if configName != "" {
 		configName = strings.Split(configName, MessageTagSuffixSeperator)[0] // remove any suffix added to the configName
@@ -528,7 +528,7 @@ func updateClockStateMetrics(process, iface string, state string) {
 	if !utils.CheckMetricSanity("ClockState", process, iface) {
 		return
 	}
-	glog.V(4).Infof("updateClockStateMetrics: process=%s iface=%s state=%s", process, iface, state)
+	glog.V(14).Infof("updateClockStateMetrics: process=%s iface=%s state=%s", process, iface, state)
 	if state == LOCKED {
 		ClockState.With(prometheus.Labels{
 			"process": process, "node": NodeName, "iface": iface}).Set(1)
