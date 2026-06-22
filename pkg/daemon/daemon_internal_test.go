@@ -256,6 +256,80 @@ func Test_applyProfile_TBC(t *testing.T) {
 	}
 }
 
+func Test_applyProfile_TGM(t *testing.T) {
+	defer clean(t)
+	mkPath(t)
+
+	stopCh := make(<-chan struct{})
+	assert.NoError(t, leap.MockLeapFile())
+	defer func() {
+		close(leap.LeapMgr.Close)
+		time.Sleep(100 * time.Millisecond)
+		assert.Nil(t, leap.LeapMgr)
+	}()
+	dn := New(
+		"test-node-name",
+		"openshift-ptp",
+		false,
+		nil,
+		nil,
+		&LinuxPTPConfUpdate{
+			UpdateCh:     make(chan bool),
+			NodeProfiles: []ptpv1.PtpProfile{},
+		},
+		stopCh,
+		[]string{"e810"},
+		&[]ptpv1.HwConfig{},
+		nil,
+		make(chan bool),
+		30,
+		&ReadyTracker{},
+	)
+	assert.NotNil(t, dn)
+	_ = dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
+
+	profile, err := loadProfile("testdata/profile-tgm.yaml")
+	assert.NoError(t, err)
+
+	err = dn.applyNodePtpProfile(0, profile)
+	assert.NoError(t, err)
+
+	var ts2phcProc *ptpProcess
+	var ptp4lProc *ptpProcess
+	for _, p := range dn.processManager.process {
+		switch p.name {
+		case ts2phcProcessName:
+			ts2phcProc = p
+		case ptp4lProcessName:
+			ptp4lProc = p
+		}
+	}
+
+	// 1. ts2phc must have both gpsd and gpspipe as dependent processes.
+	if assert.NotNil(t, ts2phcProc, "ts2phc process should exist for T-GM profile") {
+		depNames := make([]string, len(ts2phcProc.depProcess))
+		for i, d := range ts2phcProc.depProcess {
+			depNames[i] = d.Name()
+		}
+		assert.Contains(t, depNames, GPSD_PROCESSNAME, "gpsd must be a dependent process of ts2phc for T-GM")
+		assert.Contains(t, depNames, GPSPIPE_PROCESSNAME, "gpspipe must be a dependent process of ts2phc for T-GM")
+	}
+
+	// 2. ptp4l should NOT have a PMC dependent process for GM profiles.
+	if assert.NotNil(t, ptp4lProc, "ptp4l process should exist for T-GM profile") {
+		for _, d := range ptp4lProc.depProcess {
+			assert.NotEqual(t, "pmc", d.Name(), "ptp4l should not have PMC as a dependent process for T-GM")
+		}
+	}
+
+	// 3. ts2phc opts must include holdover and servo parameters for GM.
+	// These are auto-appended by applyNodePtpProfile for GM clock types.
+	ts2phcOpts := *profile.Ts2PhcOpts
+	assert.Contains(t, ts2phcOpts, "--ts2phc.holdover", "ts2phc opts must include holdover timeout for T-GM")
+	assert.Contains(t, ts2phcOpts, "--servo_offset_threshold", "ts2phc opts must include servo offset threshold for T-GM")
+	assert.Contains(t, ts2phcOpts, "--servo_num_offset_values 10", "ts2phc opts must include servo num offset values for T-GM")
+}
+
 func TestGetPTPClockId_ValidInput(t *testing.T) {
 	p := &ptpProcess{
 		nodeProfile: ptpv1.PtpProfile{
