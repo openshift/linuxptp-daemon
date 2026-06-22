@@ -78,9 +78,10 @@ func newLeadingClockParams() *LeadingClockParams {
 }
 
 // updateBCState updates the BC/TSC state machine.
-// Called with e.Lock() held. Returns the clock sync state and whether a TTSC clock class
-// announcement is needed (the caller must perform the I/O after releasing the lock).
-func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) {
+// Called with e.Lock() held. Returns the clock sync state, whether a TTSC clock class
+// announcement is needed, and whether downstream data needs updating.
+// The caller must perform all I/O after releasing the lock.
+func (e *EventHandler) updateBCState(event Event) (clockSyncState, bool, bool) {
 	cfgName := event.CfgName
 	dpllState := PTP_NOTSET
 	ts2phcState := PTP_FREERUN
@@ -88,13 +89,13 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 	// For External GM data announces in the locked state, update whenever any of the
 	// information elements change
 	updateDownstreamData := false
-	if event.ProcessName == PTP4lProcessName {
+	if event.Source == PTP4lProcessName {
 		glog.Infof("PTP4l event: %+v", event)
 	}
 	leadingInterface := e.getLeadingInterfaceBC()
 	if leadingInterface == LEADING_INTERFACE_UNKNOWN {
 		glog.Infof("Leading interface is not yet identified, clock state reporting delayed.")
-		return clockSyncState{leadingIFace: leadingInterface}, false
+		return clockSyncState{leadingIFace: leadingInterface}, false, false
 	}
 
 	if _, ok := e.clkSyncState[cfgName]; !ok {
@@ -129,7 +130,7 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 		e.clkSyncState[cfgName].clkLog = fmt.Sprintf("T-BC[%d]:[%s] %s offset %d T-BC-STATUS %s\n",
 			e.clkSyncState[cfgName].lastLoggedTime, cfgName, leadingInterface, e.clkSyncState[cfgName].clockOffset,
 			e.clkSyncState[cfgName].state)
-		return *e.clkSyncState[cfgName], false
+		return *e.clkSyncState[cfgName], false, false
 	}
 
 	isTTSC := (e.LeadingClockData.clockID != "" && e.LeadingClockData.controlledPortsConfig == "")
@@ -231,13 +232,14 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 		e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClassSlaveOnly
 	}
 	needsTTSCAnnounce := false
+	needsDownstreamUpdate := false
 	if updateDownstreamData && e.clkSyncState[cfgName].clockClass != protocol.ClockClassUninitialized {
 		if isTTSC {
 			// Set clock class fields under lock; the caller will emit after releasing the lock
 			e.setClockClassLocked(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy)
 			needsTTSCAnnounce = true
 		} else {
-			go e.updateDownstreamData(cfgName)
+			needsDownstreamUpdate = true
 		}
 	}
 	// this will reduce log noise and prints 1 per sec
@@ -251,7 +253,7 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 		glog.Infof("dpll State %s, tsphc state %s, BC state %s, BC offset %d",
 			dpllState, ts2phcState, e.clkSyncState[cfgName].state, e.clkSyncState[cfgName].clockOffset)
 	}
-	return rclockSyncState, needsTTSCAnnounce
+	return rclockSyncState, needsTTSCAnnounce, needsDownstreamUpdate
 }
 
 // UpdateUpstreamParentDataSet updates the upstream time properties, parent data set, and current data set
@@ -636,8 +638,8 @@ func (e *EventHandler) getLeadingInterfaceBC() string {
 	return LEADING_INTERFACE_UNKNOWN
 }
 
-func (e *EventHandler) convergeConfig(event EventChannel) EventChannel {
-	if event.ProcessName == PTP4lProcessName {
+func (e *EventHandler) convergeConfig(event Event) Event {
+	if event.Source == PTP4lProcessName {
 		iface := event.IFace
 		ifacePhc := alias.GetPhcGroup(iface)
 		glog.Infof("convergeConfig: ptp4l iface=%s phcGroup=%q original cfgName=%s", iface, ifacePhc, event.CfgName)
@@ -667,35 +669,39 @@ func (e *EventHandler) convergeConfig(event EventChannel) EventChannel {
 	return event
 }
 
-func (e *EventHandler) updateLeadingClockData(event EventChannel) {
-	switch event.ProcessName {
+func (e *EventHandler) updateLeadingClockData(event Event) {
+	ptp, ok := event.Data.(*PTPData)
+	if !ok {
+		return
+	}
+	switch event.Source {
 	case PTP4lProcessName:
-		cpc, found := event.Values[ControlledPortsConfig].(string)
+		cpc, found := ptp.Values[ControlledPortsConfig].(string)
 		if found {
 			e.LeadingClockData.controlledPortsConfig = cpc
 		}
-		id, found := event.Values[ClockIDKey].(string)
+		id, found := ptp.Values[ClockIDKey].(string)
 		if found {
 			e.LeadingClockData.clockID = id
 		}
 	case DPLL:
-		ls, found := event.Values[LeadingSource].(bool)
+		ls, found := ptp.Values[LeadingSource].(bool)
 		if found && ls {
 			e.LeadingClockData.leadingInterface = event.IFace
 		}
-		inSyncTh, found := event.Values[InSyncConditionThreshold].(uint64)
+		inSyncTh, found := ptp.Values[InSyncConditionThreshold].(uint64)
 		if found {
 			e.LeadingClockData.inSyncConditionThreshold = int(inSyncTh)
 		}
-		inSyncTimes, found := event.Values[InSyncConditionTimes].(uint64)
+		inSyncTimes, found := ptp.Values[InSyncConditionTimes].(uint64)
 		if found {
 			e.LeadingClockData.inSyncConditionTimes = int(inSyncTimes)
 		}
-		toFreeRunTh, found := event.Values[ToFreeRunThreshold].(uint64)
+		toFreeRunTh, found := ptp.Values[ToFreeRunThreshold].(uint64)
 		if found {
 			e.LeadingClockData.toFreeRunThreshold = int(toFreeRunTh)
 		}
-		maxInSpec, found := event.Values[MaxInSpecOffset].(uint64)
+		maxInSpec, found := ptp.Values[MaxInSpecOffset].(uint64)
 		if found {
 			e.LeadingClockData.MaxInSpecOffset = maxInSpec
 		}

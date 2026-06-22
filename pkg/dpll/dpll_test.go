@@ -180,17 +180,16 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
 	assert.True(t, dpll.MockDpllReplies != nil)
-	eChannel := make(chan event.EventChannel, 10)
+	eChannel := make(chan event.Event, 10)
 	closeChn := make(chan bool)
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 	d.CmdInit()
-	eventChannel := make(chan event.EventChannel, 10)
+	eventChannel := make(chan event.Event, 10)
 	go eventProcessor.ProcessEvents()
 
-	eventProcessor.ForceMonitoringTick()
 	if d != nil {
 		d.MonitorProcess(config.ProcessConfig{
 			ClockType:       "GM",
@@ -223,17 +222,16 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
 	assert.True(t, dpll.MockDpllReplies != nil)
-	eChannel := make(chan event.EventChannel, 10)
+	eChannel := make(chan event.Event, 10)
 	closeChn := make(chan bool)
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 	d.CmdInit()
-	eventChannel := make(chan event.EventChannel, 10)
+	eventChannel := make(chan event.Event, 10)
 	go eventProcessor.ProcessEvents()
 
-	eventProcessor.ForceMonitoringTick()
 	if d != nil {
 		d.MonitorProcess(config.ProcessConfig{
 			ClockType:       "GM",
@@ -264,17 +262,16 @@ func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 func TestDpllConfig_MonitorProcessPartial(t *testing.T) {
 	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
 	assert.True(t, dpll.MockDpllReplies != nil)
-	eChannel := make(chan event.EventChannel, 10)
+	eChannel := make(chan event.Event, 10)
 	closeChn := make(chan bool)
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, dpll.FlagOnlyPhaseStatus)
 	d.CmdInit()
-	eventChannel := make(chan event.EventChannel, 10)
+	eventChannel := make(chan event.Event, 10)
 	go eventProcessor.ProcessEvents()
 
-	eventProcessor.ForceMonitoringTick()
 	if d != nil {
 		d.MonitorProcess(config.ProcessConfig{
 			ClockType:       "GM",

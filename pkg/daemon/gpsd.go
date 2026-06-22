@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -44,7 +46,6 @@ type GPSD struct {
 	serialPort           string
 	exitCh               chan struct{}
 	stopped              bool
-	state                event.PTPState
 	noFixStateOccurrence int // number of times no fix state has occurred
 	offset               int64
 	processConfig        config.ProcessConfig
@@ -54,7 +55,6 @@ type GPSD struct {
 	gpsdSession          *gpsdlib.Session
 	gpsdDoneCh           chan bool
 	sourceLost           bool
-	subscriber           *GPSDSubscriber
 	monitorCtx           context.Context
 	monitorCancel        context.CancelFunc
 	c                    net.Conn
@@ -63,44 +63,9 @@ type GPSD struct {
 	cmdRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
-// GPSDSubscriber ... event subscriber
-type GPSDSubscriber struct {
-	source event.EventSource
-	gpsd   *GPSD
-	id     string
-}
-
-// Monitor ...
-func (s GPSDSubscriber) Monitor() {
-	glog.Info("Starting GNSS Monitoring")
-
-	go s.gpsd.MonitorGNSSEventsWithUblox()
-}
-
-// Topic ... event topic
-func (s GPSDSubscriber) Topic() event.EventSource {
-	return s.source
-}
-func (s GPSDSubscriber) ID() string {
-	return s.id
-}
-
-// Notify ... event notification
-func (s GPSDSubscriber) Notify(source event.EventSource, state event.PTPState) {
-	// not implemented
-}
-
 // MonitorProcess ... Monitor GPSD process
 func (g *GPSD) MonitorProcess(p config.ProcessConfig) {
 	g.processConfig = p
-}
-
-func (g *GPSD) registerSubscriber() {
-	event.StateRegisterer.Register(g.subscriber)
-}
-
-func (g *GPSD) unRegisterSubscriber() {
-	event.StateRegisterer.Unregister(g.subscriber)
 }
 
 // Name ... Process name
@@ -150,7 +115,6 @@ func (g *GPSD) CmdStop() {
 			glog.Infof("Process %s (%d) failed to terminate", g.name, g.cmd.Process.Pid)
 		}
 	}
-	g.unRegisterSubscriber()
 	<-g.exitCh // waiting for all child routines to exit; we could add timeout to avoid waiting
 	g.monitorCancel()
 	glog.Infof("Process %s terminated", g.name)
@@ -200,17 +164,7 @@ func (g *GPSD) ProcessStatus(c net.Conn, status int64) {
 
 // CmdRun ... run GPSD
 func (g *GPSD) CmdRun(stdoutToSocket bool) {
-	defer func() {
-		if g.subscriber != nil {
-			g.unRegisterSubscriber()
-		}
-	}()
-	// clean up
-	if g.subscriber != nil {
-		g.unRegisterSubscriber()
-	}
-	g.subscriber = &GPSDSubscriber{source: event.MONITORING, gpsd: g, id: string(event.GNSS)}
-	g.registerSubscriber()
+	go g.MonitorGNSSEventsWithUblox()
 
 	for {
 		g.ProcessStatus(nil, PtpProcessUp)
@@ -249,122 +203,133 @@ func (g *GPSD) CmdRun(stdoutToSocket bool) {
 
 // MonitorGNSSEventsWithUblox ... monitor GNSS events with ublox
 func (g *GPSD) MonitorGNSSEventsWithUblox() {
-	//var ublx *ublox.UBlox
-	const timeLsResultLines = 4
-	g.state = event.PTP_FREERUN
 	ticker := time.NewTicker(GNSSMONITOR_INTERVAL)
 	doneFn := func() {
 		select {
-		case g.processConfig.EventChannel <- event.EventChannel{
-			ProcessName: event.GNSS,
-			CfgName:     g.processConfig.ConfigName,
-			ClockType:   g.processConfig.ClockType,
-			Time:        time.Now().UnixMilli(),
-			Reset:       true,
+		case g.processConfig.EventChannel <- event.Event{
+			Source:    event.GNSS,
+			CfgName:   g.processConfig.ConfigName,
+			ClockType: g.processConfig.ClockType,
+			Time:      time.Now().UnixMilli(),
+			Reset:     true,
 		}:
 		default:
 			glog.Error("failed to send gnss terminated event to eventHandler")
 		}
 		ticker.Stop()
-		return // exit
 	}
-retry:
-	if ublx, err := ublox.NewUblox(); err != nil {
-		glog.Errorf("failed to initialize GNSS monitoring via ublox %s", err)
-		time.Sleep(GNSSMONITOR_INTERVAL)
-		goto retry
-	} else {
-		//TODO: monitor on 1PPS  events trigger
+	for {
+		ublx, err := ublox.NewUblox()
+		if err != nil {
+			glog.Errorf("failed to initialize GNSS monitoring via ublox %s", err)
+			select {
+			case <-g.monitorCtx.Done():
+				doneFn()
+				return
+			case <-time.After(GNSSMONITOR_INTERVAL):
+				continue
+			}
+		}
 		g.ublxTool = ublx
-		nStatus := int64(0)
-		nOffset := int64(99999999)
 		missedTickers := 0
-		var timeLs *ublox.TimeLs
 		for {
 			select {
 			case <-ticker.C:
+				ublx.UbloxPollInit()
+				var lines []string
 				emptyCount := 0
-				timeLs = nil
 				for {
-					//UbloxPollInit only initializes if not running
-					ublx.UbloxPollInit()
-					output := ublx.UbloxPollPull()
-					if strings.Contains(output, "UBX-NAV-CLOCK") {
-						nextLine := ublx.UbloxPollPull()
-						//parse
-						nOffset = ublox.ExtractOffset(nextLine)
-						emptyCount = 0
-						missedTickers = 0
-					} else if strings.Contains(output, "UBX-NAV-STATUS") {
-						nextLine := ublx.UbloxPollPull()
-						//parse
-						nStatus = ublox.ExtractNavStatus(nextLine)
-						emptyCount = 0
-						missedTickers = 0
-					} else if strings.Contains(output, "UBX-NAV-TIMELS") {
-						emptyCount = 0
-						missedTickers = 0
-						var lines []string
-						for i := 0; i < timeLsResultLines; i++ {
-							line := ublx.UbloxPollPull()
-							lines = append(lines, line)
-						}
-						timeLs = ublox.ExtractLeapSec(lines)
-					} else if len(output) == 0 {
+					line := ublx.UbloxPollPull()
+					if len(line) == 0 {
 						emptyCount++
-					}
-					if emptyCount >= 10 {
-						missedTickers++
-						if missedTickers > 3 {
-							ublx.UbloxPollReset()
-							missedTickers = 0
+						if emptyCount >= 10 {
+							missedTickers++
+							if missedTickers > 3 {
+								ublx.UbloxPollReset()
+								missedTickers = 0
+							}
+							break
 						}
-						break
+						continue
 					}
-				} // loop ends
-				g.offset = nOffset
-				g.sourceLost = false
-				switch nStatus >= 3 {
-				case true:
-					g.state = event.PTP_LOCKED
-					if !g.isOffsetInRange() {
-						g.state = event.PTP_FREERUN
-					}
-				default:
-					g.state = event.PTP_FREERUN
-					g.sourceLost = true
+					emptyCount = 0
+					missedTickers = 0
+					lines = append(lines, line)
 				}
-				select {
-				case g.processConfig.EventChannel <- event.EventChannel{
-					ProcessName: event.GNSS,
-					State:       g.state,
-					CfgName:     g.processConfig.ConfigName,
-					IFace:       g.gmInterface,
-					Values: map[event.ValueType]interface{}{
-						event.GPS_STATUS: nStatus,
-						event.OFFSET:     g.offset,
-					},
-					ClockType:  g.processConfig.ClockType,
-					Time:       time.Now().UnixMilli(),
-					SourceLost: g.sourceLost,
-					WriteToLog: true,
-					Reset:      false,
-				}:
-				default:
-					glog.Error("failed to send gnss terminated event to eventHandler")
+				if len(lines) > 0 {
+					g.processGNSSLines(strings.NewReader(strings.Join(lines, "\n")))
 				}
-				if timeLs != nil {
-					select {
-					case leap.LeapMgr.UbloxLsInd <- *timeLs:
-					case <-time.After(100 * time.Millisecond):
-						glog.Infof("failied to send leap event updates")
-					}
-				}
-
 			case <-g.monitorCtx.Done():
 				doneFn()
 				return
 			}
+		}
+	}
+}
+
+// processGNSSLines reads ubxtool-formatted lines from r, extracts
+// GNSS status and offset, determines the sync state, and emits an
+// event on the event channel and gnssNotifyCh.
+func (g *GPSD) processGNSSLines(r io.Reader) {
+	const timeLsResultLines = 4
+	scanner := bufio.NewScanner(r)
+	nStatus := int64(0)
+	nOffset := int64(99999999)
+	var timeLs *ublox.TimeLs
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "UBX-NAV-CLOCK") {
+			if scanner.Scan() {
+				nOffset = ublox.ExtractOffset(scanner.Text())
+			}
+		} else if strings.Contains(line, "UBX-NAV-STATUS") {
+			if scanner.Scan() {
+				nStatus = ublox.ExtractNavStatus(scanner.Text())
+			}
+		} else if strings.Contains(line, "UBX-NAV-TIMELS") {
+			var lines []string
+			for i := 0; i < timeLsResultLines; i++ {
+				if !scanner.Scan() {
+					break
+				}
+				lines = append(lines, scanner.Text())
+			}
+			timeLs = ublox.ExtractLeapSec(lines)
+		}
+	}
+
+	g.offset = nOffset
+	g.sourceLost = false
+	switch nStatus >= 3 {
+	case true:
+		if !g.isOffsetInRange() {
+			g.sourceLost = true
+		}
+	default:
+		g.sourceLost = true
+	}
+	if g.processConfig.EventChannel != nil {
+		select {
+		case g.processConfig.EventChannel <- event.Event{
+			Source:     event.GNSS,
+			CfgName:    g.processConfig.ConfigName,
+			IFace:      g.gmInterface,
+			ClockType:  g.processConfig.ClockType,
+			Time:       time.Now().UnixMilli(),
+			WriteToLog: true,
+			Reset:      false,
+			Data:       &event.GNSSData{GPSStatus: nStatus, Offset: g.offset, SourceLost: g.sourceLost},
+		}:
+		default:
+			glog.Error("failed to send gnss event to eventHandler")
+		}
+	}
+	if timeLs != nil && leap.LeapMgr != nil {
+		select {
+		case leap.LeapMgr.UbloxLsInd <- *timeLs:
+		case <-time.After(100 * time.Millisecond):
+			glog.Infof("failed to send leap event updates")
 		}
 	}
 }

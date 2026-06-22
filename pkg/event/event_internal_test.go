@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	fbprotocol "github.com/facebook/time/ptp/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 )
@@ -14,7 +16,7 @@ type MockData struct {
 }
 
 type MockEventHandler struct {
-	Event EventChannel
+	Event Event
 	e     EventHandler
 }
 
@@ -32,9 +34,9 @@ func TestConvergeConfig(t *testing.T) {
 				data: mockData.Data,
 			},
 
-			Event: EventChannel{
-				ProcessName: PTP4lProcessName,
-				IFace:       "eth0",
+			Event: Event{
+				Source: PTP4lProcessName,
+				IFace:  "eth0",
 			},
 		}
 		mockEventHandler.Event = mockEventHandler.e.convergeConfig(mockEventHandler.Event)
@@ -53,9 +55,9 @@ func TestConvergeConfig(t *testing.T) {
 			e: EventHandler{
 				data: mockData.Data,
 			},
-			Event: EventChannel{
-				ProcessName: PTP4lProcessName,
-				IFace:       "ens5f0",
+			Event: Event{
+				Source: PTP4lProcessName,
+				IFace:  "ens5f0",
 			},
 		}
 
@@ -75,9 +77,9 @@ func TestConvergeConfig(t *testing.T) {
 			e: EventHandler{
 				data: mockData.Data,
 			},
-			Event: EventChannel{
-				ProcessName: "otherProcess",
-				IFace:       "eth0",
+			Event: Event{
+				Source: "otherProcess",
+				IFace:  "eth0",
 			},
 		}
 
@@ -86,17 +88,24 @@ func TestConvergeConfig(t *testing.T) {
 	})
 }
 
+const (
+	testConfig = "config"
+	testIface  = "iface"
+)
+
 func TestUpdateLeadingClockData_PTP4lProcessName(t *testing.T) {
-	event := EventChannel{
-		ProcessName: PTP4lProcessName,
-		Values: map[ValueType]interface{}{
-			ControlledPortsConfig: "config",
-			ClockIDKey:            "clockID",
+	event := Event{
+		Source: PTP4lProcessName,
+		Data: &PTPData{
+			Values: map[ValueType]interface{}{
+				ControlledPortsConfig: testConfig,
+				ClockIDKey:            "clockID",
+			},
 		},
 	}
 
 	expectedLeadingClockData := LeadingClockParams{
-		controlledPortsConfig: "config",
+		controlledPortsConfig: testConfig,
 		clockID:               "clockID",
 	}
 
@@ -110,20 +119,22 @@ func TestUpdateLeadingClockData_PTP4lProcessName(t *testing.T) {
 }
 
 func TestUpdateLeadingClockData_DPLL(t *testing.T) {
-	event := EventChannel{
-		ProcessName: DPLL,
-		IFace:       "iface",
-		Values: map[ValueType]interface{}{
-			LeadingSource:            true,
-			InSyncConditionThreshold: uint64(100),
-			InSyncConditionTimes:     uint64(200),
-			ToFreeRunThreshold:       uint64(300),
-			MaxInSpecOffset:          uint64(400),
+	event := Event{
+		Source: DPLL,
+		IFace:  testIface,
+		Data: &PTPData{
+			Values: map[ValueType]interface{}{
+				LeadingSource:            true,
+				InSyncConditionThreshold: uint64(100),
+				InSyncConditionTimes:     uint64(200),
+				ToFreeRunThreshold:       uint64(300),
+				MaxInSpecOffset:          uint64(400),
+			},
 		},
 	}
 
 	expectedLeadingClockData := LeadingClockParams{
-		leadingInterface:         "iface",
+		leadingInterface:         testIface,
 		inSyncConditionThreshold: 100,
 		inSyncConditionTimes:     200,
 		toFreeRunThreshold:       300,
@@ -652,13 +663,12 @@ func TestGetLargestOffset_PartiallyFilledWindowBlocksResult(t *testing.T) {
 }
 
 func TestAddEvent_SourceLostPropagation(t *testing.T) {
-	StateRegisterer = NewStateNotifier()
 	now := time.Now().UnixMilli()
 
 	tests := []struct {
 		name            string
 		initialDetails  []*DataDetails
-		event           EventChannel
+		event           Event
 		expectedStates  map[string]PTPState
 		expectedSrcLost map[string]bool
 	}{
@@ -668,12 +678,11 @@ func TestAddEvent_SourceLostPropagation(t *testing.T) {
 				{IFace: "eno8903", State: PTP_LOCKED, sourceLost: false, time: now - 5000},
 				{IFace: "eno8703", State: PTP_LOCKED, sourceLost: false, time: now - 3000},
 			},
-			event: EventChannel{
-				ProcessName: PTP4l,
-				IFace:       "eno8703",
-				State:       PTP_FREERUN,
-				SourceLost:  true,
-				Time:        now,
+			event: Event{
+				Source: PTP4l,
+				IFace:  "eno8703",
+				Time:   now,
+				Data:   &PTPData{State: PTP_FREERUN, SourceLost: true},
 			},
 			expectedStates: map[string]PTPState{
 				"eno8903": PTP_FREERUN,
@@ -690,12 +699,11 @@ func TestAddEvent_SourceLostPropagation(t *testing.T) {
 				{IFace: "eno8903", State: PTP_FREERUN, sourceLost: true, time: now - 2000},
 				{IFace: "eno8703", State: PTP_LOCKED, sourceLost: false, time: now - 1000},
 			},
-			event: EventChannel{
-				ProcessName: PTP4l,
-				IFace:       "eno8703",
-				State:       PTP_FREERUN,
-				SourceLost:  true,
-				Time:        now,
+			event: Event{
+				Source: PTP4l,
+				IFace:  "eno8703",
+				Time:   now,
+				Data:   &PTPData{State: PTP_FREERUN, SourceLost: true},
 			},
 			expectedStates: map[string]PTPState{
 				"eno8903": PTP_FREERUN,
@@ -712,12 +720,11 @@ func TestAddEvent_SourceLostPropagation(t *testing.T) {
 				{IFace: "eno8903", State: PTP_LOCKED, sourceLost: false, time: now - 5000},
 				{IFace: "eno8703", State: PTP_FREERUN, sourceLost: false, time: now - 3000},
 			},
-			event: EventChannel{
-				ProcessName: PTP4l,
-				IFace:       "eno8703",
-				State:       PTP_LOCKED,
-				SourceLost:  false,
-				Time:        now,
+			event: Event{
+				Source: PTP4l,
+				IFace:  "eno8703",
+				Time:   now,
+				Data:   &PTPData{State: PTP_LOCKED, SourceLost: false},
 			},
 			expectedStates: map[string]PTPState{
 				"eno8903": PTP_LOCKED,
@@ -773,12 +780,11 @@ func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 		assert.False(t, e.isSourceLostBC("cfg"), "before source-lost event, ptpLost should be false")
 
 		// Simulate source-lost event on eno8703 (active port fallback)
-		ptp4lData.AddEvent(EventChannel{
-			ProcessName: PTP4l,
-			IFace:       "eno8703",
-			State:       PTP_FREERUN,
-			SourceLost:  true,
-			Time:        now,
+		ptp4lData.AddEvent(Event{
+			Source: PTP4l,
+			IFace:  "eno8703",
+			Time:   now,
+			Data:   &PTPData{State: PTP_FREERUN, SourceLost: true},
 		})
 
 		// After source-lost propagation: PTP source should be lost
@@ -805,5 +811,502 @@ func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 			},
 		}
 		assert.False(t, e.isSourceLostBC("cfg"))
+	})
+}
+
+// fillDataWindows fills all Data windows in the given config with their
+// first detail's offset value. This satisfies getLargestOffset's requirement
+// that the window be full before it returns a real value.
+func fillDataWindows(e *EventHandler, cfgName string, offset int64) { //nolint:unparam // cfgName kept for clarity
+	for _, d := range e.data[cfgName] {
+		d.window = *utils.NewWindow(WindowSize)
+		for i := 0; i < WindowSize; i++ {
+			d.window.Insert(float64(offset))
+		}
+	}
+}
+
+func TestUpdateGMState(t *testing.T) {
+	const cfg = "ts2phc.0.config"
+	const iface = "ens1f0"
+
+	makeEvent := func(process EventSource, state PTPState, sourceLost bool) Event {
+		e := Event{
+			Source:     process,
+			IFace:      iface,
+			CfgName:    cfg,
+			ClockType:  GM,
+			Time:       time.Now().UnixMilli(),
+			WriteToLog: true,
+		}
+		if process == GNSS {
+			var gpsStatus int64
+			if state == PTP_LOCKED {
+				gpsStatus = 3
+			}
+			e.Data = &GNSSData{GPSStatus: gpsStatus, Offset: 0, SourceLost: sourceLost}
+		} else {
+			e.Data = &PTPData{
+				State:      state,
+				Values:     map[ValueType]interface{}{OFFSET: int64(0)},
+				SourceLost: sourceLost,
+			}
+		}
+		return e
+	}
+
+	type step struct {
+		events         []Event
+		outOfSpec      bool
+		frequencyTrace bool
+		wantState      PTPState
+		wantClockClass fbprotocol.ClockClass
+	}
+
+	tests := []struct {
+		desc  string
+		steps []step
+	}{
+		{
+			desc: "all sources locked",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_LOCKED, false),
+						makeEvent(TS2PHCProcessName, PTP_LOCKED, false),
+					},
+					wantState:      PTP_LOCKED,
+					wantClockClass: fbprotocol.ClockClass6,
+				},
+			},
+		},
+		{
+			desc: "DPLL locked, GNSS locked, ts2phc freerun",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_LOCKED, false),
+						makeEvent(TS2PHCProcessName, PTP_FREERUN, false),
+					},
+					wantState:      PTP_FREERUN,
+					wantClockClass: protocol.ClockClassFreerun,
+				},
+			},
+		},
+		{
+			desc: "DPLL holdover",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_HOLDOVER, false),
+						makeEvent(TS2PHCProcessName, PTP_LOCKED, false),
+					},
+					wantState:      PTP_HOLDOVER,
+					wantClockClass: fbprotocol.ClockClass7,
+				},
+			},
+		},
+		{
+			desc: "DPLL freerun",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_FREERUN, false),
+						makeEvent(TS2PHCProcessName, PTP_LOCKED, false),
+					},
+					wantState:      PTP_FREERUN,
+					wantClockClass: protocol.ClockClassFreerun,
+				},
+			},
+		},
+		{
+			desc: "DPLL freerun after holdover out of spec",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_FREERUN, false),
+					},
+					outOfSpec:      true,
+					frequencyTrace: true,
+					wantState:      PTP_FREERUN,
+					wantClockClass: protocol.ClockClassOutOfSpec,
+				},
+			},
+		},
+		{
+			desc: "no DPLL yet, GNSS and ts2phc locked",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(TS2PHCProcessName, PTP_LOCKED, false),
+					},
+					wantState:      PTP_LOCKED,
+					wantClockClass: fbprotocol.ClockClass6,
+				},
+			},
+		},
+		{
+			desc: "GNSS sourceLost with ts2phc locked - stay with last state",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_LOCKED, false),
+						makeEvent(TS2PHCProcessName, PTP_LOCKED, false),
+					},
+					wantState:      PTP_LOCKED,
+					wantClockClass: fbprotocol.ClockClass6,
+				},
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_FREERUN, true),
+					},
+					wantState:      PTP_LOCKED,
+					wantClockClass: fbprotocol.ClockClass6,
+				},
+			},
+		},
+		{
+			desc: "DPLL locked, GNSS locked, ts2phc holdover",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_LOCKED, false),
+						makeEvent(TS2PHCProcessName, PTP_HOLDOVER, false),
+					},
+					wantState:      PTP_HOLDOVER,
+					wantClockClass: fbprotocol.ClockClass7,
+				},
+			},
+		},
+		{
+			desc: "GNSS lost with ts2phc holdover",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_FREERUN, true),
+						makeEvent(DPLL, PTP_LOCKED, false),
+						makeEvent(TS2PHCProcessName, PTP_HOLDOVER, false),
+					},
+					wantState:      PTP_HOLDOVER,
+					wantClockClass: fbprotocol.ClockClass7,
+				},
+			},
+		},
+		{
+			desc: "GNSS sourceLost waits for DPLL holdover then transitions to clockClass 7",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_LOCKED, false),
+						makeEvent(TS2PHCProcessName, PTP_LOCKED, false),
+					},
+					wantState:      PTP_LOCKED,
+					wantClockClass: fbprotocol.ClockClass6,
+				},
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_FREERUN, true),
+					},
+					wantState:      PTP_LOCKED,
+					wantClockClass: fbprotocol.ClockClass6,
+				},
+				{
+					events: []Event{
+						makeEvent(DPLL, PTP_HOLDOVER, false),
+					},
+					wantState:      PTP_HOLDOVER,
+					wantClockClass: fbprotocol.ClockClass7,
+				},
+			},
+		},
+		{
+			desc: "GNSS sourceLost then recovery restores clockClass 6",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_LOCKED, false),
+						makeEvent(TS2PHCProcessName, PTP_LOCKED, false),
+					},
+					wantState:      PTP_LOCKED,
+					wantClockClass: fbprotocol.ClockClass6,
+				},
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_FREERUN, true),
+						makeEvent(DPLL, PTP_HOLDOVER, false),
+					},
+					wantState:      PTP_HOLDOVER,
+					wantClockClass: fbprotocol.ClockClass7,
+				},
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_LOCKED, false),
+					},
+					wantState:      PTP_LOCKED,
+					wantClockClass: fbprotocol.ClockClass6,
+				},
+			},
+		},
+		{
+			desc: "GNSS FREERUN without sourceLost goes to clockClass 248",
+			steps: []step{
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_LOCKED, false),
+						makeEvent(DPLL, PTP_LOCKED, false),
+						makeEvent(TS2PHCProcessName, PTP_LOCKED, false),
+					},
+					wantState:      PTP_LOCKED,
+					wantClockClass: fbprotocol.ClockClass6,
+				},
+				{
+					events: []Event{
+						makeEvent(GNSS, PTP_FREERUN, false),
+					},
+					wantState:      PTP_FREERUN,
+					wantClockClass: protocol.ClockClassFreerun,
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			e := &EventHandler{
+				data:             map[string][]*Data{},
+				clkSyncState:     map[string]*clockSyncState{},
+				LeadingClockData: newLeadingClockParams(),
+			}
+
+			for i, s := range tt.steps {
+				for _, ev := range s.events {
+					e.addEvent(ev)
+				}
+				e.outOfSpec = s.outOfSpec
+				e.frequencyTraceable = s.frequencyTrace
+
+				result := e.updateGMState(cfg)
+				assert.Equal(t, s.wantState, result.state, "step %d: state", i)
+				assert.Equal(t, s.wantClockClass, result.clockClass, "step %d: clockClass", i)
+			}
+		})
+	}
+}
+
+func TestUpdateBCState(t *testing.T) {
+	const cfg = "ptp4l.0.config"
+	const iface = "ens1f0"
+
+	makeBCEvent := func(process EventSource, state PTPState, offset int64, sourceLost bool) Event {
+		return Event{
+			Source:     process,
+			IFace:      iface,
+			CfgName:    cfg,
+			ClockType:  BC,
+			Time:       time.Now().UnixMilli(),
+			WriteToLog: true,
+			Data: &PTPData{
+				State:      state,
+				Values:     map[ValueType]interface{}{OFFSET: offset},
+				SourceLost: sourceLost,
+			},
+		}
+	}
+
+	newBCHandler := func() *EventHandler {
+		return &EventHandler{
+			data:         map[string][]*Data{},
+			clkSyncState: map[string]*clockSyncState{},
+			LeadingClockData: &LeadingClockParams{
+				leadingInterface:         iface,
+				inSyncConditionThreshold: 100,
+				inSyncConditionTimes:     1,
+				toFreeRunThreshold:       1500,
+				MaxInSpecOffset:          500,
+				upstreamParentDataSet:    &protocol.ParentDataSet{},
+				upstreamTimeProperties:   &protocol.TimePropertiesDS{},
+				downstreamParentDataSet:  &protocol.ParentDataSet{},
+				downstreamTimeProperties: &protocol.TimePropertiesDS{},
+			},
+		}
+	}
+
+	t.Run("FREERUN to LOCKED", func(t *testing.T) {
+		e := newBCHandler()
+
+		e.addEvent(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_LOCKED, 10, false))
+		fillDataWindows(e, cfg, 10)
+
+		result, needsTTSCAnnounce, needsDownstreamUpdate := e.updateBCState(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+		assert.Equal(t, PTP_LOCKED, result.state, "should transition to LOCKED")
+		assert.False(t, needsTTSCAnnounce, "not a TTSC")
+		assert.False(t, needsDownstreamUpdate, "clockClass still uninitialized, no downstream update")
+	})
+
+	t.Run("LOCKED to FREERUN via offset", func(t *testing.T) {
+		e := newBCHandler()
+
+		// First establish LOCKED state
+		e.addEvent(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_LOCKED, 10, false))
+		fillDataWindows(e, cfg, 10)
+		result, _, _ := e.updateBCState(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+		assert.Equal(t, PTP_LOCKED, result.state, "setup: should be LOCKED")
+
+		// Now send offset exceeding toFreeRunThreshold (1500)
+		e.addEvent(makeBCEvent(DPLL, PTP_LOCKED, 2000, false))
+		result, needsTTSCAnnounce, needsDownstreamUpdate := e.updateBCState(makeBCEvent(DPLL, PTP_LOCKED, 2000, false))
+		assert.Equal(t, PTP_FREERUN, result.state, "should transition to FREERUN")
+		assert.Equal(t, protocol.ClockClassFreerun, result.clockClass, "clockClass should be 248")
+		assert.False(t, needsTTSCAnnounce, "not a TTSC")
+		assert.True(t, needsDownstreamUpdate, "FREERUN clockClass set, downstream needs update")
+	})
+
+	t.Run("LOCKED to HOLDOVER via source lost", func(t *testing.T) {
+		e := newBCHandler()
+
+		// Establish LOCKED state
+		e.addEvent(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_LOCKED, 10, false))
+		fillDataWindows(e, cfg, 10)
+		result, _, _ := e.updateBCState(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+		assert.Equal(t, PTP_LOCKED, result.state, "setup: should be LOCKED")
+
+		// Source lost: PTP4l goes FREERUN, DPLL goes HOLDOVER
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_FREERUN, 10, true))
+		e.addEvent(makeBCEvent(DPLL, PTP_HOLDOVER, 10, false))
+		result, needsTTSCAnnounce, needsDownstreamUpdate := e.updateBCState(makeBCEvent(DPLL, PTP_HOLDOVER, 10, false))
+		assert.Equal(t, PTP_HOLDOVER, result.state, "should transition to HOLDOVER")
+		assert.Equal(t, fbprotocol.ClockClass(135), result.clockClass, "clockClass should be 135 (holdover in-spec)")
+		assert.False(t, needsTTSCAnnounce, "not a TTSC")
+		assert.True(t, needsDownstreamUpdate, "holdover clockClass set, downstream needs update")
+	})
+
+	t.Run("HOLDOVER to LOCKED", func(t *testing.T) {
+		e := newBCHandler()
+
+		// Establish LOCKED then HOLDOVER
+		e.addEvent(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_LOCKED, 10, false))
+		fillDataWindows(e, cfg, 10)
+		e.updateBCState(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_FREERUN, 10, true))
+		e.addEvent(makeBCEvent(DPLL, PTP_HOLDOVER, 10, false))
+		result, _, _ := e.updateBCState(makeBCEvent(DPLL, PTP_HOLDOVER, 10, false))
+		assert.Equal(t, PTP_HOLDOVER, result.state, "setup: should be HOLDOVER")
+
+		// Restore: PTP4l and DPLL back to LOCKED
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_LOCKED, 5, false))
+		e.addEvent(makeBCEvent(DPLL, PTP_LOCKED, 5, false))
+		fillDataWindows(e, cfg, 5)
+		e.LeadingClockData.inSyncThresholdCounter = 0
+		result, needsTTSCAnnounce, needsDownstreamUpdate := e.updateBCState(makeBCEvent(DPLL, PTP_LOCKED, 5, false))
+		assert.Equal(t, PTP_LOCKED, result.state, "should transition back to LOCKED")
+		assert.False(t, needsTTSCAnnounce, "not a TTSC")
+		assert.True(t, needsDownstreamUpdate, "re-locked with non-uninitialized clockClass, downstream needs update")
+	})
+
+	t.Run("HOLDOVER to FREERUN via offset", func(t *testing.T) {
+		e := newBCHandler()
+
+		// Establish LOCKED then HOLDOVER
+		e.addEvent(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_LOCKED, 10, false))
+		fillDataWindows(e, cfg, 10)
+		e.updateBCState(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_FREERUN, 10, true))
+		e.addEvent(makeBCEvent(DPLL, PTP_HOLDOVER, 10, false))
+		result, _, _ := e.updateBCState(makeBCEvent(DPLL, PTP_HOLDOVER, 10, false))
+		assert.Equal(t, PTP_HOLDOVER, result.state, "setup: should be HOLDOVER")
+
+		// Offset exceeds toFreeRunThreshold
+		e.addEvent(makeBCEvent(DPLL, PTP_HOLDOVER, 2000, false))
+		result, needsTTSCAnnounce, needsDownstreamUpdate := e.updateBCState(makeBCEvent(DPLL, PTP_HOLDOVER, 2000, false))
+		assert.Equal(t, PTP_FREERUN, result.state, "should transition to FREERUN")
+		assert.Equal(t, protocol.ClockClassFreerun, result.clockClass, "clockClass should be 248")
+		assert.False(t, needsTTSCAnnounce, "not a TTSC")
+		assert.True(t, needsDownstreamUpdate, "FREERUN clockClass set, downstream needs update")
+	})
+
+	t.Run("HOLDOVER in-spec to out-of-spec", func(t *testing.T) {
+		e := newBCHandler()
+
+		// Establish LOCKED then HOLDOVER
+		e.addEvent(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_LOCKED, 10, false))
+		fillDataWindows(e, cfg, 10)
+		e.updateBCState(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+
+		e.addEvent(makeBCEvent(PTP4lProcessName, PTP_FREERUN, 10, true))
+		e.addEvent(makeBCEvent(DPLL, PTP_HOLDOVER, 10, false))
+		result, _, _ := e.updateBCState(makeBCEvent(DPLL, PTP_HOLDOVER, 10, false))
+		assert.Equal(t, PTP_HOLDOVER, result.state, "setup: should be HOLDOVER")
+		assert.Equal(t, fbprotocol.ClockClass(135), result.clockClass, "setup: should be in-spec (135)")
+
+		// Offset exceeds MaxInSpecOffset (500) but stays below toFreeRunThreshold (1500)
+		e.addEvent(makeBCEvent(DPLL, PTP_HOLDOVER, 600, false))
+		fillDataWindows(e, cfg, 600)
+		result, needsTTSCAnnounce, needsDownstreamUpdate := e.updateBCState(makeBCEvent(DPLL, PTP_HOLDOVER, 600, false))
+		assert.Equal(t, PTP_HOLDOVER, result.state, "should stay in HOLDOVER")
+		assert.Equal(t, fbprotocol.ClockClass(165), result.clockClass, "clockClass should change to 165 (out-of-spec)")
+		assert.False(t, needsTTSCAnnounce, "not a TTSC")
+		assert.True(t, needsDownstreamUpdate, "clockClass changed, downstream needs update")
+	})
+}
+
+func TestUpdateSpecState(t *testing.T) {
+	newHandler := func() *EventHandler {
+		return &EventHandler{
+			data:         map[string][]*Data{},
+			clkSyncState: map[string]*clockSyncState{},
+		}
+	}
+
+	t.Run("DPLL event sets outOfSpec", func(t *testing.T) {
+		e := newHandler()
+		assert.False(t, e.outOfSpec, "initial outOfSpec should be false")
+
+		e.updateSpecState(Event{Source: DPLL, Data: &PTPData{OutOfSpec: true}})
+		assert.True(t, e.outOfSpec, "DPLL event with OutOfSpec=true should set outOfSpec")
+
+		e.updateSpecState(Event{Source: DPLL, Data: &PTPData{OutOfSpec: false}})
+		assert.False(t, e.outOfSpec, "DPLL event with OutOfSpec=false should clear outOfSpec")
+	})
+
+	t.Run("DPLL event sets frequencyTraceable", func(t *testing.T) {
+		e := newHandler()
+		assert.False(t, e.frequencyTraceable, "initial frequencyTraceable should be false")
+
+		e.updateSpecState(Event{Source: DPLL, Data: &PTPData{FrequencyTraceable: true}})
+		assert.True(t, e.frequencyTraceable, "DPLL event should set frequencyTraceable")
+
+		e.updateSpecState(Event{Source: DPLL, Data: &PTPData{FrequencyTraceable: false}})
+		assert.False(t, e.frequencyTraceable, "DPLL event should clear frequencyTraceable")
+	})
+
+	t.Run("non-DPLL event does not change spec state", func(t *testing.T) {
+		e := newHandler()
+
+		e.updateSpecState(Event{Source: DPLL, Data: &PTPData{OutOfSpec: true, FrequencyTraceable: true}})
+		assert.True(t, e.outOfSpec)
+		assert.True(t, e.frequencyTraceable)
+
+		e.updateSpecState(Event{Source: TS2PHC, Data: &PTPData{OutOfSpec: false, FrequencyTraceable: false}})
+		assert.True(t, e.outOfSpec, "non-DPLL event should not change outOfSpec")
+		assert.True(t, e.frequencyTraceable, "non-DPLL event should not change frequencyTraceable")
 	})
 }

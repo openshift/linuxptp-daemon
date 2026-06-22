@@ -128,16 +128,18 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			values[event.NMEA_STATUS] = int64(1)
 		}
 		select {
-		case process.eventCh <- event.EventChannel{
-			ProcessName: event.TS2PHC,
-			State:       state,
-			CfgName:     configName,
-			IFace:       ptpMetrics.Iface, // use real interface name in event/log
-			Values:      values,
-			ClockType:   process.clockType,
-			Time:        time.Now().UnixMilli(),
-			WriteToLog:  eventSource == event.GNSS,
-			Reset:       false,
+		case process.eventCh <- event.Event{
+			Source:     event.TS2PHC,
+			CfgName:    configName,
+			IFace:      ptpMetrics.Iface, // use real interface name in event/log
+			ClockType:  process.clockType,
+			Time:       time.Now().UnixMilli(),
+			WriteToLog: eventSource == event.GNSS,
+			Reset:      false,
+			Data: &event.PTPData{
+				State:  state,
+				Values: values,
+			},
 		}:
 		default:
 		}
