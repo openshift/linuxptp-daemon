@@ -256,6 +256,80 @@ func Test_applyProfile_TBC(t *testing.T) {
 	}
 }
 
+func Test_applyProfile_TGM(t *testing.T) {
+	defer clean(t)
+	mkPath(t)
+
+	stopCh := make(<-chan struct{})
+	assert.NoError(t, leap.MockLeapFile())
+	defer func() {
+		close(leap.LeapMgr.Close)
+		time.Sleep(100 * time.Millisecond)
+		assert.Nil(t, leap.LeapMgr)
+	}()
+	dn := New(
+		"test-node-name",
+		"openshift-ptp",
+		false,
+		nil,
+		nil,
+		&LinuxPTPConfUpdate{
+			UpdateCh:     make(chan bool),
+			NodeProfiles: []ptpv1.PtpProfile{},
+		},
+		stopCh,
+		[]string{"e810"},
+		&[]ptpv1.HwConfig{},
+		nil,
+		make(chan bool),
+		30,
+		&ReadyTracker{},
+	)
+	assert.NotNil(t, dn)
+	_ = dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
+
+	profile, err := loadProfile("testdata/profile-tgm.yaml")
+	assert.NoError(t, err)
+
+	err = dn.applyNodePtpProfile(0, profile)
+	assert.NoError(t, err)
+
+	var ts2phcProc *ptpProcess
+	var ptp4lProc *ptpProcess
+	for _, p := range dn.processManager.process {
+		switch p.name {
+		case ts2phcProcessName:
+			ts2phcProc = p
+		case ptp4lProcessName:
+			ptp4lProc = p
+		}
+	}
+
+	// 1. ts2phc must have both gpsd and gpspipe as dependent processes.
+	if assert.NotNil(t, ts2phcProc, "ts2phc process should exist for T-GM profile") {
+		depNames := make([]string, len(ts2phcProc.depProcess))
+		for i, d := range ts2phcProc.depProcess {
+			depNames[i] = d.Name()
+		}
+		assert.Contains(t, depNames, GPSD_PROCESSNAME, "gpsd must be a dependent process of ts2phc for T-GM")
+		assert.Contains(t, depNames, GPSPIPE_PROCESSNAME, "gpspipe must be a dependent process of ts2phc for T-GM")
+	}
+
+	// 2. ptp4l should NOT have a PMC dependent process for GM profiles.
+	if assert.NotNil(t, ptp4lProc, "ptp4l process should exist for T-GM profile") {
+		for _, d := range ptp4lProc.depProcess {
+			assert.NotEqual(t, "pmc", d.Name(), "ptp4l should not have PMC as a dependent process for T-GM")
+		}
+	}
+
+	// 3. ts2phc opts must include holdover and servo parameters for GM.
+	// These are auto-appended by applyNodePtpProfile for GM clock types.
+	ts2phcOpts := *profile.Ts2PhcOpts
+	assert.Contains(t, ts2phcOpts, "--ts2phc.holdover", "ts2phc opts must include holdover timeout for T-GM")
+	assert.Contains(t, ts2phcOpts, "--servo_offset_threshold", "ts2phc opts must include servo offset threshold for T-GM")
+	assert.Contains(t, ts2phcOpts, "--servo_num_offset_values 10", "ts2phc opts must include servo num offset values for T-GM")
+}
+
 func TestGetPTPClockId_ValidInput(t *testing.T) {
 	p := &ptpProcess{
 		nodeProfile: ptpv1.PtpProfile{
@@ -542,7 +616,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:          make(chan event.EventChannel, 1),              //nolint:govet // needed for test setup
+			eventCh:          make(chan event.Event, 1),                     //nolint:govet // needed for test setup
 			configName:       "test-config",                                 //nolint:govet // needed for test setup
 			clockType:        event.BC,                                      //nolint:govet // needed for test setup
 			tbcStateDetector: createMockPTPStateDetectorForHardwareConfig(), // Use mock detector
@@ -596,7 +670,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:          make(chan event.EventChannel, 1),
+			eventCh:          make(chan event.Event, 1),
 			configName:       "test-config",
 			clockType:        event.BC,
 			offset:           5.0,
@@ -676,7 +750,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:          make(chan event.EventChannel, 1),
+			eventCh:          make(chan event.Event, 1),
 			configName:       "test-config",
 			clockType:        event.BC,
 			tbcStateDetector: detector,
@@ -821,9 +895,9 @@ func TestTBCTransitionCheck_PathSelection(t *testing.T) {
 						"clockId[ens4f0]":  "123456789",
 					},
 				},
-				eventCh:    make(chan event.EventChannel, 1), //nolint:govet // needed for test setup
-				configName: "test-config",                    //nolint:govet // needed for test setup
-				clockType:  event.BC,                         //nolint:govet // needed for test setup
+				eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
+				configName: "test-config",             //nolint:govet // needed for test setup
+				clockType:  event.BC,                  //nolint:govet // needed for test setup
 			}
 
 			// Set state detector based on test case
@@ -1058,7 +1132,7 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 				"clockId[ens4f1]":  "123456789",
 			},
 		},
-		eventCh:          make(chan event.EventChannel, 100), // Large buffer for all events
+		eventCh:          make(chan event.Event, 100), // Large buffer for all events
 		configName:       "test-config",
 		clockType:        event.BC,
 		tbcStateDetector: detector, // Use real detector with real config
@@ -1181,7 +1255,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:    make(chan event.EventChannel, 1),
+			eventCh:    make(chan event.Event, 1),
 			configName: "test-config",
 			clockType:  event.BC,
 			offset:     5.0, // Set offset < threshold (10.0) to allow event to be sent
@@ -1236,7 +1310,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:    make(chan event.EventChannel, 1),
+			eventCh:    make(chan event.Event, 1),
 			configName: "test-config",
 			clockType:  event.BC,
 		}
@@ -1275,7 +1349,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 					"clockId[ens4f0]":  "123456789",
 				},
 			},
-			eventCh:    make(chan event.EventChannel, 1),
+			eventCh:    make(chan event.Event, 1),
 			configName: "test-config",
 			clockType:  event.BC,
 		}
@@ -1363,7 +1437,7 @@ func TestTBCDualUpstream_PortALost_PortBTakesOver(t *testing.T) {
 			Name:        stringPointer("test-profile"),
 			PtpSettings: map[string]string{"leadingInterface": "eno5", "clockId[eno5]": "123456789"},
 		},
-		eventCh:          make(chan event.EventChannel, 10),
+		eventCh:          make(chan event.Event, 10),
 		configName:       "test-config",
 		clockType:        event.BC,
 		offset:           5.0,
@@ -1430,7 +1504,7 @@ func TestTBCDualUpstream_BothPortsLost(t *testing.T) {
 			Name:        stringPointer("test-profile"),
 			PtpSettings: map[string]string{"leadingInterface": "eno5", "clockId[eno5]": "123456789"},
 		},
-		eventCh:          make(chan event.EventChannel, 10),
+		eventCh:          make(chan event.Event, 10),
 		configName:       "test-config",
 		clockType:        event.BC,
 		tbcStateDetector: detector,
@@ -1480,7 +1554,7 @@ func TestTBCDualUpstream_RecoveryAfterBothLost(t *testing.T) {
 			Name:        stringPointer("test-profile"),
 			PtpSettings: map[string]string{"leadingInterface": "eno5", "clockId[eno5]": "123456789"},
 		},
-		eventCh:          make(chan event.EventChannel, 10),
+		eventCh:          make(chan event.Event, 10),
 		configName:       "test-config",
 		clockType:        event.BC,
 		offset:           5.0,
@@ -2616,7 +2690,7 @@ func TestLiveGateIntegration_TriggerLogsFailureRecovery(t *testing.T) {
 func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
 	// Create a minimal event handler (no socket needed — the event package
 	// tests already cover the socket write path via EmitClockClass).
-	eventChannel := make(chan event.EventChannel)
+	eventChannel := make(chan event.Event)
 	closeCh := make(chan bool, 1)
 	handler := event.Init("testnode", false, "", eventChannel, closeCh, nil, nil, nil)
 
