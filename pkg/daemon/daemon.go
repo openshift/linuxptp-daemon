@@ -1862,11 +1862,14 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 	switch p.name {
 	case "chronyd":
 		if enabled {
-			_, _ = exec.Command("chronyc", "-h", ChronydSocketPath, "online").Output()
-			processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
+			if p.Stopped() && p.cmd != nil {
+				cmd := p.cmd
+				newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
+				p.cmd = newCmd
+				go p.cmdRun(p.dn.stdoutToSocket, &(p.dn.pluginManager))
+			}
 		} else {
-			_, _ = exec.Command("chronyc", "-h", ChronydSocketPath, "offline").Output()
-			processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
+			go p.cmdStop()
 		}
 	case "phc2sys":
 		if enabled {
