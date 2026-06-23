@@ -1819,6 +1819,41 @@ func TestTBCLegacy_ActiveTRPort_ReportsCorrectInterface(t *testing.T) {
 		"activeTRPort should reflect the newly selected backup port")
 }
 
+func TestTBCLegacy_ActivePort_IgnoresNonTRPort(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_NOTSET},
+			activePort:        testDUTUpstream1,
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.Event, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+	}
+
+	// A port with a prefix-colliding name (ens2f10 vs tracked ens2f1) fires MASTER_CLOCK_SELECTED.
+	// The log line contains "ens2f1" as a substring so portMatched is true, but
+	// ExtractPortName returns "ens2f10" which is NOT in trIfaceNames.
+	process.tBCTransitionCheck("ptp4l[300]: [test-config.0.config] port 3 (ens2f10): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, testDUTUpstream1, process.tBCAttributes.activePort,
+		"activePort must not change to a non-TR port with a prefix-colliding name")
+}
+
 // TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs tests clock_type detection with cliArgs parameter
 func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 	tests := []struct {
