@@ -273,39 +273,40 @@ func (u *UBlox) UbloxPollStop() {
 	u.cmd.Wait()
 }
 
-// ExtractOffset extracts the tAcc offset from the incoming ubxtool data stream
-func ExtractOffset(output string) int64 {
-	// Find the line that contains "tAcc"
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "tAcc") {
-			// Extract the offset value
-			fields := strings.Fields(line)
-			for i, field := range fields {
-				if field == "tAcc" {
-					ret, _ := strconv.ParseInt(fields[i+1], 10, 64)
-					return ret
+// ExtractOffset extracts the tAcc offset from a single ubxtool data line.
+func ExtractOffset(line string) int64 {
+	if strings.Contains(line, "tAcc") {
+		fields := strings.Fields(line)
+		for i, field := range fields {
+			if field == "tAcc" {
+				if i+1 >= len(fields) {
+					return -1
 				}
+				ret, err := strconv.ParseInt(fields[i+1], 10, 64)
+				if err != nil {
+					return -1
+				}
+				return ret
 			}
 		}
 	}
-
 	return -1
 }
 
-// ExtractNavStatus extracts the gpsFix state from the incoming ubxtool data stream
-func ExtractNavStatus(output string) int64 {
-	// Find the line that contains "gpsFix"
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "gpsFix") {
-			// Extract the offset value
-			fields := strings.Fields(line)
-			for i, field := range fields {
-				if field == "gpsFix" {
-					ret, _ := strconv.ParseInt(fields[i+1], 10, 64)
-					return ret
+// ExtractNavStatus extracts the gpsFix state from a single ubxtool data line.
+func ExtractNavStatus(line string) int64 {
+	if strings.Contains(line, "gpsFix") {
+		fields := strings.Fields(line)
+		for i, field := range fields {
+			if field == "gpsFix" {
+				if i+1 >= len(fields) {
+					return -1
 				}
+				ret, err := strconv.ParseInt(fields[i+1], 10, 64)
+				if err != nil {
+					return -1
+				}
+				return ret
 			}
 		}
 	}
