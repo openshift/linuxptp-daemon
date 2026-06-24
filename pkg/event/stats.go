@@ -62,7 +62,14 @@ func (d *Data) UpdateState() {
 		}
 	}
 	d.State = state
-	glog.Infof("state updated for %s =%s", d.ProcessName, d.State)
+	if len(d.Details) > 1 {
+		for _, detail := range d.Details {
+			glog.Infof("state updated for %s: port %s state=%s offset=%d",
+				d.ProcessName, detail.IFace, detail.State, detail.Offset)
+		}
+	} else {
+		glog.Infof("state updated for %s =%s", d.ProcessName, d.State)
+	}
 }
 
 // GetDataDetails ...
