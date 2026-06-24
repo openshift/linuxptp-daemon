@@ -1589,6 +1589,15 @@ func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.Plugin
 	}
 	if portMatched {
 		if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
+			portName := parser.ExtractPortName(output)
+			if portName != "" {
+				if len(p.tBCAttributes.trIfaceNames) > 1 && !slices.Contains(p.tBCAttributes.trIfaceNames, portName) {
+					glog.Warningf("Ignoring non-TR port in legacy MASTER_CLOCK_SELECTED event: %s", portName)
+				} else {
+					p.tBCAttributes.activePort = portName
+					glog.Infof("T-BC active upstream port: %s", portName)
+				}
+			}
 			p.tBCAttributes.lastReportedState = event.PTP_LOCKED
 			p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
 		} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
