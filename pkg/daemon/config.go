@@ -451,6 +451,12 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 
 			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
 				iface.Source = getSource(source)
+				// when a [nmea] section with `ts2phc.master 1` exists, each interface with `ts2phc.master 0`
+				// marks a time sink whose PHC is disciplined by the [nmea] GNSS master, and should be labeled as GNSS.
+				// This requires that the [nmea] section precedes the interface section in the config
+				if iface.Source == event.PPS && nmea_source == event.GNSS {
+					iface.Source = event.GNSS
+				}
 			} else {
 				// if not defined here, use source defined at nmea section
 				iface.Source = nmea_source

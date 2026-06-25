@@ -321,6 +321,13 @@ func Test_applyProfile_TGM(t *testing.T) {
 		}
 		assert.Contains(t, depNames, GPSD_PROCESSNAME, "gpsd must be a dependent process of ts2phc for T-GM")
 		assert.Contains(t, depNames, GPSPIPE_PROCESSNAME, "gpspipe must be a dependent process of ts2phc for T-GM")
+
+		for _, d := range ts2phcProc.depProcess {
+			if gpsd, ok := d.(*GPSD); ok {
+				assert.Equal(t, "ens7f0", gpsd.gmInterface,
+					"GPSD gmInterface should match the first interface in ts2phcConf (leading GNSS-sourced interface)")
+			}
+		}
 	}
 
 	// 2. ptp4l should NOT have a PMC dependent process for GM profiles.
