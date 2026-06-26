@@ -13,8 +13,8 @@ COPY deploy deploy
 COPY hack hack
 COPY Makefile Makefile
 COPY pkg pkg
-COPY .git .git
-
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=${GIT_COMMIT}
 RUN --mount=type=cache,target=/root/.cache/go-build make
 
 FROM quay.io/centos/centos:stream9

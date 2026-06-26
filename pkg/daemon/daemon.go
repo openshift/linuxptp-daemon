@@ -45,8 +45,18 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// PtpNamespace is the namespace where PTP resources are managed.
+// It defaults to "openshift-ptp" and can be overridden via the
+// NAME_SPACE env var for OLMv1 AllNamespaces install mode.
+var PtpNamespace = "openshift-ptp"
+
+func init() {
+	if ns := os.Getenv("NAME_SPACE"); ns != "" {
+		PtpNamespace = ns
+	}
+}
+
 const (
-	PtpNamespace                    = "openshift-ptp"
 	PTP4L_CONF_FILE_PATH            = "/etc/ptp4l.conf"
 	PTP4L_CONF_DIR                  = "/ptp4l-conf"
 	connectionRetryInterval         = 1 * time.Second
