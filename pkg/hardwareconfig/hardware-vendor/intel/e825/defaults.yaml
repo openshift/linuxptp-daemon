@@ -1,9 +1,9 @@
-# Clock ID transformation method for this hardware
-# "direct" - use serial number bytes directly (keeps ff-ff in middle)
-# "eui64" - remove bytes 3-4 (ff-ff) and insert ff-fe (EUI-64 format)
-# Note: Based on actual hardware data from PERLA2 board, e825 uses direct transformation
+# Clock ID resolution method for this hardware
+# "direct" - use NIC PCI serial number bytes directly (E810)
+# "eui64" - EUI-64 transform of NIC PCI serial number
+# "devlinkPinChain" - trace NIC DPLL pin parent chain to external DPLL module (E825/zl3073x)
 clockIdTransformation:
-  method: direct
+  method: devlinkPinChain
 
 pinDefaults:
   # REF0P

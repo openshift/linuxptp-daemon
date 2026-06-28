@@ -1,0 +1,4 @@
+# Clock ID resolution method for this hardware (E825-based)
+# "devlinkPinChain" - trace NIC DPLL pin parent chain to external DPLL module
+clockIdTransformation:
+  method: devlinkPinChain
