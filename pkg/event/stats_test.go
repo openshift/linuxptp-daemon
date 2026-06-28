@@ -101,8 +101,8 @@ func Test_updateStats(t *testing.T) {
 					},
 					State: event.PTP_UNKNOWN,
 				}}},
-		wantedState: event.PTP_HOLDOVER,
-		desc:        "3. GNSS is in HOLDOVER, PPS is in FREERUN",
+		wantedState: event.PTP_FREERUN,
+		desc:        "3. GNSS is in HOLDOVER, PPS is in FREERUN - FREERUN takes priority (worst state)",
 	}, {
 		data: map[string][]*event.Data{
 			"a.0.config": {
@@ -138,4 +138,94 @@ func Test_updateStats(t *testing.T) {
 
 	}
 
+}
+
+func Test_updateState_LeadingFollowerMatrix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		desc          string
+		leadingState  event.PTPState
+		followerState event.PTPState
+		wantedState   event.PTPState
+	}{
+		{
+			desc:          "both locked",
+			leadingState:  event.PTP_LOCKED,
+			followerState: event.PTP_LOCKED,
+			wantedState:   event.PTP_LOCKED,
+		},
+		{
+			desc:          "follower freerun, leader locked - follower degrades to S0",
+			leadingState:  event.PTP_LOCKED,
+			followerState: event.PTP_FREERUN,
+			wantedState:   event.PTP_FREERUN,
+		},
+		{
+			desc:          "follower freerun, leader holdover - FREERUN wins over HOLDOVER",
+			leadingState:  event.PTP_HOLDOVER,
+			followerState: event.PTP_FREERUN,
+			wantedState:   event.PTP_FREERUN,
+		},
+		{
+			desc:          "leader holdover, follower locked - HOLDOVER propagates",
+			leadingState:  event.PTP_HOLDOVER,
+			followerState: event.PTP_LOCKED,
+			wantedState:   event.PTP_HOLDOVER,
+		},
+		{
+			desc:          "both freerun",
+			leadingState:  event.PTP_FREERUN,
+			followerState: event.PTP_FREERUN,
+			wantedState:   event.PTP_FREERUN,
+		},
+		{
+			desc:          "leader freerun, follower locked - FREERUN wins",
+			leadingState:  event.PTP_FREERUN,
+			followerState: event.PTP_LOCKED,
+			wantedState:   event.PTP_FREERUN,
+		},
+		{
+			desc:          "both holdover",
+			leadingState:  event.PTP_HOLDOVER,
+			followerState: event.PTP_HOLDOVER,
+			wantedState:   event.PTP_HOLDOVER,
+		},
+		{
+			desc:          "leader locked, follower holdover",
+			leadingState:  event.PTP_LOCKED,
+			followerState: event.PTP_HOLDOVER,
+			wantedState:   event.PTP_HOLDOVER,
+		},
+		{
+			desc:          "leader freerun, follower holdover - FREERUN wins",
+			leadingState:  event.PTP_FREERUN,
+			followerState: event.PTP_HOLDOVER,
+			wantedState:   event.PTP_FREERUN,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			t.Parallel()
+			d := &event.Data{
+				ProcessName: "dpll",
+				Details: []*event.DataDetails{
+					{
+						IFace:   "leading-nic",
+						State:   tt.leadingState,
+						Metrics: map[event.ValueType]event.DataMetric{},
+					},
+					{
+						IFace:   "follower-nic",
+						State:   tt.followerState,
+						Metrics: map[event.ValueType]event.DataMetric{},
+					},
+				},
+				State: event.PTP_UNKNOWN,
+			}
+			d.UpdateState()
+			assert.Equal(t, tt.wantedState, d.State, tt.desc)
+		})
+	}
 }
