@@ -339,7 +339,7 @@ func validateGNRDVendorDefaults(t *testing.T) {
 
 	// Validate key fields from e825/defaults.yaml
 	assert.NotNil(t, hwSpec.ClockIDTransformation, "Clock ID transformation should be defined")
-	assert.Equal(t, "direct", hwSpec.ClockIDTransformation.Method, "Should use direct transformation (based on actual PERLA2 hardware)")
+	assert.Equal(t, "devlinkPinChain", hwSpec.ClockIDTransformation.Method, "E825 should use devlinkPinChain to resolve clock ID via NIC pin parent chain")
 	t.Logf("  ✓ Clock ID transformation method: %s", hwSpec.ClockIDTransformation.Method)
 
 	assert.NotEmpty(t, hwSpec.PinDefaults, "Pin defaults should not be empty")
