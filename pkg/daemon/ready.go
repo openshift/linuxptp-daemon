@@ -32,7 +32,12 @@ func (rt *ReadyTracker) Ready() (bool, string) {
 
 	notRunning := strings.Builder{}
 	noMetrics := strings.Builder{}
+	activeCount := 0
 	for _, p := range rt.processManager.process {
+		if p == nil || p.skipInitialStartup != "" {
+			continue
+		}
+		activeCount++
 		if p.Stopped() {
 			if notRunning.Len() > 0 {
 				notRunning.WriteString(", ")
@@ -46,6 +51,10 @@ func (rt *ReadyTracker) Ready() (bool, string) {
 		}
 
 	}
+	if activeCount == 0 {
+		return false, "No processes have started"
+	}
+
 	if notRunning.Len() > 0 {
 		return false, "Stopped process(es): " + notRunning.String()
 	}
