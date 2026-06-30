@@ -14,6 +14,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/require"
 	"k8s.io/utils/pointer"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
@@ -909,5 +910,62 @@ func TestDaemon_PopulateAndRenderPtp4lConf(t *testing.T) {
 		conf.ExtendGlobalSection(tc.profileName, tc.messageTag, tc.socketPath, tc.pProcess)
 		actualOutput, _ := conf.RenderPtp4lConf()
 		assert.Equal(t, tc.expectedOutput, actualOutput, fmt.Sprintf("Rendered output doesn't match expected: %s", tc.testName))
+	}
+}
+
+func TestRenderPtp4lConf_IfaceSource(t *testing.T) {
+	tests := []struct {
+		name           string
+		config         string
+		expectedIfaces []config.Iface
+	}{
+		{
+			name:   "ts2phc.master 0 with nmea GNSS master promotes to GNSS",
+			config: "[nmea]\nts2phc.master 1\n[global]\n[ens7f0]\nts2phc.master 0\n[ens4f0]\nts2phc.master 0",
+			expectedIfaces: []config.Iface{
+				{Name: "ens7f0", Source: event.GNSS},
+				{Name: "ens4f0", Source: event.GNSS}, //nolint:goconst
+			},
+		},
+		{
+			name:   "ts2phc.master 0 without nmea section stays PPS",
+			config: "[global]\n[ens7f0]\nts2phc.master 0\n[ens4f0]\nts2phc.master 0",
+			expectedIfaces: []config.Iface{
+				{Name: "ens7f0", Source: event.PPS},
+				{Name: "ens4f0", Source: event.PPS},
+			},
+		},
+		{
+			name:   "ts2phc.master omitted inherits nmea source",
+			config: "[nmea]\nts2phc.master 1\n[global]\n[ens7f0]\n[ens4f0]",
+			expectedIfaces: []config.Iface{
+				{Name: "ens7f0", Source: event.GNSS},
+				{Name: "ens4f0", Source: event.GNSS},
+			},
+		},
+		{
+			name:   "ts2phc.master 1 on interface is GNSS directly",
+			config: "[global]\n[ens7f0]\nts2phc.master 1\n[ens4f0]\nts2phc.master 0",
+			expectedIfaces: []config.Iface{
+				{Name: "ens7f0", Source: event.GNSS},
+				{Name: "ens4f0", Source: event.PPS},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conf := &daemon.Ptp4lConf{}
+			err := conf.PopulatePtp4lConf(&tt.config, nil)
+			require.NoError(t, err)
+			_, ifaces := conf.RenderPtp4lConf()
+
+			if assert.Equal(t, len(tt.expectedIfaces), len(ifaces), "iface count mismatch") {
+				for i, expected := range tt.expectedIfaces {
+					assert.Equal(t, expected.Name, ifaces[i].Name, "iface %d name", i)
+					assert.Equal(t, expected.Source, ifaces[i].Source, "iface %d source", i)
+				}
+			}
+		})
 	}
 }

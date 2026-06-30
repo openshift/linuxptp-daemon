@@ -1,7 +1,9 @@
 package hardwareconfig
 
 import (
+	"encoding/binary"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,9 +12,19 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/mdlayher/netlink"
 
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
+)
+
+// Stable kernel UAPI constants for DPLL pin resolution via RTM_GETLINK.
+const (
+	netlinkRoute    = 0  // NETLINK_ROUTE
+	rtmGetLink      = 18 // RTM_GETLINK
+	rtmNewLink      = 16 // RTM_NEWLINK
+	sizeofIfInfomsg = 16 // sizeof(struct ifinfomsg)
+	iflaDpllPin     = 65 // IFLA_DPLL_PIN
 )
 
 // DpllPinsGetter is a function type for getting DPLL pins
@@ -204,6 +216,144 @@ func GetClockIDFromInterface(iface string, hwDefPath string) (uint64, error) {
 	return GetClockIDFromInterfaceWithCache(iface, hwDefPath, nil)
 }
 
+// getNetdevDpllPin retrieves the DPLL pin ID associated with a network interface
+// via the kernel's IFLA_DPLL_PIN netlink attribute.
+func getNetdevDpllPin(ifname string) (uint32, bool, error) {
+	iface, err := net.InterfaceByName(ifname)
+	if err != nil {
+		return 0, false, fmt.Errorf("could not find interface %s: %w", ifname, err)
+	}
+
+	conn, err := netlink.Dial(netlinkRoute, nil)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to dial netlink route: %w", err)
+	}
+	defer conn.Close()
+
+	b := make([]byte, sizeofIfInfomsg)
+	binary.NativeEndian.PutUint32(b[4:8], uint32(iface.Index))
+
+	msg := netlink.Message{
+		Header: netlink.Header{
+			Type:  rtmGetLink,
+			Flags: netlink.Request,
+		},
+		Data: b,
+	}
+
+	replyMsgs, err := conn.Execute(msg)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to execute netlink request for %s: %w", ifname, err)
+	}
+
+	if len(replyMsgs) != 1 {
+		return 0, false, fmt.Errorf("expected 1 reply message for %s, got %d", ifname, len(replyMsgs))
+	}
+	reply := replyMsgs[0]
+
+	if reply.Header.Type != rtmNewLink {
+		return 0, false, fmt.Errorf("expected RTM_NEWLINK for %s, got %d", ifname, reply.Header.Type)
+	}
+	if len(reply.Data) < sizeofIfInfomsg {
+		return 0, false, fmt.Errorf("reply too short for %s", ifname)
+	}
+
+	ad, err := netlink.NewAttributeDecoder(reply.Data[sizeofIfInfomsg:])
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to create attribute decoder: %w", err)
+	}
+
+	var dpllPinID uint32
+	var found bool
+
+	for ad.Next() {
+		if ad.Type() == iflaDpllPin {
+			ad.Nested(func(nad *netlink.AttributeDecoder) error {
+				for nad.Next() {
+					if nad.Type() == dpll.DpllPinID {
+						dpllPinID = nad.Uint32()
+						found = true
+						return nil
+					}
+				}
+				return nad.Err()
+			})
+			if found {
+				break
+			}
+		}
+	}
+
+	if adErr := ad.Err(); adErr != nil {
+		return 0, false, fmt.Errorf("attribute decoding failed for %s: %w", ifname, adErr)
+	}
+
+	return dpllPinID, found, nil
+}
+
+// netdevDpllPinGetter is swappable for testing.
+var netdevDpllPinGetter = getNetdevDpllPin
+
+// queryDpllPin queries a single DPLL pin by ID using a new DPLL netlink connection.
+func queryDpllPin(pinID uint32) (*dpll.PinInfo, error) {
+	conn, err := dpll.Dial(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial DPLL: %w", err)
+	}
+	defer conn.Close()
+	return conn.DoPinGet(dpll.DoPinGetRequest{ID: pinID})
+}
+
+// dpllPinQuerier is swappable for testing.
+var dpllPinQuerier = queryDpllPin
+
+// getClockIDFromPinParentChain derives the external DPLL clock ID for a NIC
+// by tracing the DPLL pin parentage chain: NIC → DPLL pin → parent pins →
+// external DPLL module → clock ID.
+func getClockIDFromPinParentChain(ifname string) (uint64, error) {
+	glog.Infof("Attempting NIC-to-DPLL derivation for interface %s", ifname)
+
+	pinID, found, err := netdevDpllPinGetter(ifname)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get DPLL pin for %s: %w", ifname, err)
+	}
+	if !found {
+		return 0, fmt.Errorf("no DPLL pin found for interface %s", ifname)
+	}
+	glog.Infof("NIC %s DPLL pin ID: %d", ifname, pinID)
+
+	nicPin, err := dpllPinQuerier(pinID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query DPLL pin %d: %w", pinID, err)
+	}
+
+	if len(nicPin.ParentPin) == 0 {
+		return 0, fmt.Errorf("DPLL pin %d for %s has no parent pins", pinID, ifname)
+	}
+
+	parentIDs := make([]uint32, len(nicPin.ParentPin))
+	for i, p := range nicPin.ParentPin {
+		parentIDs[i] = p.ParentID
+	}
+	glog.Infof("DPLL pin %d has %d parent pins: %v", pinID, len(nicPin.ParentPin), parentIDs)
+
+	for _, parent := range nicPin.ParentPin {
+		parentPin, parentErr := dpllPinQuerier(parent.ParentID)
+		if parentErr != nil {
+			glog.Warningf("Failed to query parent pin %d: %v, trying next", parent.ParentID, parentErr)
+			continue
+		}
+		if parentPin.ModuleName != nicPin.ModuleName {
+			glog.Infof("Found external DPLL parent pin %d (module=%s) with clock ID %d for interface %s",
+				parent.ParentID, parentPin.ModuleName, parentPin.ClockID, ifname)
+			return parentPin.ClockID, nil
+		}
+	}
+
+	return 0, fmt.Errorf("no external DPLL parent found for pin %d on %s (all parents share module %q)",
+		pinID, ifname, nicPin.ModuleName)
+}
+
 func getPERLAClockIDFromPinCache(cache *PinCache) (uint64, error) {
 	if cache == nil {
 		var cacheErr error
@@ -230,16 +380,43 @@ func getPERLAClockIDFromPinCache(cache *PinCache) (uint64, error) {
 	return 0, fmt.Errorf("no zl3073x DPLL found in pin cache")
 }
 
+// Clock ID resolution methods configurable via defaults.yaml clockIdTransformation.method
+const (
+	ClockIDMethodDirect          = "direct"          // PCI serial number bytes used directly (E810)
+	ClockIDMethodEUI64           = "eui64"           // EUI-64 transform of serial number
+	ClockIDMethodDevlinkPinChain = "devlinkPinChain" // Trace NIC DPLL pin parent chain (E825/zl3073x)
+)
+
+// getClockIDResolutionMethod loads the hardware defaults and returns the configured method.
+// Falls back to lspci-based detection when no hwDefPath is provided (legacy compatibility).
+func getClockIDResolutionMethod(hwDefPath string, busAddr string) string {
+	if hwDefPath != "" {
+		spec, err := LoadHardwareDefaults(hwDefPath, nil)
+		if err == nil && spec != nil && spec.ClockIDTransformation != nil && spec.ClockIDTransformation.Method != "" {
+			return spec.ClockIDTransformation.Method
+		}
+	}
+
+	// Legacy fallback: detect E825 via lspci when no hwDefPath or no method configured
+	lspciOutput, err := commandExecutor.Execute("lspci", "-s", busAddr)
+	if err == nil && strings.Contains(lspciOutput, "E825") {
+		glog.Infof("Legacy detection: E825 device on %s, using devlinkPinChain method", busAddr)
+		return ClockIDMethodDevlinkPinChain
+	}
+
+	return ClockIDMethodDirect
+}
+
 // GetClockIDFromInterfaceWithCache resolves clock ID with an optional pre-loaded pin cache.
-// This avoids repeatedly fetching the pin cache for PERLA workaround.
+// The resolution method is determined by the hardware definition's clockIdTransformation.method:
+//   - "direct" / "eui64": derive clock ID from NIC's PCI serial number (devlink)
+//   - "devlinkPinChain": trace NIC's DPLL pin parent chain to external DPLL module
 func GetClockIDFromInterfaceWithCache(iface string, hwDefPath string, pinCache *PinCache) (uint64, error) {
-	// Step 1: Get bus address using ethtool
 	ethtoolOutput, err := commandExecutor.Execute("ethtool", "-i", iface)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get bus info for interface %s: %w", iface, err)
 	}
 
-	// Extract bus-info
 	busAddr := ""
 	for _, line := range strings.Split(ethtoolOutput, "\n") {
 		if strings.HasPrefix(line, "bus-info:") {
@@ -251,37 +428,47 @@ func GetClockIDFromInterfaceWithCache(iface string, hwDefPath string, pinCache *
 	}
 	glog.V(4).Infof("ClockID: iface=%s bus=%s hwDef=%s", iface, busAddr, hwDefPath)
 
-	// Step 2: PERLA workaround - Check if this is an E825 device
-	// For E825 devices, there's no direct NIC-DPLL association, so we look for the zl3073x DPLL
-	lspciOutput, err := commandExecutor.Execute("lspci", "-s", busAddr)
-	if err != nil {
-		return 0, fmt.Errorf("failed to run lspci -s %s, output: %s, err: %w", busAddr, lspciOutput, err)
-	}
+	method := getClockIDResolutionMethod(hwDefPath, busAddr)
+	glog.Infof("ClockID resolution for %s: method=%s (hwDef=%s)", iface, method, hwDefPath)
 
-	if strings.Contains(lspciOutput, "E825") {
-		glog.Infof("Detected E825 device on %s (interface %s), using PERLA workaround", busAddr, iface)
-		var clockID uint64
-		clockID, err = getPERLAClockIDFromPinCache(pinCache)
-		if err != nil {
-			return 0, fmt.Errorf("PERLA workaround: failed to get clock ID from pin cache: %v, falling back to serial number approach", err)
-		}
+	switch method {
+	case ClockIDMethodDevlinkPinChain:
+		return resolveClockIDViaPinChain(iface, pinCache)
+	default:
+		return resolveClockIDViaSerialNumber(iface, busAddr, hwDefPath)
+	}
+}
+
+// resolveClockIDViaPinChain traces the NIC's DPLL pin parent chain to find the
+// external DPLL clock ID. Falls back to module-name scan on failure.
+func resolveClockIDViaPinChain(iface string, pinCache *PinCache) (uint64, error) {
+	clockID, derivErr := getClockIDFromPinParentChain(iface)
+	if derivErr == nil {
 		return clockID, nil
 	}
+	glog.Warningf("NIC-to-DPLL derivation failed for %s: %v; falling back to module-name scan", iface, derivErr)
 
-	// Step 3: Standard approach - Get serial number using devlink
+	clockID, err := getPERLAClockIDFromPinCache(pinCache)
+	if err != nil {
+		return 0, fmt.Errorf("clock ID resolution failed for %s: derivation: %v, fallback: %w", iface, derivErr, err)
+	}
+	return clockID, nil
+}
+
+// resolveClockIDViaSerialNumber derives clock ID from the NIC's PCI serial number
+// using the hardware-specific transformer (direct or EUI-64).
+func resolveClockIDViaSerialNumber(iface, busAddr, hwDefPath string) (uint64, error) {
 	devlinkOutput, err := commandExecutor.Execute("devlink", "dev", "info", fmt.Sprintf("pci/%s", busAddr))
 	if err != nil {
 		return 0, fmt.Errorf("failed to get devlink info for bus %s: %w", busAddr, err)
 	}
 
-	// Extract serial number
 	serialNumber := ""
 	for _, line := range strings.Split(devlinkOutput, "\n") {
 		if strings.Contains(line, "serial_number") {
-			// Format is typically "  serial_number 64-4c-36-ff-ff-5c-4a-e8"
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
-				serialNumber = parts[len(parts)-1] // Get the last field
+				serialNumber = parts[len(parts)-1]
 				break
 			}
 		}
@@ -291,20 +478,13 @@ func GetClockIDFromInterfaceWithCache(iface string, hwDefPath string, pinCache *
 	}
 	glog.V(4).Infof("ClockID: iface=%s bus=%s serial=%s hwDef=%s", iface, busAddr, serialNumber, hwDefPath)
 
-	// Step 4: Select hardware-specific transformer based on hardware defaults (when provided)
-	if hwDefPath == "" {
-		glog.V(3).Infof("No hardware definition path provided for interface %s; using fallback transformer", iface)
-	}
 	transformer := getClockIDTransformer(hwDefPath)
-
-	// Step 5: Process serial number to get clock ID
 	clockID, err := transformer(serialNumber)
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse serial number %s for interface %s: %w", serialNumber, iface, err)
 	}
 
 	glog.Infof("Resolved clock ID %#x for interface %s (bus: %s, serial: %s)", clockID, iface, busAddr, serialNumber)
-	glog.V(4).Infof("ClockID detail: iface=%s bus=%s serial=%s hwDef=%s clockID=%#x", iface, busAddr, serialNumber, hwDefPath, clockID)
 	return clockID, nil
 }
 

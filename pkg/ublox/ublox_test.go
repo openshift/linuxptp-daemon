@@ -92,6 +92,45 @@ func TestFindProtoVersion(t *testing.T) {
 
 }*/
 
+func TestExtractNavStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want int64
+	}{
+		{"3D fix", "  iTOW 218573000 gpsFix 3 flags 0xdd fixStat 0x0 flags2 0x8", 3},
+		{"no fix", "  iTOW 218573000 gpsFix 0 flags 0x00 fixStat 0x0 flags2 0x0", 0},
+		{"field missing value (truncated line)", "  iTOW 218573000 gpsFix", -1},
+		{"non-numeric value", "  iTOW 218573000 gpsFix bad", -1},
+		{"field absent", "  iTOW 218573000 flags 0xdd", -1},
+		{"empty line", "", -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ublox.ExtractNavStatus(tt.line))
+		})
+	}
+}
+
+func TestExtractOffset(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want int64
+	}{
+		{"normal", "  iTOW 218573000 clkBias 0 clkDrift 0 tAcc 23 fAcc 0", 23},
+		{"field missing value (truncated line)", "  iTOW 218573000 tAcc", -1},
+		{"non-numeric value", "  iTOW 218573000 tAcc bad", -1},
+		{"field absent", "  iTOW 218573000 clkBias 0", -1},
+		{"empty line", "", -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ublox.ExtractOffset(tt.line))
+		})
+	}
+}
+
 func Test_ExtractLeapSec(t *testing.T) {
 	data := []string{
 		"iTOW 376008000 version 0 reserved2 0 0 0 srcOfCurrLs 2",

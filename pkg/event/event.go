@@ -394,6 +394,9 @@ func (e *EventHandler) updateGMState(cfgName string) clockSyncState {
 			switch d.ProcessName {
 			case DPLL:
 				dpllState = d.State
+				if e.hasNonLeadingDPLLFault(cfgName, leadingInterface) {
+					dpllState = PTP_FREERUN
+				}
 			case GNSS:
 				gnssState = d.State
 				// expecting to have at least one interface
@@ -542,6 +545,34 @@ func (e *EventHandler) isSourceLost(cfgName string) bool {
 		for _, d := range data {
 			if d.ProcessName == GNSS && len(d.Details) > 0 && d.Details[0] != nil {
 				return d.Details[0].sourceLost
+			}
+		}
+	}
+	return false
+}
+
+// hasNonLeadingDPLLFault returns true when the leading DPLL is locked but at
+// least one non-leading DPLL is not locked, indicating a follower fault that
+// should force the composite clock to FREERUN.
+func (e *EventHandler) hasNonLeadingDPLLFault(cfgName, leadingInterface string) bool {
+	if leadingInterface == LEADING_INTERFACE_UNKNOWN {
+		return false
+	}
+	if data, ok := e.data[cfgName]; ok {
+		for _, d := range data {
+			if d.ProcessName != DPLL {
+				continue
+			}
+			leadingDetail := d.GetDataDetails(leadingInterface)
+			if leadingDetail == nil || leadingDetail.State != PTP_LOCKED {
+				return false
+			}
+			for _, dd := range d.Details {
+				if dd.IFace != leadingInterface && dd.State != PTP_LOCKED {
+					glog.Infof("non-leading DPLL %s is %s while leading %s is locked, composite DPLL forced to FREERUN",
+						dd.IFace, dd.State, leadingInterface)
+					return true
+				}
 			}
 		}
 	}

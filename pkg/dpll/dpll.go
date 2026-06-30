@@ -649,45 +649,29 @@ func (d *DpllConfig) stateDecision() {
 
 	case DPLL_HOLDOVER:
 		switch {
-		case d.hasPPSAsSource():
+		case !d.hasLeadingSource():
 			d.state = event.PTP_FREERUN
 			d.phaseOffset = FaultyPhaseOffset
-			glog.Infof("Follower card DPLL is on holdover - hardware failure or pins misconfigured")
-		case d.hasGNSSAsSource():
-			if !d.inSpec { // d.inSpec is updated by the holdover routine
-				glog.Infof("dpll is not in spec, state is DPLL_HOLDOVER, offset is out of range, state is FREERUN(%s)", d.iface)
-				d.state = event.PTP_FREERUN
-				d.phaseOffset = FaultyPhaseOffset
-				select {
-				case d.holdoverCloseCh <- true:
-					glog.Infof("closing holdover for %s since offset if out of spec", d.iface)
-				default:
-				}
-			} else if !d.onHoldover {
-				d.holdoverCloseCh = make(chan bool)
-				d.onHoldover = true
-				d.state = event.PTP_HOLDOVER
-				glog.Infof("starting holdover (%s)", d.iface)
-				go d.holdover()
+			glog.Infof("non-leading DPLL %s is in holdover, reporting FREERUN", d.iface)
+		// TODO: GNSS holdover currently doesn't offer holdover out of spec. Tech Debt: should work the same as T-BC
+		// making transitions programmable by users
+		case !d.inSpec || (d.hasPTPAsSource() && math.Abs(float64(d.PhaseOffset())) > float64(LocalMaxHoldoverOffSet)):
+			glog.Infof("leading DPLL %s holdover out of spec (inSpec=%v, offset=%d, max=%d), state is FREERUN",
+				d.iface, d.inSpec, d.PhaseOffset(), LocalMaxHoldoverOffSet)
+			d.state = event.PTP_FREERUN
+			d.phaseOffset = FaultyPhaseOffset
+			d.sourceLost = true
+			select {
+			case d.holdoverCloseCh <- true:
+				glog.Infof("closing holdover for %s since holdover is out of spec", d.iface)
+			default:
 			}
-		case d.hasPTPAsSource():
-			if d.PhaseOffset() > LocalMaxHoldoverOffSet {
-				glog.Infof("dpll offset is above MaxHoldoverOffSet, state is FREERUN(%s)", d.iface)
-				d.state = event.PTP_FREERUN
-				d.phaseOffset = FaultyPhaseOffset
-				d.sourceLost = true
-				select {
-				case d.holdoverCloseCh <- true:
-					glog.Infof("closing holdover for %s since offset if above MaxHoldoverOffSet", d.iface)
-				default:
-				}
-			} else if !d.onHoldover && !d.closing {
-				d.holdoverCloseCh = make(chan bool)
-				d.onHoldover = true
-				d.state = event.PTP_HOLDOVER
-				glog.Infof("starting holdover (%s)", d.iface)
-				go d.holdover()
-			}
+		case !d.onHoldover && !d.closing:
+			d.holdoverCloseCh = make(chan bool)
+			d.onHoldover = true
+			d.state = event.PTP_HOLDOVER
+			glog.Infof("starting holdover (%s)", d.iface)
+			go d.holdover()
 		}
 
 	case DPLL_LOCKED_HO_ACQ, DPLL_LOCKED:

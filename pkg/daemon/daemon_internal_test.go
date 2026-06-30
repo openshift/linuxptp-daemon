@@ -23,6 +23,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	"github.com/stretchr/testify/assert"
@@ -32,6 +33,14 @@ import (
 )
 
 const testPtp4lOffsetLine = "ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100"
+const testSkipStartupReason = "delayed"
+
+const (
+	testDUTLeadingIface = "ens2f0"
+	testDUTUpstream1    = "ens2f1"
+	testDUTUpstream2    = "ens2f3"
+	testDUTClockIDKey   = "clockId[ens2f0]"
+)
 
 // vendor defaults are embedded; no filesystem setup needed
 
@@ -90,7 +99,7 @@ func parseClockIDHex(s string) uint64 {
 	return v
 }
 
-func createMockDpllPinsGetterFromFile(path string) (hardwareconfig.DpllPinsGetter, error) {
+func createMockDpllPinsGetterFromFile(path string) (hardwareconfig.DpllPinsGetter, error) { //nolint:unparam
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -127,6 +136,7 @@ func clean(t *testing.T) {
 	err := os.RemoveAll("/tmp/test")
 	assert.NoError(t, err)
 }
+
 func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 	stopCh := make(<-chan struct{})
 	assert.NoError(t, leap.MockLeapFile())
@@ -162,7 +172,6 @@ func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 }
 
 func testRequirements(t *testing.T, profile *ptpv1.PtpProfile) {
-
 	cfg, err := configparser.NewConfigParserFromFile("/tmp/test/synce4l.0.config")
 	assert.NoError(t, err)
 	for _, sec := range cfg.Sections() {
@@ -179,6 +188,7 @@ func testRequirements(t *testing.T, profile *ptpv1.PtpProfile) {
 		}
 	}
 }
+
 func Test_applyProfile_synce(t *testing.T) {
 	defer clean(t)
 	testDataFiles := []string{
@@ -211,9 +221,18 @@ func Test_applyProfile_TBC(t *testing.T) {
 	}
 	defer hardwareconfig.TeardownMockDpllPinsForTests()
 
-	testDataFiles := []string{
-		"testdata/profile-tbc-tt.yaml",
-		"testdata/profile-tbc-tr.yaml",
+	tests := []struct {
+		dataFile          string
+		expectedProcesses []string
+	}{
+		{
+			dataFile:          "testdata/profile-tbc-tt.yaml",
+			expectedProcesses: []string{ptp4lProcessName},
+		},
+		{
+			dataFile:          "testdata/profile-tbc-tr.yaml",
+			expectedProcesses: []string{ptp4lProcessName, ptp4lProcessName, ts2phcProcessName, phc2sysProcessName},
+		},
 	}
 	stopCh := make(<-chan struct{})
 	assert.NoError(t, leap.MockLeapFile())
@@ -245,13 +264,23 @@ func Test_applyProfile_TBC(t *testing.T) {
 	// Signal that no hardware configs are expected for this test
 	_ = dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
 
-	for i := range len(testDataFiles) {
+	for _, test := range tests {
 		mkPath(t)
-		profile, err := loadProfile(testDataFiles[i])
+		profile, err := loadProfile(test.dataFile)
 		assert.NoError(t, err)
 		// Will assert inside in case of error:
 		err = dn.applyNodePtpProfile(0, profile)
 		assert.NoError(t, err)
+
+		// Ensure for T-BC that phc2sys is selected for delayed-start
+		actualProcesses := []string{}
+		for _, p := range dn.processManager.process {
+			actualProcesses = append(actualProcesses, p.name)
+			if p.name == phc2sysProcessName {
+				assert.NotEmpty(t, p.skipInitialStartup, "Ensure phc2sys is startup-delayed for T-BC")
+			}
+		}
+		assert.ElementsMatch(t, test.expectedProcesses, actualProcesses, "Ensure T-BC has the required processes prepared (%s)", test.dataFile)
 		clean(t)
 	}
 }
@@ -302,6 +331,8 @@ func Test_applyProfile_TGM(t *testing.T) {
 			ts2phcProc = p
 		case ptp4lProcessName:
 			ptp4lProc = p
+		case phc2sysProcessName:
+			assert.NotEmpty(t, p.skipInitialStartup, "Ensure phc2sys is startup-delayed for T-GM")
 		}
 	}
 
@@ -313,6 +344,13 @@ func Test_applyProfile_TGM(t *testing.T) {
 		}
 		assert.Contains(t, depNames, GPSD_PROCESSNAME, "gpsd must be a dependent process of ts2phc for T-GM")
 		assert.Contains(t, depNames, GPSPIPE_PROCESSNAME, "gpspipe must be a dependent process of ts2phc for T-GM")
+
+		for _, d := range ts2phcProc.depProcess {
+			if gpsd, ok := d.(*GPSD); ok {
+				assert.Equal(t, "ens7f0", gpsd.gmInterface,
+					"GPSD gmInterface should match the first interface in ts2phcConf (leading GNSS-sourced interface)")
+			}
+		}
 	}
 
 	// 2. ptp4l should NOT have a PMC dependent process for GM profiles.
@@ -1653,6 +1691,199 @@ func TestTBCDualUpstream_ActiveTRPort_Helper(t *testing.T) {
 	})
 }
 
+func TestTBCLegacy_Switchover_ActivePortUpdated(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_NOTSET},
+			activePort:        testDUTUpstream1,
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.Event, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+		offset:     5.0,
+	}
+
+	// ens2f1 goes down — enters holdover
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 ("+testDUTUpstream1+"): SLAVE to FAULTY on FAULT_DETECTED (FT_UNSPECIFIED)", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+
+	// ens2f3 takes over as SLAVE — activePort should update
+	process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config] port 2 ("+testDUTUpstream2+"): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, testDUTUpstream2, process.tBCAttributes.activePort,
+		"activePort should update to backup port after switchover")
+	assert.NotNil(t, process.tBCAttributes.offsetFilter)
+}
+
+func TestTBCLegacy_AllPortsLost_EntersHoldover(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_NOTSET},
+			activePort:        testDUTUpstream1,
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.Event, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+	}
+
+	// Active port loses SLAVE via ANNOUNCE timeout — enters holdover
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 ("+testDUTUpstream1+"): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+	assert.Nil(t, process.tBCAttributes.offsetFilter)
+}
+
+func TestTBCLegacy_RecoveryFromHoldover(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_FREERUN, testDUTUpstream2: event.PTP_NOTSET},
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_FREERUN,
+			lastAppliedState:  event.PTP_HOLDOVER,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.Event, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+		offset:     5.0,
+	}
+
+	// Backup port becomes SLAVE — starts recovery
+	process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config] port 2 ("+testDUTUpstream2+"): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, testDUTUpstream2, process.tBCAttributes.activePort)
+	assert.NotNil(t, process.tBCAttributes.offsetFilter)
+	assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState,
+		"should remain in holdover until offset filter converges")
+
+	// Fill offset filter (64 samples) to complete recovery
+	for i := 0; i < 64; i++ {
+		process.tBCTransitionCheck("ptp4l[300]: [test-config.0.config] master offset 5 s2 freq 0 path delay 100", pm)
+	}
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastAppliedState,
+		"should exit holdover after offset filter converges")
+}
+
+func TestTBCLegacy_ActiveTRPort_ReportsCorrectInterface(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_NOTSET, testDUTUpstream2: event.PTP_NOTSET},
+			trPortsConfigFile: "test-config",
+			lastAppliedState:  event.PTP_NOTSET,
+			offsetThreshold:   10.0,
+			offsetEventWindow: utils.NewWindow(16),
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.Event, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+		offset:     3.0,
+	}
+
+	// Initially activePort is empty — activeTRPort() returns trIfaceNames[0]
+	assert.Equal(t, testDUTUpstream1, process.tBCAttributes.activeTRPort())
+
+	// testDUTUpstream1 becomes SLAVE
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 ("+testDUTUpstream1+"): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, testDUTUpstream1, process.tBCAttributes.activeTRPort())
+
+	// Switchover: testDUTUpstream2 becomes SLAVE
+	process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config] port 2 ("+testDUTUpstream2+"): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, testDUTUpstream2, process.tBCAttributes.activeTRPort(),
+		"activeTRPort should reflect the newly selected backup port")
+}
+
+func TestTBCLegacy_ActivePort_IgnoresNonTRPort(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_NOTSET},
+			activePort:        testDUTUpstream1,
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.Event, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+	}
+
+	// A port with a prefix-colliding name (ens2f10 vs tracked ens2f1) fires MASTER_CLOCK_SELECTED.
+	// The log line contains "ens2f1" as a substring so portMatched is true, but
+	// ExtractPortName returns "ens2f10" which is NOT in trIfaceNames.
+	process.tBCTransitionCheck("ptp4l[300]: [test-config.0.config] port 3 (ens2f10): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, testDUTUpstream1, process.tBCAttributes.activePort,
+		"activePort must not change to a non-TR port with a prefix-colliding name")
+}
+
 // TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs tests clock_type detection with cliArgs parameter
 func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 	tests := []struct {
@@ -2718,6 +2949,76 @@ func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
 	}, "EmitClockClassLogs should not panic with nil parentDS")
 }
 
+// --- ReadyTracker.Ready() unit tests ---
+
+func makeReadyTracker(processes []*ptpProcess) *ReadyTracker {
+	return &ReadyTracker{
+		config: true,
+		processManager: &ProcessManager{
+			process: processes,
+		},
+	}
+}
+
+func TestReady_NoProcesses(t *testing.T) {
+	rt := makeReadyTracker(nil)
+	ok, msg := rt.Ready()
+	assert.False(t, ok)
+	assert.Contains(t, msg, "No processes")
+}
+
+func TestReady_AllRunningWithMetrics(t *testing.T) {
+	rt := makeReadyTracker([]*ptpProcess{
+		{name: ptp4lProcessName, stopped: false, hasCollectedMetrics: true},
+		{name: phc2sysProcessName, stopped: false, hasCollectedMetrics: true},
+	})
+	ok, msg := rt.Ready()
+	assert.True(t, ok, msg)
+}
+
+func TestReady_StoppedProcessReportsNotReady(t *testing.T) {
+	rt := makeReadyTracker([]*ptpProcess{
+		{name: ptp4lProcessName, stopped: false, hasCollectedMetrics: true},
+		{name: phc2sysProcessName, stopped: true},
+	})
+	ok, msg := rt.Ready()
+	assert.False(t, ok)
+	assert.Contains(t, msg, "Stopped")
+	assert.Contains(t, msg, phc2sysProcessName)
+}
+
+func TestReady_DelayedPhc2sysNotReportedAsStopped(t *testing.T) {
+	// phc2sys is intentionally delayed (skipInitialStartup set): the pod
+	// should be considered ready without it.
+	rt := makeReadyTracker([]*ptpProcess{
+		{name: ptp4lProcessName, stopped: false, hasCollectedMetrics: true},
+		{name: phc2sysProcessName, stopped: true, skipInitialStartup: testSkipStartupReason},
+	})
+	ok, msg := rt.Ready()
+	assert.True(t, ok, msg)
+}
+
+func TestReady_NilProcessEntrySkipped(t *testing.T) {
+	// nil slots in the process slice must not panic.
+	rt := makeReadyTracker([]*ptpProcess{
+		{name: ptp4lProcessName, stopped: false, hasCollectedMetrics: true},
+		nil,
+	})
+	ok, msg := rt.Ready()
+	assert.True(t, ok, msg)
+}
+
+func TestReady_AllProcessesDelayed(t *testing.T) {
+	// If every process has skipInitialStartup set (e.g. a phc2sys-only HA profile
+	// where ptp4l lives in separate profiles), the pod must not report ready.
+	rt := makeReadyTracker([]*ptpProcess{
+		{name: phc2sysProcessName, stopped: true, skipInitialStartup: testSkipStartupReason},
+	})
+	ok, msg := rt.Ready()
+	assert.False(t, ok)
+	assert.Contains(t, msg, "No processes")
+}
+
 // --- /emit-logs handler unit tests ---
 
 func TestEmitLogsHandler_NotReady_OpensGateAndReturns204(t *testing.T) {
@@ -3210,4 +3511,165 @@ func TestSocketWriter_SuffixStrip(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout: CEP did not finish reading")
 	}
+}
+
+func TestDelayedPhc2sysStartup(t *testing.T) {
+	profileName := "test-profile"
+	nodeProfile := ptpv1.PtpProfile{
+		Name: &profileName,
+	}
+
+	pm := &ProcessManager{
+		process: []*ptpProcess{},
+	}
+
+	dn := &Daemon{
+		processManager: pm,
+	}
+
+	phc2sys := &ptpProcess{
+		name:               phc2sysProcessName,
+		skipInitialStartup: testSkipStartupReason,
+		nodeProfile:        nodeProfile,
+		dn:                 dn,
+		execMutex:          sync.Mutex{},
+		stopped:            true, // Simulated stopped state
+	}
+
+	ts2phc := &ptpProcess{
+		name:        ts2phcProcessName,
+		nodeProfile: nodeProfile,
+		dn:          dn,
+		eventCh:     make(chan event.Event, 10),
+		ptpClockThreshold: &ptpv1.PtpClockThreshold{
+			MaxOffsetThreshold: 1000,
+			MinOffsetThreshold: -1000,
+		},
+	}
+
+	pm.process = append(pm.process, phc2sys, ts2phc)
+
+	// 1. Simulate large offset (> 1s)
+	dn.delayedPhc2sys.Store(true)
+	largeOffset := 37000000000.0 // 37s
+	ts2phc.ProcessTs2PhcEvents(largeOffset, ts2phcProcessName, "eth0", event.PTP_FREERUN, nil)
+
+	// Verify phc2sys is still delayed
+	assert.Equal(t, testSkipStartupReason, phc2sys.skipInitialStartup)
+
+	// 2. Exact boundary (== 1s): should NOT clear the delay (condition is strictly <)
+	phc2sys.skipInitialStartup = testSkipStartupReason
+	dn.delayedPhc2sys.Store(true)
+	boundaryOffset := 1000000000.0 // exactly 1s
+	ts2phc.ProcessTs2PhcEvents(boundaryOffset, ts2phcProcessName, "eth0", event.PTP_FREERUN, nil)
+	assert.Equal(t, testSkipStartupReason, phc2sys.skipInitialStartup, "At the 1s boundary phc2sys should remain delayed")
+	assert.True(t, dn.delayedPhc2sys.Load())
+
+	// 3. Negative sub-second offset (-0.5s): math.Abs should clear the delay
+	phc2sys.skipInitialStartup = testSkipStartupReason
+	dn.delayedPhc2sys.Store(true)
+	negSmallOffset := -500000000.0 // -0.5s
+	ts2phc.ProcessTs2PhcEvents(negSmallOffset, ts2phcProcessName, "eth0", event.PTP_LOCKED, nil)
+	assert.Equal(t, "", phc2sys.skipInitialStartup, "Negative sub-second offset should clear the delay")
+	assert.False(t, dn.delayedPhc2sys.Load())
+
+	// 4. Negative super-second offset (-2s): should NOT clear the delay
+	phc2sys.skipInitialStartup = testSkipStartupReason
+	dn.delayedPhc2sys.Store(true)
+	negLargeOffset := -2000000000.0 // -2s
+	ts2phc.ProcessTs2PhcEvents(negLargeOffset, ts2phcProcessName, "eth0", event.PTP_FREERUN, nil)
+	assert.Equal(t, testSkipStartupReason, phc2sys.skipInitialStartup, "Negative super-second offset should keep the delay")
+	assert.True(t, dn.delayedPhc2sys.Load())
+
+	// 5. Simulate sub-second offset (< 1s): original passing case
+	phc2sys.skipInitialStartup = testSkipStartupReason
+	dn.delayedPhc2sys.Store(true)
+	smallOffset := 500000000.0 // 0.5s
+	ts2phc.ProcessTs2PhcEvents(smallOffset, ts2phcProcessName, "eth0", event.PTP_LOCKED, nil)
+	assert.Equal(t, "", phc2sys.skipInitialStartup)
+	assert.False(t, dn.delayedPhc2sys.Load())
+}
+
+// TestDelayedPhc2sysStartup_HAProfile verifies that a phc2sys process in a
+// dedicated HA profile (with no ptp4l of its own) is correctly started when
+// a sub-second offset is reported by a ptp4l in one of its haProfile entries.
+func TestDelayedPhc2sysStartup_HAProfile(t *testing.T) {
+	phc2sysProfileName := "test-dual-nic-bc-ha"
+	master1ProfileName := "test-bc-master1"
+	master2ProfileName := "test-bc-master2"
+
+	phc2sysNodeProfile := ptpv1.PtpProfile{Name: &phc2sysProfileName}
+	master1NodeProfile := ptpv1.PtpProfile{Name: &master1ProfileName}
+	master2NodeProfile := ptpv1.PtpProfile{Name: &master2ProfileName}
+
+	pm := &ProcessManager{process: []*ptpProcess{}}
+	dn := &Daemon{processManager: pm}
+
+	phc2sys := &ptpProcess{
+		name:               phc2sysProcessName,
+		skipInitialStartup: testSkipStartupReason,
+		nodeProfile:        phc2sysNodeProfile,
+		haProfile:          map[string][]string{master1ProfileName: {"ens1f1"}, master2ProfileName: {"ens2f0"}},
+		dn:                 dn,
+		execMutex:          sync.Mutex{},
+		stopped:            true,
+	}
+
+	ptp4lMaster1 := &ptpProcess{
+		name:        ptp4lProcessName,
+		nodeProfile: master1NodeProfile,
+		dn:          dn,
+		eventCh:     make(chan event.Event, 10),
+		ptpClockThreshold: &ptpv1.PtpClockThreshold{
+			MaxOffsetThreshold: 1000,
+			MinOffsetThreshold: -1000,
+		},
+	}
+
+	ptp4lMaster2 := &ptpProcess{
+		name:        ptp4lProcessName,
+		nodeProfile: master2NodeProfile,
+		dn:          dn,
+		eventCh:     make(chan event.Event, 10),
+		ptpClockThreshold: &ptpv1.PtpClockThreshold{
+			MaxOffsetThreshold: 1000,
+			MinOffsetThreshold: -1000,
+		},
+	}
+
+	pm.process = append(pm.process, phc2sys, ptp4lMaster1, ptp4lMaster2)
+
+	// A large offset from master1 must NOT start phc2sys.
+	dn.delayedPhc2sys.Store(true)
+	dn.HandleDelayedPhc2sysStartup(ptp4lProcessName, 37000000000.0, &master1ProfileName)
+	assert.Equal(t, testSkipStartupReason, phc2sys.skipInitialStartup,
+		"large offset from HA-linked profile should not start phc2sys")
+
+	// A sub-second offset from master2 (different profile from phc2sys) MUST start it.
+	dn.delayedPhc2sys.Store(true)
+	dn.HandleDelayedPhc2sysStartup(ptp4lProcessName, 500000000.0, &master2ProfileName)
+	assert.Equal(t, "", phc2sys.skipInitialStartup,
+		"sub-second offset from HA-linked profile should start phc2sys")
+	assert.False(t, dn.delayedPhc2sys.Load())
+}
+
+func TestFindProcessesByName(t *testing.T) {
+	pm := &ProcessManager{
+		process: []*ptpProcess{
+			{name: "ptp4l"},
+			{name: "phc2sys"},
+			{name: "ptp4l"},
+		},
+	}
+
+	procs := pm.findProcessesByName("ptp4l")
+	assert.Equal(t, 2, len(procs))
+	assert.Equal(t, "ptp4l", procs[0].name)
+	assert.Equal(t, "ptp4l", procs[1].name)
+
+	procs = pm.findProcessesByName("phc2sys")
+	assert.Equal(t, 1, len(procs))
+
+	procs = pm.findProcessesByName("nonexistent")
+	assert.Equal(t, 0, len(procs))
 }

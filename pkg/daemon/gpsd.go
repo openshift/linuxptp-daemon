@@ -1,11 +1,9 @@
 package daemon
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -257,7 +255,7 @@ func (g *GPSD) MonitorGNSSEventsWithUblox() {
 					lines = append(lines, line)
 				}
 				if len(lines) > 0 {
-					g.processGNSSLines(strings.NewReader(strings.Join(lines, "\n")))
+					g.processGNSSLines(lines)
 				}
 			case <-g.monitorCtx.Done():
 				doneFn()
@@ -267,35 +265,30 @@ func (g *GPSD) MonitorGNSSEventsWithUblox() {
 	}
 }
 
-// processGNSSLines reads ubxtool-formatted lines from r, extracts
-// GNSS status and offset, determines the sync state, and emits an
-// event on the event channel and gnssNotifyCh.
-func (g *GPSD) processGNSSLines(r io.Reader) {
+// processGNSSLines parses ubxtool-formatted lines, extracts GNSS status and
+// offset, determines the sync state, and emits an event on the event channel.
+// Each element of lines is one ubxtool output line (trailing newline optional).
+func (g *GPSD) processGNSSLines(lines []string) {
 	const timeLsResultLines = 4
-	scanner := bufio.NewScanner(r)
 	nStatus := int64(0)
 	nOffset := int64(99999999)
 	var timeLs *ublox.TimeLs
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	for i, line := range lines {
 		if strings.Contains(line, "UBX-NAV-CLOCK") {
-			if scanner.Scan() {
-				nOffset = ublox.ExtractOffset(scanner.Text())
+			if i+1 < len(lines) {
+				nOffset = ublox.ExtractOffset(lines[i+1])
 			}
 		} else if strings.Contains(line, "UBX-NAV-STATUS") {
-			if scanner.Scan() {
-				nStatus = ublox.ExtractNavStatus(scanner.Text())
+			if i+1 < len(lines) {
+				nStatus = ublox.ExtractNavStatus(lines[i+1])
 			}
 		} else if strings.Contains(line, "UBX-NAV-TIMELS") {
-			var lines []string
-			for i := 0; i < timeLsResultLines; i++ {
-				if !scanner.Scan() {
-					break
-				}
-				lines = append(lines, scanner.Text())
+			end := i + 1 + timeLsResultLines
+			if end > len(lines) {
+				end = len(lines)
 			}
-			timeLs = ublox.ExtractLeapSec(lines)
+			timeLs = ublox.ExtractLeapSec(lines[i+1 : end])
 		}
 	}
 

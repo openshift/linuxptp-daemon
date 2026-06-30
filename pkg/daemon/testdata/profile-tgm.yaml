@@ -214,6 +214,8 @@ ptp4lOpts: -2 --summary_interval -4
 ptpSchedulingPolicy: SCHED_FIFO
 ptpSchedulingPriority: 10
 ts2phcConf: |
+  [nmea]
+  ts2phc.master 1
   [global]
   use_syslog  0
   verbose 1
@@ -221,15 +223,15 @@ ts2phcConf: |
   ts2phc.pulsewidth 100000000
   leapfile  /usr/share/zoneinfo/leap-seconds.list
   [ens7f0]
+  ts2phc.master 0
   ts2phc.extts_polarity rising
   ts2phc.extts_correction 0
-  ts2phc.master 0
   [ens4f0]
+  ts2phc.master 0
   ts2phc.extts_polarity rising
   ts2phc.extts_correction 0
-  ts2phc.master 0
   [ens2f0]
+  ts2phc.master 0
   ts2phc.extts_polarity rising
   ts2phc.extts_correction 0
-  ts2phc.master 0
 ts2phcOpts: ' '
