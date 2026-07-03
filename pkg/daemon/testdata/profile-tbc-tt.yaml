@@ -5,6 +5,7 @@ ptpSettings:
   clockId[ens5f0]: 5799633565433967128
   clockId[ens8f0]: 5799633565432596448
   controllingProfile: 01-tbc-tr
+  clockType: "T-BC"
 ptp4lConf: |
   [ens4f0]
   masterOnly 1

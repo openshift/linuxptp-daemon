@@ -1,36 +1,32 @@
-name: 01-tbc-tr
+name: grandmaster
 ptpSettings:
   unitTest: /tmp/test
   clockId[ens4f0]: 5799633565432596414
   clockId[ens5f0]: 5799633565433967128
   clockId[ens8f0]: 5799633565432596448
-  inSyncConditionThreshold: 10
-  inSyncConditionTimes: 2
-  clockType: "T-BC"
-phc2sysOpts: -r -n 24 -N 8 -u 0 -s ens4f0
+phc2sysOpts: -a -r -n 24 -N 8 -R 16 -u 0
 plugins:
   e810:
     enableDefaultConfig: false
     interconnections:
-      - id: ens4f0
-        part: E810-XXVDA4T
-        gnssInput: false
-        upstreamPort: ens4f0
-        phaseOutputConnectors:
-          - SMA1
-          - SMA2
-      - id: ens5f0
-        part: E810-XXVDA4T
-        inputConnector:
-          connector: SMA1
-          delayPs: 920
-      - id: ens8f0
-        part: E810-XXVDA4T
-        inputConnector:
-          connector: SMA1
-          delayPs: 920
-        phaseOutputConnectors:
-          - U.FL1
+    - id: ens4f0
+      part: E810-XXVDA4T
+      gnssInput: true
+      phaseOutputConnectors:
+      - SMA1
+      - SMA2
+    - id: ens5f0
+      part: E810-XXVDA4T
+      inputConnector:
+        connector: SMA1
+        delayPs: 920
+    - id: ens8f0
+      part: E810-XXVDA4T
+      inputConnector:
+        connector: SMA1
+        delayPs: 920
+      phaseOutputConnectors:
+      - U.FL1
     pins:
       ens4f0:
         SMA1: 2 1
@@ -39,20 +35,82 @@ plugins:
         U.FL2: 0 2
       ens5f0:
         SMA1: 1 1
-        SMA2: 2 2
+        SMA2: 0 2
         U.FL1: 0 1
         U.FL2: 0 2
       ens8f0:
         SMA1: 1 1
-        SMA2: 2 2
+        SMA2: 0 2
         U.FL1: 0 1
         U.FL2: 0 2
     settings:
       LocalHoldoverTimeout: 14400
       LocalMaxHoldoverOffSet: 1500
       MaxInSpecOffset: 1500
+    ublxCmds:
+      - args:
+          - -P
+          - "29.20"
+          - -z
+          - CFG-HW-ANT_CFG_VOLTCTRL,1
+        reportOutput: false
+      - args:
+          - -P
+          - "29.20"
+          - -e
+          - GPS
+        reportOutput: false
+      - args:
+          - -P
+          - "29.20"
+          - -d
+          - Galileo
+        reportOutput: false
+      - args:
+          - -P
+          - "29.20"
+          - -d
+          - GLONASS
+        reportOutput: false
+      - args:
+          - -P
+          - "29.20"
+          - -d
+          - BeiDou
+        reportOutput: false
+      - args:
+          - -P
+          - "29.20"
+          - -d
+          - SBAS
+        reportOutput: false
+      - args:
+          - -P
+          - "29.20"
+          - -t
+          - -w
+          - "5"
+          - -v
+          - "1"
+          - -e
+          - SURVEYIN,600,50000
+        reportOutput: true
+      - args:
+          - -P
+          - "29.20"
+          - -p
+          - MON-HW
+        reportOutput: true
+      - args:
+          - -P
+          - "29.20"
+          - -p
+          - CFG-MSG,1,38,248
+        reportOutput: true
 ptp4lConf: |
-  [ens4f0]
+  [ens7f0]
+  masterOnly 1
+  [ens7f1]
   masterOnly 1
   [global]
   #
@@ -134,7 +192,7 @@ ptp4lConf: |
   #
   # Default interface options
   #
-  clock_type OC
+  clock_type BC
   network_transport L2
   delay_mechanism E2E
   time_stamping hardware
@@ -143,7 +201,7 @@ ptp4lConf: |
   delay_filter_length 10
   egressLatency 0
   ingressLatency 0
-  boundary_clock_jbod 1
+  boundary_clock_jbod 0
   #
   # Clock description
   #
@@ -156,22 +214,24 @@ ptp4lOpts: -2 --summary_interval -4
 ptpSchedulingPolicy: SCHED_FIFO
 ptpSchedulingPriority: 10
 ts2phcConf: |
+  [nmea]
+  ts2phc.master 1
   [global]
   use_syslog  0
   verbose 1
   logging_level 7
   ts2phc.pulsewidth 100000000
   leapfile  /usr/share/zoneinfo/leap-seconds.list
+  [ens7f0]
+  ts2phc.master 0
+  ts2phc.extts_polarity rising
+  ts2phc.extts_correction 0
   [ens4f0]
+  ts2phc.master 0
   ts2phc.extts_polarity rising
   ts2phc.extts_correction 0
+  [ens2f0]
   ts2phc.master 0
-  [ens5f0]
   ts2phc.extts_polarity rising
   ts2phc.extts_correction 0
-  ts2phc.master 0
-  [ens8f0]
-  ts2phc.extts_polarity rising
-  ts2phc.extts_correction 0
-  ts2phc.master 0
-ts2phcOpts: "-s generic -a --ts2phc.rh_external_pps 1"
+ts2phcOpts: ' '
