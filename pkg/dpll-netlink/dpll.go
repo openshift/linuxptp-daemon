@@ -161,8 +161,10 @@ func ParseDeviceReplies(msgs []genetlink.Message) ([]*DoDeviceGetReply, error) {
 				reply.PhaseOffsetMonitor = ad.Uint32()
 			case DpllPhaseOffsetAverageFactor:
 				reply.PhaseOffsetAverageFactor = ad.Uint32()
+			case DpllFrequencyMonitor:
+				reply.FrequencyMonitor = ad.Uint32()
 			default:
-				log.Println("default", ad.Type(), len(ad.Bytes()), ad.Bytes())
+				log.Println("default", ad.Type(), len(ad.Bytes()), string(ad.Bytes()))
 			}
 		}
 		if err := ad.Err(); err != nil {
@@ -259,6 +261,7 @@ type DoDeviceGetReply struct {
 	ClockQualityLevel        []uint32
 	PhaseOffsetMonitor       uint32
 	PhaseOffsetAverageFactor uint32
+	FrequencyMonitor         uint32
 }
 
 func ParsePinReplies(msgs []genetlink.Message) ([]*PinInfo, error) {
@@ -325,6 +328,12 @@ func ParsePinReplies(msgs []genetlink.Message) ([]*PinInfo, error) {
 							temp.State = ad.Uint32()
 						case DpllPinPhaseOffset:
 							temp.PhaseOffset = ad.Int64()
+						case DpllPinOperstate:
+							temp.Operstate = ad.Uint32()
+						case DpllPinFractionalFrequencyOffset:
+							temp.FractionalFrequencyOffset = int(ad.Int32())
+						case DpllPinFractionalFrequencyOffsetPPT:
+							temp.FractionalFrequencyOffsetPPT = int(ad.Int32())
 						}
 
 					}
@@ -387,6 +396,12 @@ func ParsePinReplies(msgs []genetlink.Message) ([]*PinInfo, error) {
 				})
 			case DpllPinPhaseAdjustGran:
 				reply.PhaseAdjustGran = ad.Uint32()
+			case DpllPinFractionalFrequencyOffsetPPT:
+				reply.FractionalFrequencyOffsetPPT = int(ad.Int32())
+			case DpllPinMeasuredFrequency:
+				reply.MeasuredFrequency = ad.Uint64()
+			case DpllPinOperstate:
+				reply.Operstate = ad.Uint32()
 			default:
 				log.Printf("unrecognized type: %d\n", ad.Type())
 			}
@@ -460,34 +475,37 @@ type DoPinGetRequest struct {
 
 // PinInfo is used with the DoPinSet /DoPinGet / DumpPinGet / monitor methods.
 type PinInfo struct {
-	ID                        uint32
-	ParentID                  uint32
-	ModuleName                string
-	ClockID                   uint64
-	BoardLabel                string
-	PanelLabel                string
-	PackageLabel              string
-	Type                      uint32
-	Direction                 uint32
-	Frequency                 uint64
-	FrequencySupported        []FrequencyRange
-	FrequencyMin              uint64
-	FrequencyMax              uint64
-	Prio                      uint32
-	State                     uint32
-	Capabilities              uint32
-	ParentDevice              []PinParentDevice
-	ParentPin                 []PinParentPin
-	PhaseAdjustMin            int32
-	PhaseAdjustMax            int32
-	PhaseAdjust               int32
-	PhaseOffset               int64
-	FractionalFrequencyOffset int
-	EsyncFrequency            int64
-	EsyncFrequencySupported   []FrequencyRange
-	EsyncPulse                uint32
-	ReferenceSync             []ReferenceSync
-	PhaseAdjustGran           uint32
+	ID                           uint32
+	ParentID                     uint32
+	ModuleName                   string
+	ClockID                      uint64
+	BoardLabel                   string
+	PanelLabel                   string
+	PackageLabel                 string
+	Type                         uint32
+	Direction                    uint32
+	Frequency                    uint64
+	FrequencySupported           []FrequencyRange
+	FrequencyMin                 uint64
+	FrequencyMax                 uint64
+	Prio                         uint32
+	State                        uint32
+	Capabilities                 uint32
+	ParentDevice                 []PinParentDevice
+	ParentPin                    []PinParentPin
+	PhaseAdjustMin               int32
+	PhaseAdjustMax               int32
+	PhaseAdjust                  int32
+	PhaseOffset                  int64
+	FractionalFrequencyOffset    int
+	FractionalFrequencyOffsetPPT int
+	EsyncFrequency               int64
+	EsyncFrequencySupported      []FrequencyRange
+	EsyncPulse                   uint32
+	ReferenceSync                []ReferenceSync
+	PhaseAdjustGran              uint32
+	MeasuredFrequency            uint64
+	Operstate                    uint32
 }
 
 // FrequencyRange contains nested netlink attributes.
@@ -504,11 +522,14 @@ type ReferenceSync struct {
 
 // PinParentDevice contains nested netlink attributes.
 type PinParentDevice struct {
-	ParentID    uint32
-	Direction   uint32
-	Prio        *uint32
-	State       uint32
-	PhaseOffset int64
+	ParentID                     uint32
+	Direction                    uint32
+	Prio                         *uint32
+	State                        uint32
+	PhaseOffset                  int64
+	Operstate                    uint32
+	FractionalFrequencyOffset    int
+	FractionalFrequencyOffsetPPT int
 }
 
 // PinParentPin contains nested netlink attributes.
@@ -569,7 +590,7 @@ func EncodePinControl(req PinParentDeviceCtl) ([]byte, error) {
 		ae.Int32(DpllPinPhaseAdjust, *req.PhaseAdjust)
 	}
 	if req.EsyncFrequency != nil {
-		ae.Uint64(DpllPinPhaseAdjust, *req.EsyncFrequency)
+		ae.Uint64(DpllPinEsyncFrequency, *req.EsyncFrequency)
 	}
 	if req.Frequency != nil {
 		ae.Uint64(DpllPinFrequency, *req.Frequency)
