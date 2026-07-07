@@ -190,6 +190,7 @@ type EventHandler struct {
 	ReduceLog          bool // reduce logs for every announce
 	LeadingClockData   *LeadingClockParams
 	portRole           map[string]map[string]*parser.PTPEvent
+	downstreamCancel   map[string]context.CancelFunc
 }
 
 // getConn returns the current event socket connection under lock.
@@ -258,6 +259,7 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		ReduceLog:          true,
 		LeadingClockData:   newLeadingClockParams(),
 		portRole:           map[string]map[string]*parser.PTPEvent{},
+		downstreamCancel:   map[string]context.CancelFunc{},
 	}
 
 	StateRegisterer = NewStateNotifier()
