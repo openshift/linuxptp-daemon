@@ -506,6 +506,29 @@ func TestGetLargestOffset(t *testing.T) {
 			fillWindow: true,
 			expected:   10,
 		},
+		{
+			name:    "Follower DPLL with FaultyPhaseOffset blocks lock (WPC regression)",
+			cfgName: "test",
+			data: map[string][]*Data{
+				"test": {
+					{ProcessName: DPLL, Details: []*DataDetails{
+						{IFace: "eth0", Offset: -71, time: recentTime},
+						{IFace: "eth1", Offset: FaultyPhaseOffset, time: recentTime},
+						{IFace: "eth2", Offset: FaultyPhaseOffset, time: recentTime},
+					}},
+					{ProcessName: PTP4l, Details: []*DataDetails{
+						{IFace: "eth0", Offset: 4, time: recentTime},
+					}},
+				},
+			},
+			clkSyncState: map[string]*clockSyncState{
+				"test": {
+					leadingIFace: "eth0",
+				},
+			},
+			fillWindow: true,
+			expected:   FaultyPhaseOffset,
+		},
 	}
 
 	for _, tt := range tests {
@@ -519,7 +542,9 @@ func TestGetLargestOffset(t *testing.T) {
 						d.window = *utils.NewWindow(WindowSize)
 						for i := 0; i < WindowSize; i++ {
 							offset := d.Details[i%len(d.Details)].Offset
-							d.window.Insert(float64(offset))
+							if offset != FaultyPhaseOffset {
+								d.window.Insert(float64(offset))
+							}
 						}
 					}
 				}
@@ -529,4 +554,35 @@ func TestGetLargestOffset(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestAddEvent_FaultyPhaseOffsetNotInsertedInWindow(t *testing.T) {
+	d := &Data{
+		ProcessName: DPLL,
+		Details: []*DataDetails{
+			{IFace: "eth0", time: 0},
+			{IFace: "eth1", time: 0},
+		},
+		window: *utils.NewWindow(WindowSize),
+	}
+
+	now := time.Now().UnixMilli()
+
+	d.AddEvent(EventChannel{
+		ProcessName: DPLL,
+		IFace:       "eth0",
+		Time:        now,
+		Values:      map[ValueType]any{OFFSET: int64(-71)},
+	})
+	assert.False(t, d.window.IsEmpty(), "window should have value after valid offset")
+	assert.Equal(t, int64(-71), d.Details[0].Offset)
+
+	d.AddEvent(EventChannel{
+		ProcessName: DPLL,
+		IFace:       "eth1",
+		Time:        now,
+		Values:      map[ValueType]any{OFFSET: FaultyPhaseOffset},
+	})
+	assert.Equal(t, FaultyPhaseOffset, d.Details[1].Offset, "dd.Offset should store sentinel")
+	assert.Equal(t, float64(-71), d.window.Mean(), "window mean must not be corrupted by sentinel")
 }
