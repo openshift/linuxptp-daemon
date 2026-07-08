@@ -93,7 +93,9 @@ func (d *Data) AddEvent(event EventChannel) {
 				if fnd {
 					offset := off.(int64)
 					dd.Offset = offset
-					d.window.Insert(float64(offset))
+					if offset != FaultyPhaseOffset {
+						d.window.Insert(float64(offset))
+					}
 				}
 
 			} else {
