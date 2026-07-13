@@ -400,7 +400,7 @@ type PinInfoHR struct {
 	EsyncPulse                   int64               `json:"esyncPulse,omitempty"`
 	ReferenceSync                []ReferenceSync     `json:"referenceSync,omitempty"`
 	PhaseAdjustGran              uint32              `json:"phaseAdjustGran,omitempty"`
-	FractionalFrequencyOffsetPPT int                 `json:"fractionalFrequencyOffsetPPT,omitempty"`
+	FractionalFrequencyOffsetPPT int64               `json:"fractionalFrequencyOffsetPPT,omitempty"`
 	MeasuredFrequencyHz          float64             `json:"measuredFrequencyHz,omitempty"`
 	Operstate                    string              `json:"operstate,omitempty"`
 }
@@ -414,7 +414,7 @@ type PinParentDeviceHR struct {
 	PhaseOffsetPs                float64 `json:"phaseOffsetPs"`
 	Operstate                    string  `json:"operstate,omitempty"`
 	FractionalFrequencyOffset    int     `json:"fractionalFrequencyOffset,omitempty"`
-	FractionalFrequencyOffsetPPT int     `json:"fractionalFrequencyOffsetPPT,omitempty"`
+	FractionalFrequencyOffsetPPT int64   `json:"fractionalFrequencyOffsetPPT,omitempty"`
 }
 
 // PinParentPin contains nested netlink attributes.

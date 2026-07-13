@@ -4,12 +4,28 @@ package dpll_netlink
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"math"
 
 	"github.com/mdlayher/genetlink"
 	"github.com/mdlayher/netlink"
 )
+
+// decodeSint decodes a netlink NLA_SINT attribute. The kernel's nla_put_sint
+// encodes signed values as either 4 or 8 bytes depending on magnitude, so
+// fixed-width Int32/Int64 decoders reject valid payloads.
+func decodeSint(ad *netlink.AttributeDecoder) (int64, error) {
+	b := ad.Bytes()
+	switch len(b) {
+	case 4:
+		return int64(int32(ad.ByteOrder.Uint32(b))), nil
+	case 8:
+		return int64(ad.ByteOrder.Uint64(b)), nil
+	default:
+		return 0, fmt.Errorf("netlink: attribute %d is not a sint; length: %d", ad.Type(), len(b))
+	}
+}
 
 // A Conn is a connection to netlink family "dpll".
 type Conn struct {
@@ -331,9 +347,17 @@ func ParsePinReplies(msgs []genetlink.Message) ([]*PinInfo, error) {
 						case DpllPinOperstate:
 							temp.Operstate = ad.Uint32()
 						case DpllPinFractionalFrequencyOffset:
-							temp.FractionalFrequencyOffset = int(ad.Int32())
+							v, sintErr := decodeSint(ad)
+							if sintErr != nil {
+								return sintErr
+							}
+							temp.FractionalFrequencyOffset = int(v)
 						case DpllPinFractionalFrequencyOffsetPPT:
-							temp.FractionalFrequencyOffsetPPT = int(ad.Int32())
+							v, sintErr := decodeSint(ad)
+							if sintErr != nil {
+								return sintErr
+							}
+							temp.FractionalFrequencyOffsetPPT = v
 						}
 
 					}
@@ -363,7 +387,11 @@ func ParsePinReplies(msgs []genetlink.Message) ([]*PinInfo, error) {
 			case DpllPinPhaseOffset:
 				reply.PhaseOffset = ad.Int64()
 			case DpllPinFractionalFrequencyOffset:
-				reply.FractionalFrequencyOffset = int(ad.Int32())
+				v, sintErr := decodeSint(ad)
+				if sintErr != nil {
+					return nil, sintErr
+				}
+				reply.FractionalFrequencyOffset = int(v)
 			case DpllPinEsyncFrequency:
 				reply.EsyncFrequency = ad.Int64()
 			case DpllPinEsyncFrequencySupported:
@@ -397,7 +425,11 @@ func ParsePinReplies(msgs []genetlink.Message) ([]*PinInfo, error) {
 			case DpllPinPhaseAdjustGran:
 				reply.PhaseAdjustGran = ad.Uint32()
 			case DpllPinFractionalFrequencyOffsetPPT:
-				reply.FractionalFrequencyOffsetPPT = int(ad.Int32())
+				v, sintErr := decodeSint(ad)
+				if sintErr != nil {
+					return nil, sintErr
+				}
+				reply.FractionalFrequencyOffsetPPT = v
 			case DpllPinMeasuredFrequency:
 				reply.MeasuredFrequency = ad.Uint64()
 			case DpllPinOperstate:
@@ -498,7 +530,7 @@ type PinInfo struct {
 	PhaseAdjust                  int32
 	PhaseOffset                  int64
 	FractionalFrequencyOffset    int
-	FractionalFrequencyOffsetPPT int
+	FractionalFrequencyOffsetPPT int64
 	EsyncFrequency               int64
 	EsyncFrequencySupported      []FrequencyRange
 	EsyncPulse                   uint32
@@ -529,7 +561,7 @@ type PinParentDevice struct {
 	PhaseOffset                  int64
 	Operstate                    uint32
 	FractionalFrequencyOffset    int
-	FractionalFrequencyOffsetPPT int
+	FractionalFrequencyOffsetPPT int64
 }
 
 // PinParentPin contains nested netlink attributes.
