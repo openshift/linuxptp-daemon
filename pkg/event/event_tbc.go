@@ -246,6 +246,23 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 	return rclockSyncState, needsTTSCAnnounce
 }
 
+// TriggerDownstreamUpdate triggers a downstream IWF announce for a T-BC profile,
+// but only when the BC is in the LOCKED state. In other states the BC state
+// machine already handles downstream announces via state transitions.
+// It accepts the ptp4l config name and converts it to the ts2phc config key
+// used internally by clkSyncState.
+func (e *EventHandler) TriggerDownstreamUpdate(ptp4lCfgName string) {
+	cfgName := strings.Replace(ptp4lCfgName, "ptp4l", "ts2phc", 1)
+	e.Lock()
+	data, ok := e.clkSyncState[cfgName]
+	if !ok || data.state != PTP_LOCKED {
+		e.Unlock()
+		return
+	}
+	e.Unlock()
+	e.updateDownstreamData(cfgName)
+}
+
 func (e *EventHandler) updateDownstreamData(cfgName string) {
 	e.Lock()
 	data, ok := e.clkSyncState[cfgName]

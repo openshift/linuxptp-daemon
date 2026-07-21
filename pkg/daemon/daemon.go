@@ -31,6 +31,7 @@ import (
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
 
@@ -231,35 +232,36 @@ type tBCProcessAttributes struct {
 }
 
 type ptpProcess struct {
-	name                  string
-	ifaces                config.IFaces
-	processSocketPath     string
-	processConfigPath     string
-	configName            string
-	messageTag            string
-	eventCh               chan event.EventChannel
-	exitCh                chan bool
-	execMutex             sync.Mutex
-	stopped               bool
-	logFilters            []*logfilter.LogFilter // List of filters to apply to logs
-	cmd                   *exec.Cmd
-	depProcess            []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
-	nodeProfile           ptpv1.PtpProfile
-	logParser             parser.MetricsExtractor
-	pmcCheck              bool
-	clockClassRunning     atomic.Bool
-	lastTransitionResult  event.PTPState
-	clockType             event.ClockType
-	ptpClockThreshold     *ptpv1.PtpClockThreshold
-	haProfile             map[string][]string // stores list of interface name for each profile
-	syncERelations        *synce.Relations
-	c                     *net.Conn
-	hasCollectedMetrics   bool
-	tBCAttributes         tBCProcessAttributes
-	GrandmasterClockClass uint8
-	dn                    *Daemon
-	cmdSetEnabledMutex    sync.Mutex
-	skipInitialStartup    string
+	name                     string
+	ifaces                   config.IFaces
+	processSocketPath        string
+	processConfigPath        string
+	configName               string
+	messageTag               string
+	eventCh                  chan event.EventChannel
+	exitCh                   chan bool
+	execMutex                sync.Mutex
+	stopped                  bool
+	logFilters               []*logfilter.LogFilter // List of filters to apply to logs
+	cmd                      *exec.Cmd
+	depProcess               []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
+	nodeProfile              ptpv1.PtpProfile
+	logParser                parser.MetricsExtractor
+	pmcCheck                 bool
+	clockClassRunning        atomic.Bool
+	lastTransitionResult     event.PTPState
+	clockType                event.ClockType
+	ptpClockThreshold        *ptpv1.PtpClockThreshold
+	haProfile                map[string][]string // stores list of interface name for each profile
+	syncERelations           *synce.Relations
+	c                        *net.Conn
+	hasCollectedMetrics      bool
+	tBCAttributes            tBCProcessAttributes
+	GrandmasterClockClass    uint8
+	GrandmasterClockAccuracy uint8
+	dn                       *Daemon
+	cmdSetEnabledMutex       sync.Mutex
+	skipInitialStartup       string
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -987,10 +989,7 @@ func (dn *Daemon) GetPhaseOffsetPinFilter(nodeProfile *ptpv1.PtpProfile) map[str
 func (dn *Daemon) HandlePmcTicker() {
 	for _, p := range dn.processManager.process {
 		if p.name == ptp4lProcessName {
-			// T-BC has different requirements for PMC polling. Handled in the T-BC event handler.
-			if p.nodeProfile.PtpSettings["clockType"] != TBC {
-				p.TriggerPmcCheck()
-			}
+			p.TriggerPmcCheck()
 		}
 	}
 }
@@ -1033,7 +1032,7 @@ func processStatus(c *net.Conn, processName, messageTag string, status int64) {
 }
 
 func (p *ptpProcess) updateClockClass(c *net.Conn) {
-	if p.nodeProfile.PtpSettings["clockType"] == TBC || p.nodeProfile.PtpSettings["controllingProfile"] != "" {
+	if p.nodeProfile.PtpSettings["controllingProfile"] != "" {
 		return
 	}
 	// Per-process single-flight guard
@@ -1049,9 +1048,21 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 	}()
 
 	if r, e := pmc.RunPMCExpGetParentDS(p.configName); e == nil {
-		if r.GrandmasterClockClass != p.GrandmasterClockClass {
+		classChanged := r.GrandmasterClockClass != p.GrandmasterClockClass
+		accuracyChanged := r.GrandmasterClockAccuracy != p.GrandmasterClockAccuracy
+		if classChanged {
 			glog.Infof("clock change event identified: %d -> %d", p.GrandmasterClockClass, r.GrandmasterClockClass)
 			p.GrandmasterClockClass = r.GrandmasterClockClass
+		}
+		if accuracyChanged {
+			glog.Infof("clock accuracy change event identified: %d -> %d", p.GrandmasterClockAccuracy, r.GrandmasterClockAccuracy)
+			p.GrandmasterClockAccuracy = r.GrandmasterClockAccuracy
+		}
+		if (classChanged || accuracyChanged) && p.nodeProfile.PtpSettings["clockType"] == TBC {
+			// Don't propagate upstream freerun; let the T-BC state machine handle holdover/freerun.
+			if p.GrandmasterClockClass != uint8(protocol.ClockClassFreerun) {
+				p.dn.processManager.ptpEventHandler.TriggerDownstreamUpdate(p.configName)
+			}
 		}
 		//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
 		// change to pint every minute or when the clock class changes
