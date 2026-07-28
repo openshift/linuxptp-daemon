@@ -265,22 +265,26 @@ func GetClockQualityLevels(cqs []uint32) string {
 
 // GetClockQualityLevel returns clock quality level as a string
 func GetClockQualityLevel(cq uint32) string {
-	clockQualityLevelMap := map[uint32]string{
-		ClockQualityLevel:             "itu-opt1-prc",
-		ClockQualityLevelITUOpt1PRC:   "itu-opt1-prc",
-		ClockQualityLevelITUOpt1SSUA:  "itu-opt1-ssua",
-		ClockQualityLevelITUOpt1SSUB:  "itu-opt1-ssub",
-		ClockQualityLevelITUOpt1EEC1:  "itu-opt1-eec1",
-		ClockQualityLevelITUOpt1PRTC:  "itu-opt1-prtc",
-		ClockQualityLevelITUOpt1EPRTC: "itu-opt1-eprtc",
-		ClockQualityLevelITUOpt1EEEC:  "itu-opt1-eeec",
-		ClockQualityLevelItuOpt1EPRC:  "itu-opt1-eprc",
+	switch cq {
+	case ClockQualityLevel, ClockQualityLevelITUOpt1PRC:
+		return "itu-opt1-prc"
+	case ClockQualityLevelITUOpt1SSUA:
+		return "itu-opt1-ssua"
+	case ClockQualityLevelITUOpt1SSUB:
+		return "itu-opt1-ssub"
+	case ClockQualityLevelITUOpt1EEC1:
+		return "itu-opt1-eec1"
+	case ClockQualityLevelITUOpt1PRTC:
+		return "itu-opt1-prtc"
+	case ClockQualityLevelITUOpt1EPRTC:
+		return "itu-opt1-eprtc"
+	case ClockQualityLevelITUOpt1EEEC:
+		return "itu-opt1-eeec"
+	case ClockQualityLevelItuOpt1EPRC:
+		return "itu-opt1-eprc"
+	default:
+		return unknownStr
 	}
-	cqStr, found := clockQualityLevelMap[cq]
-	if found {
-		return cqStr
-	}
-	return unknownStr
 }
 
 // DpllTypeAttribute defines DPLL types
