@@ -325,8 +325,10 @@ type Daemon struct {
 	// Allow vendors to include plugins
 	pluginManager plugin.PluginManager
 
-	delayedPhc2sys   atomic.Bool
-	delayedPhc2sysMu sync.Mutex // protects skipInitialStartup on phc2sys processes
+	delayedPhc2sys        atomic.Bool
+	delayedTs2phc         atomic.Bool
+	ts2phcSourceQualified atomic.Bool // DPLL-enable / offset-filter gate has fired for T-BC
+	delayedStartupMu      sync.Mutex  // protects skipInitialStartup on delayed phc2sys/ts2phc processes
 }
 
 // New LinuxPTP is called by daemon to generate new linuxptp instance
@@ -522,13 +524,18 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 			dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.name)
 		}
 	}
-	// Arm the delayed-phc2sys flag now that the startup loop is complete.
-	// Keeping it false during the loop ensures HandleDelayedPhc2sysStartup
-	// cannot clear skipInitialStartup and race with the loop's skip check.
+	// Arm delayed-startup flags now that the startup loop is complete.
+	// Keeping them false during the loop ensures release handlers cannot
+	// clear skipInitialStartup and race with the loop's skip check.
 	for _, p := range dn.processManager.process {
-		if p != nil && p.skipInitialStartup != "" {
+		if p == nil || p.skipInitialStartup == "" {
+			continue
+		}
+		switch p.name {
+		case phc2sysProcessName:
 			dn.delayedPhc2sys.Store(true)
-			break
+		case ts2phcProcessName:
+			dn.delayedTs2phc.Store(true)
 		}
 	}
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
@@ -839,11 +846,19 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		} else if pProcess == phc2sysProcessName {
 			glog.Infof("Setting up phc2sys (%s)", clockType)
 			// Delay phc2sys startup until the clock source has synchronized.
-			dn.delayedPhc2sysMu.Lock()
+			dn.delayedStartupMu.Lock()
 			dprocess.skipInitialStartup = "waiting for PHC synchronization before adjusting system time"
-			dn.delayedPhc2sysMu.Unlock()
+			dn.delayedStartupMu.Unlock()
 			glog.Infof("Delaying phc2sys startup: %s", dprocess.skipInitialStartup)
 		} else if pProcess == ts2phcProcessName { //& if the x plugin is enabled
+			// T-BC: delay ts2phc until the same gate that enables DPLL inputs
+			// (offset filter / PTPSourceQualified). T-GM must start ts2phc first.
+			if profileClockType == TBC {
+				dn.delayedStartupMu.Lock()
+				dprocess.skipInitialStartup = "waiting for PTPSourceQualified (DPLL-enable) before disciplining follower PHCs"
+				dn.delayedStartupMu.Unlock()
+				glog.Infof("Delaying ts2phc startup: %s", dprocess.skipInitialStartup)
+			}
 			if clockType == event.GM {
 				if output.gnss_serial_port == "" {
 					output.gnss_serial_port = GPSPIPE_SERIALPORT
@@ -1056,6 +1071,9 @@ func (p *ptpProcess) tBCTransitionCheck(output string, pm *plugin.PluginManager)
 	p.checkOffsetFilterAndTransition(func() {
 		pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
 		p.sendPtp4lEvent()
+		if p.dn != nil {
+			p.dn.NotifyTs2phcSourceQualified(p.nodeProfile.Name)
+		}
 	})
 }
 
@@ -1345,8 +1363,17 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 	p.cmdSetEnabledMutex.Lock()
 	defer p.cmdSetEnabledMutex.Unlock()
 	switch p.name {
-	case "chronyd":
+	case chronydProcessName, phc2sysProcessName, ts2phcProcessName:
 		if enabled {
+			// Respect the delayed-startup gate. ntpfailover may call enable during
+			// chronyd's first log line, long before PHC/UTC offset is ready; starting
+			// then makes phc2sys exit ("failed to get UTC offset") and cmdRun
+			// crash-loops it. Release paths (HandleDelayedPhc2sysStartup /
+			// TryReleaseDelayedTs2phc) clear skipInitialStartup before calling us.
+			if p.skipInitialStartup != "" {
+				glog.Infof("cmdSetEnabled %s deferred: %s", p.name, p.skipInitialStartup)
+				return
+			}
 			if p.Stopped() && p.cmd != nil {
 				cmd := p.cmd
 				newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
@@ -1354,18 +1381,10 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 				go p.cmdRun(p.dn.stdoutToSocket, &(p.dn.pluginManager))
 			}
 		} else {
+			// Never block the caller on exitCh. ProcessLog (and thus ntpfailover)
+			// runs on the process stdout scanner; a synchronous cmdStop from that
+			// path deadlocks because exitCh is only signaled after the scanner ends.
 			go p.cmdStop()
-		}
-	case "phc2sys":
-		if enabled {
-			if p.Stopped() && p.cmd != nil {
-				cmd := p.cmd
-				newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
-				p.cmd = newCmd
-				go p.cmdRun(p.dn.stdoutToSocket, &(p.dn.pluginManager))
-			}
-		} else {
-			p.cmdStop()
 		}
 	}
 }
@@ -1399,9 +1418,9 @@ func (dn *Daemon) HandleDelayedPhc2sysStartup(source string, offset float64, pro
 		return
 	}
 	if math.Abs(offset) < 1000000000 {
-		dn.delayedPhc2sysMu.Lock()
-		defer dn.delayedPhc2sysMu.Unlock()
+		dn.delayedStartupMu.Lock()
 		if !dn.delayedPhc2sys.Load() { // re-check under lock
+			dn.delayedStartupMu.Unlock()
 			return
 		}
 		for _, proc := range dn.processManager.findProcessesByName(phc2sysProcessName) {
@@ -1421,13 +1440,85 @@ func (dn *Daemon) HandleDelayedPhc2sysStartup(source string, offset float64, pro
 			}
 		}
 		// Only clear the daemon-wide flag once no phc2sys processes remain delayed.
+		phc2sysStillDelayed := false
 		for _, proc := range dn.processManager.findProcessesByName(phc2sysProcessName) {
 			if proc.skipInitialStartup != "" {
-				return
+				phc2sysStillDelayed = true
+				break
 			}
 		}
-		dn.delayedPhc2sys.Store(false)
+		if !phc2sysStillDelayed {
+			dn.delayedPhc2sys.Store(false)
+		}
+		dn.delayedStartupMu.Unlock()
+		// phc2sys may have been the last blocker for a already-qualified ts2phc.
+		dn.TryReleaseDelayedTs2phc(profileName)
 	}
+}
+
+// NotifyTs2phcSourceQualified records that the T-BC DPLL-enable / offset-filter
+// gate has been met and attempts to start any delayed ts2phc processes.
+func (dn *Daemon) NotifyTs2phcSourceQualified(profileName *string) {
+	dn.ts2phcSourceQualified.Store(true)
+	dn.TryReleaseDelayedTs2phc(profileName)
+}
+
+// TryReleaseDelayedTs2phc starts delayed T-BC ts2phc processes once the
+// DPLL-enable gate has fired and phc2sys (if present) is no longer delayed.
+func (dn *Daemon) TryReleaseDelayedTs2phc(profileName *string) {
+	if !dn.delayedTs2phc.Load() || !dn.ts2phcSourceQualified.Load() {
+		return
+	}
+	dn.delayedStartupMu.Lock()
+	defer dn.delayedStartupMu.Unlock()
+	if !dn.delayedTs2phc.Load() || !dn.ts2phcSourceQualified.Load() {
+		return
+	}
+	if dn.phc2sysBlocksTs2phcLocked(profileName) {
+		glog.Infof("ts2phc remains delayed: waiting for phc2sys release before starting")
+		return
+	}
+	for _, proc := range dn.processManager.findProcessesByName(ts2phcProcessName) {
+		if proc.skipInitialStartup == "" || proc.nodeProfile.Name == nil {
+			continue
+		}
+		if profileName != nil && *proc.nodeProfile.Name != *profileName {
+			_, linkedByHA := proc.haProfile[*profileName]
+			if !linkedByHA {
+				continue
+			}
+		}
+		glog.Infof("PTPSourceQualified (DPLL-enable) met; enabling %s", proc.name)
+		proc.skipInitialStartup = ""
+		proc.cmdSetEnabled(true)
+		dn.pluginManager.AfterRunPTPCommand(&proc.nodeProfile, proc.name)
+	}
+	for _, proc := range dn.processManager.findProcessesByName(ts2phcProcessName) {
+		if proc.skipInitialStartup != "" {
+			return
+		}
+	}
+	dn.delayedTs2phc.Store(false)
+}
+
+// phc2sysBlocksTs2phcLocked reports whether a still-delayed phc2sys should
+// prevent ts2phc release. Caller must hold delayedStartupMu.
+func (dn *Daemon) phc2sysBlocksTs2phcLocked(profileName *string) bool {
+	for _, proc := range dn.processManager.findProcessesByName(phc2sysProcessName) {
+		if proc.skipInitialStartup == "" {
+			continue
+		}
+		if profileName == nil || proc.nodeProfile.Name == nil {
+			return true
+		}
+		if *proc.nodeProfile.Name == *profileName {
+			return true
+		}
+		if _, linkedByHA := proc.haProfile[*profileName]; linkedByHA {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string, state event.PTPState, extraValue map[event.ValueType]interface{}) {

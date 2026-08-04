@@ -86,6 +86,12 @@ func TestConvergeConfig(t *testing.T) {
 	})
 }
 
+const (
+	testConfig     = "config"
+	testIface      = "iface"
+	testLeadingNIC = "ens2f0"
+)
+
 func TestUpdateLeadingClockData_PTP4lProcessName(t *testing.T) {
 	event := EventChannel{
 		ProcessName: PTP4lProcessName,
@@ -585,4 +591,64 @@ func TestAddEvent_FaultyPhaseOffsetNotInsertedInWindow(t *testing.T) {
 	})
 	assert.Equal(t, FaultyPhaseOffset, d.Details[1].Offset, "dd.Offset should store sentinel")
 	assert.Equal(t, float64(-71), d.window.Mean(), "window mean must not be corrupted by sentinel")
+}
+
+func TestGetLargestOffset_PartialTs2phcWindowDoesNotBlock(t *testing.T) {
+	recentTime := time.Now().UnixMilli()
+
+	dpllData := &Data{
+		ProcessName: DPLL,
+		Details:     []*DataDetails{{IFace: testLeadingNIC, Offset: -10, time: recentTime}},
+		window:      *utils.NewWindow(WindowSize),
+	}
+	for i := 0; i < WindowSize; i++ {
+		dpllData.window.Insert(-10)
+	}
+
+	// Simulate T-BC locked path: ts2phc has only a few samples (leading NIC
+	// does not produce steady ts2phc offsets outside holdover).
+	ts2phcData := &Data{
+		ProcessName: TS2PHCProcessName,
+		Details:     []*DataDetails{{IFace: "ens2f1", Offset: 5, time: recentTime}},
+		window:      *utils.NewWindow(WindowSize),
+	}
+	ts2phcData.window.Insert(5)
+
+	e := EventHandler{
+		data: map[string][]*Data{
+			"test": {dpllData, ts2phcData},
+		},
+		clkSyncState: map[string]*clockSyncState{
+			"test": {leadingIFace: testLeadingNIC},
+		},
+	}
+
+	result := e.getLargestOffset("test")
+	assert.NotEqual(t, FaultyPhaseOffset, result,
+		"partial ts2phc window must not return FaultyPhaseOffset")
+	assert.Equal(t, int64(-10), result,
+		"worst abs offset remains DPLL when |ts2phc| is smaller")
+}
+
+func TestGetLargestOffset_Ts2phcWithoutWindowUsesRawOffset(t *testing.T) {
+	recentTime := time.Now().UnixMilli()
+
+	ts2phcData := &Data{
+		ProcessName: TS2PHCProcessName,
+		Details:     []*DataDetails{{IFace: testLeadingNIC, Offset: -40, time: recentTime}},
+		window:      *utils.NewWindow(WindowSize),
+	}
+	// window left empty — ts2phc must still contribute via raw detail offset
+
+	e := EventHandler{
+		data: map[string][]*Data{
+			"test": {ts2phcData},
+		},
+		clkSyncState: map[string]*clockSyncState{
+			"test": {leadingIFace: testLeadingNIC},
+		},
+	}
+
+	result := e.getLargestOffset("test")
+	assert.Equal(t, int64(-40), result, "ts2phc offsets are not window-filtered")
 }
