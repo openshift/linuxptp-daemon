@@ -532,6 +532,21 @@ func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 	staleTime := (time.Now().Unix() - StaleEventAfter) * 1000
 	if data, ok := e.data[cfgName]; ok {
 		for _, d := range data {
+			// ts2phc offsets are not window-filtered. On T-BC the leading NIC only
+			// reports ts2phc offsets in holdover, so requiring a full sliding window
+			// leaves a permanently partial window that poisons inSync with FaultyPhaseOffset.
+			if d.ProcessName == TS2PHCProcessName {
+				for _, dd := range d.Details {
+					if dd.time < staleTime {
+						continue
+					}
+					if worstOffset == FaultyPhaseOffset ||
+						math.Abs(float64(dd.Offset)) > math.Abs(float64(worstOffset)) {
+						worstOffset = dd.Offset
+					}
+				}
+				continue
+			}
 			if d.window.IsEmpty() {
 				continue
 			}
