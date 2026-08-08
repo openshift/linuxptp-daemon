@@ -128,6 +128,9 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 				process.dn.pluginManager.AfterRunPTPCommand(&process.nodeProfile, "tbc-ho-exit")
 				process.lastTransitionResult = event.PTP_LOCKED
 				process.sendPtp4lEvent()
+				if process.dn != nil {
+					process.dn.NotifyTs2phcSourceQualified(process.nodeProfile.Name)
+				}
 			})
 		}
 	case ts2phcProcessName:

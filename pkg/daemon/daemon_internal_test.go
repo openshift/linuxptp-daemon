@@ -164,12 +164,15 @@ func Test_applyProfile_TBC(t *testing.T) {
 		err = dn.applyNodePtpProfile(0, profile)
 		assert.NoError(t, err)
 
-		// Ensure for T-BC that phc2sys is selected for delayed-start
+		// Ensure for T-BC that phc2sys and ts2phc are selected for delayed-start
 		actualProcesses := []string{}
 		for _, p := range dn.processManager.process {
 			actualProcesses = append(actualProcesses, p.name)
 			if p.name == phc2sysProcessName {
 				assert.NotEmpty(t, p.skipInitialStartup, "Ensure phc2sys is startup-delayed for T-BC")
+			}
+			if p.name == ts2phcProcessName {
+				assert.NotEmpty(t, p.skipInitialStartup, "Ensure ts2phc is startup-delayed for T-BC")
 			}
 		}
 		assert.ElementsMatch(t, test.expectedProcesses, actualProcesses, "Ensure T-BC has the required processes prepared (%s)", test.dataFile)
@@ -219,6 +222,7 @@ func Test_applyProfile_TGM(t *testing.T) {
 		switch p.name {
 		case ts2phcProcessName:
 			ts2phcProc = p
+			assert.Empty(t, p.skipInitialStartup, "T-GM ts2phc must not be startup-delayed")
 		case ptp4lProcessName:
 			ptp4lProc = p
 		case phc2sysProcessName:
@@ -561,6 +565,16 @@ func TestReady_DelayedPhc2sysNotReportedAsStopped(t *testing.T) {
 	assert.True(t, ok, msg)
 }
 
+func TestReady_DelayedTs2phcNotReportedAsStopped(t *testing.T) {
+	rt := makeReadyTracker([]*ptpProcess{
+		{name: ptp4lProcessName, stopped: false, hasCollectedMetrics: true},
+		{name: ts2phcProcessName, stopped: true, skipInitialStartup: testSkipStartupReason},
+		{name: phc2sysProcessName, stopped: true, skipInitialStartup: testSkipStartupReason},
+	})
+	ok, msg := rt.Ready()
+	assert.True(t, ok, msg)
+}
+
 func TestReady_NilProcessEntrySkipped(t *testing.T) {
 	// nil slots in the process slice must not panic.
 	rt := makeReadyTracker([]*ptpProcess{
@@ -720,6 +734,74 @@ func TestDelayedPhc2sysStartup_HAProfile(t *testing.T) {
 	assert.Equal(t, "", phc2sys.skipInitialStartup,
 		"sub-second offset from HA-linked profile should start phc2sys")
 	assert.False(t, dn.delayedPhc2sys.Load())
+}
+
+func TestDelayedTs2phcStartup(t *testing.T) {
+	profileName := "test-tbc-profile"
+	nodeProfile := ptpv1.PtpProfile{Name: &profileName}
+
+	pm := &ProcessManager{process: []*ptpProcess{}}
+	dn := &Daemon{processManager: pm}
+
+	phc2sys := &ptpProcess{
+		name:               phc2sysProcessName,
+		skipInitialStartup: testSkipStartupReason,
+		nodeProfile:        nodeProfile,
+		dn:                 dn,
+		stopped:            true,
+	}
+	ts2phc := &ptpProcess{
+		name:               ts2phcProcessName,
+		skipInitialStartup: testSkipStartupReason,
+		nodeProfile:        nodeProfile,
+		dn:                 dn,
+		stopped:            true,
+	}
+	pm.process = append(pm.process, phc2sys, ts2phc)
+
+	dn.delayedTs2phc.Store(true)
+
+	// 1. Without DPLL-enable qualification, ts2phc must stay delayed.
+	dn.TryReleaseDelayedTs2phc(&profileName)
+	assert.Equal(t, testSkipStartupReason, ts2phc.skipInitialStartup)
+	assert.True(t, dn.delayedTs2phc.Load())
+
+	// 2. Qualification met but phc2sys still delayed: ts2phc stays delayed.
+	dn.NotifyTs2phcSourceQualified(&profileName)
+	assert.Equal(t, testSkipStartupReason, ts2phc.skipInitialStartup,
+		"ts2phc must wait for phc2sys even after DPLL-enable qualification")
+	assert.True(t, dn.delayedTs2phc.Load())
+
+	// 3. Release phc2sys (1s gate), then ts2phc should start.
+	dn.delayedPhc2sys.Store(true)
+	dn.HandleDelayedPhc2sysStartup(ptp4lProcessName, 500000000.0, &profileName)
+	assert.Equal(t, "", phc2sys.skipInitialStartup)
+	assert.Equal(t, "", ts2phc.skipInitialStartup,
+		"ts2phc should start once qualified and phc2sys is released")
+	assert.False(t, dn.delayedTs2phc.Load())
+}
+
+func TestDelayedTs2phcStartup_NoPhc2sys(t *testing.T) {
+	profileName := "test-tbc-ts2phc-only"
+	nodeProfile := ptpv1.PtpProfile{Name: &profileName}
+
+	pm := &ProcessManager{process: []*ptpProcess{}}
+	dn := &Daemon{processManager: pm}
+
+	ts2phc := &ptpProcess{
+		name:               ts2phcProcessName,
+		skipInitialStartup: testSkipStartupReason,
+		nodeProfile:        nodeProfile,
+		dn:                 dn,
+		stopped:            true,
+	}
+	pm.process = append(pm.process, ts2phc)
+	dn.delayedTs2phc.Store(true)
+
+	dn.NotifyTs2phcSourceQualified(&profileName)
+	assert.Equal(t, "", ts2phc.skipInitialStartup,
+		"without phc2sys, ts2phc should start as soon as DPLL-enable fires")
+	assert.False(t, dn.delayedTs2phc.Load())
 }
 
 func TestFindProcessesByName(t *testing.T) {
