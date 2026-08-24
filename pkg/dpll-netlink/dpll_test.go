@@ -92,20 +92,54 @@ func Test_EncodePinControl(t *testing.T) {
 // TestParsePinReplies_DpllPinFractionalFrequencyOffsetPPT verifies that
 // ParsePinReplies correctly decodes the DpllPinFractionalFrequencyOffsetPPT
 // attribute (FFO in parts per trillion) into PinInfo.FractionalFrequencyOffsetPPT.
+// Kernel nla_put_sint may encode as 4 or 8 bytes; both must decode.
 func TestParsePinReplies_DpllPinFractionalFrequencyOffsetPPT(t *testing.T) {
 	tests := []struct {
-		name   string
-		ffoPPT int32
+		name    string
+		encode  func(*netlink.AttributeEncoder)
+		wantPPT int64
 	}{
-		{"positive value", 12345},
-		{"zero", 0},
-		{"negative value", -999},
+		{
+			name: "int32-width positive",
+			encode: func(ae *netlink.AttributeEncoder) {
+				ae.Int32(DpllPinFractionalFrequencyOffsetPPT, 12345)
+			},
+			wantPPT: 12345,
+		},
+		{
+			name: "int32-width zero",
+			encode: func(ae *netlink.AttributeEncoder) {
+				ae.Int32(DpllPinFractionalFrequencyOffsetPPT, 0)
+			},
+			wantPPT: 0,
+		},
+		{
+			name: "int32-width negative",
+			encode: func(ae *netlink.AttributeEncoder) {
+				ae.Int32(DpllPinFractionalFrequencyOffsetPPT, -999)
+			},
+			wantPPT: -999,
+		},
+		{
+			name: "int64-width value beyond int32",
+			encode: func(ae *netlink.AttributeEncoder) {
+				ae.Int64(DpllPinFractionalFrequencyOffsetPPT, 3_000_000_000)
+			},
+			wantPPT: 3_000_000_000,
+		},
+		{
+			name: "int64-width negative",
+			encode: func(ae *netlink.AttributeEncoder) {
+				ae.Int64(DpllPinFractionalFrequencyOffsetPPT, -3_000_000_000)
+			},
+			wantPPT: -3_000_000_000,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ae := netlink.NewAttributeEncoder()
 			ae.Uint32(DpllPinID, 1)
-			ae.Int32(DpllPinFractionalFrequencyOffsetPPT, tt.ffoPPT)
+			tt.encode(ae)
 			payload, err := ae.Encode()
 			assert.NoError(t, err, "encode attributes")
 
@@ -113,7 +147,7 @@ func TestParsePinReplies_DpllPinFractionalFrequencyOffsetPPT(t *testing.T) {
 			replies, err := ParsePinReplies(msgs)
 			assert.NoError(t, err)
 			assert.Len(t, replies, 1)
-			assert.Equal(t, int(tt.ffoPPT), replies[0].FractionalFrequencyOffsetPPT,
+			assert.Equal(t, tt.wantPPT, replies[0].FractionalFrequencyOffsetPPT,
 				"FractionalFrequencyOffsetPPT should match encoded value")
 		})
 	}
@@ -249,7 +283,7 @@ func TestParsePinReplies_ParentDeviceNewFields(t *testing.T) {
 	const parentID = uint32(7)
 	const operstate = uint32(PinOperstateActive)
 	const ffo = int32(-42)
-	const ffoPPT = int32(12345)
+	const ffoPPT = int64(3_000_000_000)
 
 	ae := netlink.NewAttributeEncoder()
 	ae.Uint32(DpllPinID, 1)
@@ -257,7 +291,7 @@ func TestParsePinReplies_ParentDeviceNewFields(t *testing.T) {
 		nae.Uint32(DpllPinParentID, parentID)
 		nae.Uint32(DpllPinOperstate, operstate)
 		nae.Int32(DpllPinFractionalFrequencyOffset, ffo)
-		nae.Int32(DpllPinFractionalFrequencyOffsetPPT, ffoPPT)
+		nae.Int64(DpllPinFractionalFrequencyOffsetPPT, ffoPPT)
 		return nil
 	})
 	payload, err := ae.Encode()
@@ -272,5 +306,5 @@ func TestParsePinReplies_ParentDeviceNewFields(t *testing.T) {
 	assert.Equal(t, parentID, pd.ParentID)
 	assert.Equal(t, operstate, pd.Operstate)
 	assert.Equal(t, int(ffo), pd.FractionalFrequencyOffset)
-	assert.Equal(t, int(ffoPPT), pd.FractionalFrequencyOffsetPPT)
+	assert.Equal(t, ffoPPT, pd.FractionalFrequencyOffsetPPT)
 }

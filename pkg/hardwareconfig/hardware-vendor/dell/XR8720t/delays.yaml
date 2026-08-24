@@ -52,10 +52,10 @@ connections:
   # NAC to Timing Module routing/wiring
   - from: "NAC0 phase out 1kHz"
     to: "DPLL phase in 1kHz"
-    delayPs: -5000
+    delayPs: -8600
   - from: "NAC0 phase out 1Hz"
     to: "DPLL phase in 1Hz"
-    delayPs: -5000
+    delayPs: -8600
 
 
   # DPLL to NAC (during holdover)

@@ -107,7 +107,7 @@ func GetDevStatusUpdate(nodePTPDev *ptpv1.NodePtpDevice) (*ptpv1.NodePtpDevice, 
 		if dev.Name == nicDefaultPort[nicBase] {
 			ptpnetwork.LogStructuredHardwareInfo(dev.Name, dev.HardwareInfo)
 		} else {
-			glog.Infof("PTP Device: %s (PCI: %s, same NIC as %s)", dev.Name, dev.HardwareInfo.PCIAddress, nicDefaultPort[nicBase])
+			glog.V(14).Infof("PTP Device: %s (PCI: %s, same NIC as %s)", dev.Name, dev.HardwareInfo.PCIAddress, nicDefaultPort[nicBase])
 		}
 	}
 
