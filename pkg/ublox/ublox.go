@@ -25,12 +25,24 @@ const (
 	pollTimeout = "1000000000"
 )
 
+const (
+	// timeLSRateSeconds is the interval in GPS navigation epochs (seconds) at which
+	// the UBX-NAV-TIMELS leap-second notification is sent.
+	timeLSRateSeconds = 60
+)
+
 var (
 	// Disable all binary messages
 	disableBinary = Command{Args: []string{"-d", "BINARY"}}
-	// NAV message types to re-enable
+	// NAV message types to re-enable at the default rate of 1 (every second)
 	navEnableMsg = []string{
-		"CLOCK", "STATUS", "TIMELS",
+		"CLOCK", "STATUS",
+	}
+	// NAV message types to enable at a reduced rate (timeLSRateSeconds).
+	// TIMELS carries leap-second information which changes at most twice a year;
+	// updating every 60 seconds is sufficient.
+	navSlowEnableMsg = []string{
+		"TIMELS",
 	}
 
 	// Enable all NMEA messages
@@ -65,18 +77,26 @@ func batchDisableNmeaMsgs(msgs []string) Command {
 	return batchMsgoutAllBusses("NMEA_ID", msgs, 0)
 }
 
-// Generate a series of commands to enable the given b8nary command on all bus types
+// batchEnableNavMsgs generates commands to enable the given NAV message types
+// at a rate of 1 (every GPS navigation epoch, i.e. every second) on all bus types.
 func batchEnableNavMsgs(msgs []string) Command {
 	return batchMsgoutAllBusses("UBX_NAV", msgs, 1)
+}
+
+// batchEnableNavMsgsAtRate generates commands to enable the given NAV message types
+// at the specified rate (in GPS navigation epochs) on all bus types.
+func batchEnableNavMsgsAtRate(msgs []string, rate int) Command {
+	return batchMsgoutAllBusses("UBX_NAV", msgs, rate)
 }
 
 // Return the default set of commands we need to set at initialization
 func defaultUblxCmds() CommandList {
 	// Begin by disabling all binary commands, then re-adding the ones we need
 	cmds := CommandList{disableBinary}
-	// Re-enable required binary commands
+	// Re-enable high-frequency binary commands (every second)
 	cmds = append(cmds, batchEnableNavMsgs(navEnableMsg))
-
+	// Re-enable low-frequency binary commands (every minute)
+	cmds = append(cmds, batchEnableNavMsgsAtRate(navSlowEnableMsg, timeLSRateSeconds))
 	// Next, enable all NMEA commands, but prune out any we don't need:
 	cmds = append(cmds, enableNMEA)
 	// More pruning of all bus-specific NMEA messages

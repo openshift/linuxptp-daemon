@@ -1,0 +1,29 @@
+FROM registry.access.redhat.com/ubi9/go-toolset:1.25 AS builder
+USER root
+WORKDIR /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon
+
+COPY go.mod go.sum ./
+COPY vendor vendor
+
+COPY addons addons
+COPY cmd cmd
+COPY deploy deploy
+COPY hack hack
+COPY Makefile Makefile
+COPY pkg pkg
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=${GIT_COMMIT}
+RUN --mount=type=cache,target=/root/.cache/go-build make
+
+FROM quay.io/centos/centos:stream9
+
+RUN useradd -r -u 1001 -m cep && \
+    mkdir -p /var/run/ptp && \
+    chown 1001:1001 /var/run/ptp && \
+    chmod 0750 /var/run/ptp
+
+COPY --from=builder /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon/bin/cloud-event-proxy /usr/local/bin/
+
+USER 1001
+
+CMD ["/usr/local/bin/cloud-event-proxy"]

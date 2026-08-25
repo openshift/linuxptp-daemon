@@ -58,9 +58,10 @@ check_port "$CONSUMER_PORT"
 
 # ── Build ──
 echo "Building binaries..."
-(cd "$ROOT_DIR" && go build -o "$TMPDIR/cloud-event-proxy" ./cmd/cloud-event-proxy/)
-(cd "$ROOT_DIR" && go build -o "$TMPDIR/consumer" ./test/consumer/)
-(cd "$ROOT_DIR" && go build -o "$TMPDIR/ipc-sender" ./test/ipc-sender/)
+(cd "$ROOT_DIR" && make)
+cp "$ROOT_DIR/bin/cloud-event-proxy" "$TMPDIR/cloud-event-proxy"
+(cd "$ROOT_DIR" && go build --mod=vendor -o "$TMPDIR/consumer" ./test/consumer/)
+(cd "$ROOT_DIR" && go build --mod=vendor -o "$TMPDIR/ipc-sender" ./test/ipc-sender/)
 
 # ── Start ipc-sender ──
 # Message 0 (immediate): clock_class=6, pre-populates cache → snapshot

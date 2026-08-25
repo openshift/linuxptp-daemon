@@ -286,14 +286,20 @@ func determineRole(event string) (constants.PTPPortRole, constants.ClockState) {
 		strings.Contains(event, "LISTENING to PASSIVE"):
 		return constants.PortRolePassive, constants.ClockStateFreeRun
 	case strings.Contains(event, "UNCALIBRATED to MASTER"),
-		strings.Contains(event, "LISTENING to MASTER"):
+		strings.Contains(event, "LISTENING to MASTER"),
+		strings.Contains(event, "to PRE_MASTER"),
+		strings.Contains(event, "PRE_MASTER to MASTER"):
+		// PRE_MASTER is a transient state before full MASTER (IEEE 1588-2019 §9.2.5):
+		// the port behaves as MASTER but suppresses PTP message transmission until
+		// qualification timeout expires. Report as MASTER for metric purposes.
 		return constants.PortRoleMaster, constants.ClockStateFreeRun
 	case strings.Contains(event, "FAULT_DETECTED"),
-		strings.Contains(event, "SYNCHRONIZATION_FAULT"),
-		strings.Contains(event, "SLAVE to UNCALIBRATED"),
-		strings.Contains(event, "MASTER to UNCALIBRATED on RS_SLAVE"),
-		strings.Contains(event, "LISTENING to UNCALIBRATED on RS_SLAVE"):
+		strings.Contains(event, "SYNCHRONIZATION_FAULT"):
 		return constants.PortRoleFaulty, constants.ClockStateHoldover
+	case strings.Contains(event, "SLAVE to UNCALIBRATED"),
+		strings.Contains(event, "MASTER to UNCALIBRATED"),
+		strings.Contains(event, "LISTENING to UNCALIBRATED"):
+		return constants.PortRoleListening, constants.ClockStateHoldover
 	case strings.Contains(event, "SLAVE to MASTER"),
 		strings.Contains(event, "SLAVE to GRAND_MASTER"):
 		return constants.PortRoleMaster, constants.ClockStateHoldover

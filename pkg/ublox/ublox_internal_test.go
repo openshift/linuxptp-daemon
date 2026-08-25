@@ -19,10 +19,11 @@ func Test_BatchMsgoutAllBusses(t *testing.T) {
 }
 
 func Test_BatchMsgoutAllBusses_MultipleMessages(t *testing.T) {
-	cmd := batchMsgoutAllBusses("UBX_NAV", navEnableMsg, 1)
+	allNavMsgs := append(navEnableMsg, navSlowEnableMsg...)
+	cmd := batchMsgoutAllBusses("UBX_NAV", allNavMsgs, 1)
 	// N messages × 5 bus types × 2 args each (-z + value)
-	assert.Equal(t, len(navEnableMsg)*len(ublxBusTypes)*2, len(cmd.Args))
-	for _, msg := range navEnableMsg {
+	assert.Equal(t, len(allNavMsgs)*len(ublxBusTypes)*2, len(cmd.Args))
+	for _, msg := range allNavMsgs {
 		for _, bus := range ublxBusTypes {
 			expected := fmt.Sprintf("CFG-MSGOUT-UBX_NAV_%s_%s,1", msg, bus)
 			assert.Contains(t, cmd.Args, expected)
@@ -50,6 +51,16 @@ func Test_BatchEnableNavMsgs(t *testing.T) {
 	}
 }
 
+func Test_BatchEnableNavMsgsAtRate(t *testing.T) {
+	cmd := batchEnableNavMsgsAtRate(navSlowEnableMsg, timeLSRateSeconds)
+	for _, msg := range navSlowEnableMsg {
+		for _, bus := range ublxBusTypes {
+			expected := fmt.Sprintf("CFG-MSGOUT-UBX_NAV_%s_%s,%d", msg, bus, timeLSRateSeconds)
+			assert.Contains(t, cmd.Args, expected)
+		}
+	}
+}
+
 func Test_DefaultUblxCmds(t *testing.T) {
 	cmds := defaultUblxCmds()
 
@@ -62,12 +73,27 @@ func Test_DefaultUblxCmds(t *testing.T) {
 	// First command should disable all binary
 	assert.Equal(t, disableBinary, cmds[0])
 
-	// All NAV messages should be re-enabled on all bus types
+	// High-frequency NAV messages should be enabled at rate 1 (every second)
 	for _, nav := range navEnableMsg {
 		for _, bus := range ublxBusTypes {
 			expected := fmt.Sprintf("CFG-MSGOUT-UBX_NAV_%s_%s,1", nav, bus)
 			assert.Contains(t, allArgs, expected,
-				"expected NAV %s enable on %s", nav, bus)
+				"expected NAV %s enable at rate 1 on %s", nav, bus)
+		}
+	}
+
+	// Low-frequency NAV messages (TIMELS) should be enabled at timeLSRateSeconds (every minute)
+	for _, nav := range navSlowEnableMsg {
+		for _, bus := range ublxBusTypes {
+			expected := fmt.Sprintf("CFG-MSGOUT-UBX_NAV_%s_%s,%d", nav, bus, timeLSRateSeconds)
+			assert.Contains(t, allArgs, expected,
+				"expected NAV %s enable at rate %d on %s", nav, timeLSRateSeconds, bus)
+		}
+		// Also verify TIMELS is NOT enabled at rate 1
+		for _, bus := range ublxBusTypes {
+			notExpected := fmt.Sprintf("CFG-MSGOUT-UBX_NAV_%s_%s,1", nav, bus)
+			assert.NotContains(t, allArgs, notExpected,
+				"TIMELS should not be enabled at rate 1 on %s", bus)
 		}
 	}
 

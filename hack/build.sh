@@ -10,3 +10,4 @@ REPO_PATH="${ORG_PATH}/linuxptp-daemon"
 GIT_COMMIT="${GIT_COMMIT:-$(git rev-list -1 HEAD 2>/dev/null || echo unknown)}"
 LINKER_RELEASE_FLAGS="-X main.GitCommit=${GIT_COMMIT}"
 go build -ldflags "${LINKER_RELEASE_FLAGS}" --mod=vendor "$@" -o bin/ptp ${REPO_PATH}/cmd
+go build -ldflags "${LINKER_RELEASE_FLAGS}" --mod=vendor "$@" -o bin/cloud-event-proxy ${REPO_PATH}/cmd/cloud-event-proxy
