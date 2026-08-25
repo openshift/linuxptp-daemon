@@ -150,6 +150,13 @@ const (
 	PTP_NOTSET PTPState = "-2"
 )
 
+// Clock state metric values for openshift_ptp_clock_state gauge.
+const (
+	ClockStateFreerun  float64 = 0
+	ClockStateLocked   float64 = 1
+	ClockStateHoldover float64 = 2
+)
+
 const (
 	// socketDialTimeout is the maximum time to wait for a single dial attempt to the event socket.
 	socketDialTimeout = 5 * time.Second
@@ -1129,19 +1136,15 @@ func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace st
 	if !utils.CheckMetricSanity("ClockState", process, iFace) {
 		return
 	}
-	if e.stdoutToSocket {
-		return
-	}
 	labels := prometheus.Labels{
 		"process": process, "node": e.nodeName, "iface": iFace}
-	if state == PTP_LOCKED {
-		e.clockMetric.With(labels).Set(1)
-	} else if state == PTP_FREERUN {
-		e.clockMetric.With(labels).Set(0)
-	} else if state == PTP_HOLDOVER {
-		e.clockMetric.With(labels).Set(2)
-	} else {
-		e.clockMetric.With(labels).Set(3)
+	switch state {
+	case PTP_LOCKED:
+		e.clockMetric.With(labels).Set(ClockStateLocked)
+	case PTP_HOLDOVER:
+		e.clockMetric.With(labels).Set(ClockStateHoldover)
+	default:
+		e.clockMetric.With(labels).Set(ClockStateFreerun)
 	}
 }
 

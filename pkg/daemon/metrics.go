@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
 	"github.com/golang/glog"
@@ -48,12 +49,10 @@ const (
 	sys = "sys"
 )
 
+// Clock state string values used in log parsing and state transitions.
 const (
-	//LOCKED ...
-	LOCKED string = "LOCKED"
-	//FREERUN ...
-	FREERUN = "FREERUN"
-	// HOLDOVER
+	LOCKED   = "LOCKED"
+	FREERUN  = "FREERUN"
 	HOLDOVER = "HOLDOVER"
 )
 
@@ -529,12 +528,14 @@ func updateClockStateMetrics(process, iface string, state string) {
 		return
 	}
 	glog.V(14).Infof("updateClockStateMetrics: process=%s iface=%s state=%s", process, iface, state)
-	if state == LOCKED {
-		ClockState.With(prometheus.Labels{
-			"process": process, "node": NodeName, "iface": iface}).Set(1)
-	} else {
-		ClockState.With(prometheus.Labels{
-			"process": process, "node": NodeName, "iface": iface}).Set(0)
+	labels := prometheus.Labels{"process": process, "node": NodeName, "iface": iface}
+	switch state {
+	case LOCKED:
+		ClockState.With(labels).Set(event.ClockStateLocked)
+	case HOLDOVER:
+		ClockState.With(labels).Set(event.ClockStateHoldover)
+	default:
+		ClockState.With(labels).Set(event.ClockStateFreerun)
 	}
 }
 
