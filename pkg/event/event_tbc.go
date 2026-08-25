@@ -144,7 +144,7 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 			updateDownstreamData = true
 		}
 	case PTP_LOCKED:
-		if e.freeRunCondition(cfgName) {
+		if e.freeRunCondition(cfgName) || e.hasNonLeadingDPLLFault(cfgName, leadingInterface) {
 			e.clkSyncState[cfgName].state = PTP_FREERUN
 			e.clkSyncState[cfgName].clockClass = protocol.ClockClassFreerun
 			glog.Info("BC FSM: LOCKED to FREERUN")
@@ -172,16 +172,18 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 			}
 		}
 	case PTP_HOLDOVER:
-		if e.inSyncCondition(cfgName) && !e.isSourceLostBC(cfgName) {
-			e.clkSyncState[cfgName].state = PTP_LOCKED
-			glog.Info("BC FSM: HOLDOVER to LOCKED")
-			updateDownstreamData = true
-		} else if e.freeRunCondition(cfgName) {
+		nonLeadingFault := e.hasNonLeadingDPLLFault(cfgName, leadingInterface)
+		switch {
+		case nonLeadingFault || e.freeRunCondition(cfgName):
 			e.clkSyncState[cfgName].state = PTP_FREERUN
 			e.clkSyncState[cfgName].clockClass = protocol.ClockClassFreerun
 			glog.Info("BC FSM: HOLDOVER to FREERUN")
 			updateDownstreamData = true
-		} else {
+		case e.inSyncCondition(cfgName) && !e.isSourceLostBC(cfgName):
+			e.clkSyncState[cfgName].state = PTP_LOCKED
+			glog.Info("BC FSM: HOLDOVER to LOCKED")
+			updateDownstreamData = true
+		default:
 			if event.IFace == leadingInterface {
 				inSpec := false
 				if e.LeadingClockData.lastInSpec {

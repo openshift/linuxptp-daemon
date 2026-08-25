@@ -49,14 +49,14 @@ func (d *Data) UpdateState() {
 	state := PTP_UNKNOWN
 	for _, detail := range d.Details { // 2 ts2phc or 2 dpll etc
 		switch detail.State {
-		case PTP_FREERUN: // if its free run and main state is not holdover then this is the state
-			if state != PTP_HOLDOVER {
+		case PTP_FREERUN: // FREERUN is the worst state (S0) and always takes priority
+			state = detail.State
+		case PTP_HOLDOVER: // HOLDOVER (S1) takes priority over LOCKED but not FREERUN
+			if state != PTP_FREERUN {
 				state = detail.State
 			}
-		case PTP_HOLDOVER: // if one of them is in holdover then this is the state
-			state = detail.State
-		case PTP_LOCKED: // if this is locked and none of them are in UNKNOWN or FREE run then this is the state
-			if state != PTP_FREERUN && state != PTP_HOLDOVER { // previous state
+		case PTP_LOCKED: // LOCKED (S2) is best; only sets if nothing worse exists
+			if state != PTP_FREERUN && state != PTP_HOLDOVER {
 				state = detail.State
 			}
 		}
