@@ -784,8 +784,9 @@ func (d *DpllConfig) sendDpllEvent() {
 
 func (d *DpllConfig) getDpllState() int64 {
 	switch {
-	case d.hasPTPAsSource():
-		// For T-BC EEC DPLL state is not taken into account
+	case d.hasPTPAsSource(), d.hasPPSAsSource():
+		// 1PPS and T-BC time the PPS DPLL. EEC lock is independent and is
+		// often unlocked on follower cards that take 1PPS from the leading NIC.
 		return d.phaseStatus
 	case d.hasFlag(FlagNoPhaseStatus):
 		// Special case if there is no Phase Status (pps) for this DPLL
