@@ -34,7 +34,11 @@ func TestProcessLogNtpFailover_StartupGoesActive(t *testing.T) {
 	}
 	select {
 	case ev := <-ch:
-		t.Fatalf("startup must not emit plugin events, got %+v", ev)
+		if pd, ok := ev.Data.(*event.PluginData); !ok || pd.EventName != "gnss_recovered" {
+			t.Fatalf("startup must emit a recovered to allow phc2sys to start, got %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup must emit a recovered to allow phc2sys to start, got nothing")
 	default:
 	}
 }
@@ -50,6 +54,16 @@ func TestProcessLogNtpFailover_FailoverAndRecoverEmitPluginEvents(t *testing.T) 
 	if pluginData.pcfsmState != pcsmsFailover {
 		t.Fatalf("expected pcsmsFailover, got %d", pluginData.pcfsmState)
 	}
+	select {
+	case ev := <-ch:
+		if pd, ok := ev.Data.(*event.PluginData); !ok || pd.EventName != "gnss_recovered" {
+			t.Fatalf("startup must emit a recovered to allow phc2sys to start, got %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup must emit a recovered to allow phc2sys to start, got nothing")
+	default:
+	}
+
 	select {
 	case ev := <-ch:
 		pd, ok := ev.Data.(*event.PluginData)

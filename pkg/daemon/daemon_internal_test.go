@@ -781,11 +781,6 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 		defer func() { vTbcHasHardwareConfig = false }()
 
 		process := &ptpProcess{
-			// ExecProcess: ExecProcess{
-			// 	eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
-			// 	configName: testConfigName,             //nolint:govet // needed for test setup
-
-			// },
 			tBCAttributes: tBCProcessAttributes{
 				trIfaceNames: []string{ens4f0},
 				perPortState: map[string]event.PTPState{ens4f0: event.PTP_NOTSET},
@@ -2385,8 +2380,8 @@ func TestReady_DelayedHaPhc2sysNotReportedAsStopped(t *testing.T) {
 	haPhc2sys := readyProc(phc2sysProcessName, true, false, false)
 	haPhc2sys.conditions = map[process.Action]process.Condition{
 		process.ActionStart: process.Any{Conditions: []process.Condition{
-			process.OnStateAndOffsetForCount{ConfigName: ptp4lConf, Source: event.PTP4l},
-			process.OnStateAndOffsetForCount{ConfigName: ptp4l1Conf, Source: event.PTP4l},
+			process.OnStateAndOffsetForCount{ClockID: ptp4lConf, ConfigName: ptp4lConf, Source: event.PTP4l},
+			process.OnStateAndOffsetForCount{ClockID: ptp4l1Conf, ConfigName: ptp4l1Conf, Source: event.PTP4l},
 		}},
 	}
 	rt := makeReadyTracker(asProcesses(

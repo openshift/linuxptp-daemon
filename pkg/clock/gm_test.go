@@ -21,8 +21,13 @@ func newTestGMClock() (*GM, *ipcRecorder, *pmc.MockClient) {
 	rio := &ipcRecorder{}
 	pmcMock := &pmc.MockClient{}
 	gm := &GM{
-		cfgName:      "ts2phc.0.config",
-		sendIPC:      rio.send,
+		BaseClock: BaseClock{
+			cfgName:          "ts2phc.0.config",
+			sendIPC:          rio.send,
+			overallSyncState: event.PTP_NOTSET,
+			osClock:          &OsClock{State: event.PTP_NOTSET},
+			threshold:        event.PtpClockThreshold{},
+		},
 		getUtcOffset: stubUtcOffset,
 		pmcClient:    pmcMock,
 		syncState: SyncState{
@@ -30,9 +35,7 @@ func newTestGMClock() (*GM, *ipcRecorder, *pmc.MockClient) {
 			ClockClass:    protocol.ClockClassUninitialized,
 			ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 		},
-		overallSyncState: event.PTP_NOTSET,
-		osClockState:     event.PTP_NOTSET,
-		gnssState:        event.PTP_NOTSET,
+		gnssState: event.PTP_NOTSET,
 	}
 	return gm, rio, pmcMock
 }
@@ -227,17 +230,20 @@ func TestGMClock_UpdateOSClockState(t *testing.T) {
 	gm, rio, _ := newTestGMClock()
 	gm.syncState.State = event.PTP_LOCKED
 
-	gm.SystemClockUpdate(event.PTP_LOCKED)
+	gm.osClock.State = event.PTP_LOCKED // Note this is set on osClock on eventsManager which this will point to
+	gm.SystemClockUpdate()
 	assert.Equal(t, event.PTP_LOCKED, gm.overallSyncState, "first call from PTP_NOTSET should change")
-	assert.Equal(t, event.PTP_LOCKED, gm.osClockState)
+	assert.Equal(t, event.PTP_LOCKED, gm.osClock.State)
 	require.Len(t, rio.messages, 1)
 	assert.Equal(t, ipc.TypeSyncState, rio.messages[0].Type)
 
 	rio.messages = nil
-	gm.SystemClockUpdate(event.PTP_LOCKED)
+	gm.osClock.State = event.PTP_LOCKED // Note this is set on osClock on eventsManager which this will point to
+	gm.SystemClockUpdate()
 	assert.Empty(t, rio.messages, "same state should not emit IPC")
 
-	gm.SystemClockUpdate(event.PTP_FREERUN)
+	gm.osClock.State = event.PTP_FREERUN // Note this is set on osClock on eventsManager which this will point to
+	gm.SystemClockUpdate()
 	assert.Equal(t, event.PTP_FREERUN, gm.overallSyncState, "OS clock FREERUN should degrade overall")
 	require.Len(t, rio.messages, 1)
 	assert.Equal(t, ipc.TypeSyncState, rio.messages[0].Type)
@@ -440,8 +446,12 @@ func TestUpdateGMState(t *testing.T) {
 		t.Run(tt.desc, func(t *testing.T) {
 			rec := ipcRecorder{}
 			gm := &GM{
-				cfgName:      cfg,
-				sendIPC:      rec.send,
+				BaseClock: BaseClock{
+					cfgName:          cfg,
+					sendIPC:          rec.send,
+					overallSyncState: event.PTP_NOTSET,
+					osClock:          &OsClock{State: event.PTP_NOTSET},
+				},
 				getUtcOffset: stubUtcOffset,
 				pmcClient:    &pmc.MockClient{},
 				syncState: SyncState{
@@ -449,7 +459,6 @@ func TestUpdateGMState(t *testing.T) {
 					ClockClass:    protocol.ClockClassUninitialized,
 					ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 				},
-				overallSyncState: event.PTP_NOTSET,
 			}
 
 			var result SyncState

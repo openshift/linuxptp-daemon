@@ -110,6 +110,7 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 				switch pluginData.pcfsmState {
 				case pcsmsStartupDefault:
 					pluginData.pcfsmState = pcsmsActive
+					pluginData.emitEvent("gnss_recovered")
 					continue
 				case pcsmsActive:
 					if pname == ts2phcPname {

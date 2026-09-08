@@ -493,6 +493,38 @@ func TestEvalActions_NoActionWithoutCondition(t *testing.T) {
 	assert.Equal(t, process.Running, stub.state)
 }
 
+func TestEvalActions_FailOverStart(t *testing.T) {
+	inbound := make(chan event.Event, 4)
+	handler := make(chan event.Event, 4)
+	phc2sys := &stubProcess{
+		name:  phc2sysProcessName,
+		state: process.Created,
+		conds: map[process.Action]process.Condition{
+			process.ActionStart: process.OnPluginEvent{EventName: testGNSSRecovered},
+			process.ActionStop:  process.OnPluginEvent{EventName: testGNSSFailover},
+		},
+	}
+
+	pm := &ProcessManager{
+		process:   []process.Process{phc2sys},
+		eventsIn:  inbound,
+		eventsOut: handler,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pm.processEvents(ctx)
+
+	pm.StartProcesses(ctx)
+	assert.Equal(t, phc2sys.starts, 0, "phc2sys should start")
+	inbound <- event.PluginEvent("ntpfailover", testGNSSRecovered)
+	select {
+	case <-handler:
+	case <-time.After(2 * time.Second):
+		t.Fatal("failover event was not forwarded")
+	}
+	assert.Equal(t, phc2sys.starts, 1, "phc2sys should start")
+}
+
 func TestEvalActions_FullFailoverFlow(t *testing.T) {
 	inbound := make(chan event.Event, 4)
 	handler := make(chan event.Event, 4)
@@ -512,6 +544,7 @@ func TestEvalActions_FullFailoverFlow(t *testing.T) {
 			process.ActionStop:  process.OnPluginEvent{EventName: testGNSSRecovered},
 		},
 	}
+
 	pm := &ProcessManager{
 		process:   []process.Process{phc2sys, chronyd},
 		eventsIn:  inbound,

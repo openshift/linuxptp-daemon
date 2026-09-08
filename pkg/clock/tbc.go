@@ -11,7 +11,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
@@ -70,15 +69,11 @@ func nextAnnounceToken() uint64 { return announceSeq.Add(1) }
 
 // TBC is a Telecom Boundary Clock instance
 type TBC struct {
-	cfgName          string
-	sendIPC          func(ipc.Message)
+	BaseClock
 	sendEvent        func(event.Event)
 	getUtcOffset     func() int
 	pmcClient        pmc.Client
 	syncState        SyncState
-	overallSyncState event.PTPState
-	osClockState     event.PTPState
-	data             []*event.Data
 	leadingClockData *LeadingClockParams
 	// configuredLeadingInterface is the profile leadingInterface. It survives
 	// Reset so T-BC clock-state reporting is not blocked waiting for a DPLL
@@ -98,7 +93,7 @@ func NewTBC(cfgName string, getUtcOffset func() int, pmcClient pmc.Client) (*TBC
 		return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", event.TBC, cfgName)
 	}
 	return &TBC{
-		cfgName:      cfgName,
+		BaseClock:    newBaseClock(cfgName, event.PtpClockThreshold{}),
 		getUtcOffset: getUtcOffset,
 		pmcClient:    pmcClient,
 		syncState: SyncState{
@@ -106,8 +101,6 @@ func NewTBC(cfgName string, getUtcOffset func() int, pmcClient pmc.Client) (*TBC
 			ClockClass:    protocol.ClockClassUninitialized,
 			ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 		},
-		overallSyncState: event.PTP_NOTSET,
-		osClockState:     event.PTP_NOTSET,
 		leadingClockData: newLeadingClockParams(),
 		announceToken:    nextAnnounceToken(),
 	}, nil
@@ -129,28 +122,8 @@ func (c *TBC) ClockType() event.ClockType { return event.TBC }
 // ClockClass returns the current clock class.
 func (c *TBC) ClockClass() fbprotocol.ClockClass { return c.syncState.ClockClass }
 
-// ConfigName returns the configuration name.
-func (c *TBC) ConfigName() string { return c.cfgName }
-
 // GetState returns the current PTP synchronization state.
 func (c *TBC) GetState() event.PTPState { return c.syncState.State }
-
-// GetData returns the Data entry for the given process, creating one if needed.
-func (c *TBC) GetData(processName event.EventSource) *event.Data {
-	for _, d := range c.data {
-		if d.ProcessName == processName {
-			return d
-		}
-	}
-	d := &event.Data{ProcessName: processName, State: event.PTP_UNKNOWN, Window: *utils.NewWindow(event.WindowSize)}
-	c.data = append(c.data, d)
-	return d
-}
-
-// ProcessData returns all clock data accumulated from processed events.
-func (c *TBC) ProcessData() []*event.Data {
-	return c.data
-}
 
 // AddEvent processes an event and updates clock state.
 func (c *TBC) AddEvent(ev event.Event) SyncState {
@@ -200,7 +173,7 @@ func (c *TBC) evaluateState() {
 		})
 	}
 
-	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState.State, c.osClockState, profile)
+	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState.State, c.osClock.State, profile)
 
 	if needsDownstreamUpdate {
 		c.updateDownstreamData(c.cfgName)
@@ -361,6 +334,7 @@ func (c *TBC) updateState() bool {
 
 // Reset resets the clock state.
 func (c *TBC) Reset() {
+	c.BaseClock.Reset()
 	c.leadingClockData = newLeadingClockParams()
 	c.syncState = SyncState{
 		State:         event.PTP_NOTSET,
@@ -737,10 +711,9 @@ func (c *TBC) SetConfiguredLeadingInterface(iface string) {
 }
 
 // SystemClockUpdate updates the OS clock state.
-func (c *TBC) SystemClockUpdate(osClockState event.PTPState) {
-	c.osClockState = osClockState
+func (c *TBC) SystemClockUpdate() {
 	profile := strings.Replace(c.cfgName, "ts2phc", "ptp4l", 1)
-	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState.State, c.osClockState, profile)
+	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState.State, c.osClock.State, profile)
 }
 
 func (c *TBC) processSyncE(ev event.Event) {

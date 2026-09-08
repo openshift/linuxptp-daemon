@@ -7,7 +7,6 @@ import (
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 // TODO: BCClock is a mash of OC and BC. Should figure out if we want to split them into separate clocks, or rename
@@ -27,16 +26,12 @@ import (
 // The offset gate and the holdover timer both live here so cancellation stays
 // coherent: the same code that decides LOCKED is the code that cancels the timer.
 type BCClock struct {
-	cfgName          string
-	clockType        event.ClockType
-	sendIPC          func(ipc.Message)
-	sendEvent        func(event.Event)
-	threshold        event.PtpClockThreshold
-	iface            string
-	syncState        event.PTPState
-	clockClass       fbprotocol.ClockClass
-	overallSyncState event.PTPState
-	osClockState     event.PTPState
+	BaseClock
+	clockType  event.ClockType
+	sendEvent  func(event.Event)
+	iface      string
+	syncState  event.PTPState
+	clockClass fbprotocol.ClockClass
 	// holdoverCancel stops the pending holdover timer goroutine when the clock
 	// leaves HOLDOVER (offset recovered, or Reset). nil when no timer is armed.
 	holdoverCancel chan struct{}
@@ -46,7 +41,6 @@ type BCClock struct {
 	// ignored, so a superseded or canceled timer cannot cut a fresh holdover
 	// short.
 	holdoverGen uint64
-	data        []*event.Data
 }
 
 // NewBC creates a new Boundary clock. If isOC is true, an Ordinary clock will be created instead
@@ -56,19 +50,11 @@ func NewBC(cfgName string, isOC bool, threshold event.PtpClockThreshold) (*BCClo
 		clockType = event.OC
 	}
 	c := &BCClock{
-		cfgName:          cfgName,
-		clockType:        clockType,
-		threshold:        threshold,
-		syncState:        event.PTP_NOTSET,
-		overallSyncState: event.PTP_NOTSET,
-		osClockState:     event.PTP_NOTSET,
+		BaseClock: newBaseClock(cfgName, threshold),
+		clockType: clockType,
+		syncState: event.PTP_NOTSET,
 	}
 	return c, nil
-}
-
-// SetIPC sets the IPC sender function
-func (c *BCClock) SetIPC(f func(message ipc.Message)) {
-	c.sendIPC = f
 }
 
 // SetEventLoopbackFunc provides a function for the clock to send its own events into the event pipeline
@@ -87,28 +73,8 @@ func (c *BCClock) ClockType() event.ClockType {
 // ClockClass returns the current clock class.
 func (c *BCClock) ClockClass() fbprotocol.ClockClass { return c.clockClass }
 
-// ConfigName returns the configuration name.
-func (c *BCClock) ConfigName() string { return c.cfgName }
-
 // GetState returns the current PTP synchronization state.
 func (c *BCClock) GetState() event.PTPState { return c.syncState }
-
-// GetData returns the Data entry for the given process, creating one if needed.
-func (c *BCClock) GetData(processName event.EventSource) *event.Data {
-	for _, d := range c.data {
-		if d.ProcessName == processName {
-			return d
-		}
-	}
-	d := &event.Data{ProcessName: processName, State: event.PTP_UNKNOWN, Window: *utils.NewWindow(event.WindowSize)}
-	c.data = append(c.data, d)
-	return d
-}
-
-// ProcessData returns all clock data accumulated from processed events.
-func (c *BCClock) ProcessData() []*event.Data {
-	return c.data
-}
 
 // AddEvent processes an event and updates clock state.
 func (c *BCClock) AddEvent(ev event.Event) SyncState {
@@ -149,7 +115,7 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 		}
 
 		// Record the follower interface once known
-		if !ptp.SourceLost && ev.IFace != "" {
+		if !sourceLost && ev.IFace != "" {
 			c.iface = ev.IFace
 		}
 
@@ -254,7 +220,7 @@ func (c *BCClock) onStateChanged(prev event.PTPState, iface string) {
 			Values:  ipc.StateValue{State: event.PtpStateToIPCState(c.syncState)},
 		})
 	}
-	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState, c.osClockState, c.cfgName)
+	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState, c.osClock.State, c.cfgName)
 }
 
 // currentSyncState returns the clock's state. LeadingIFace is only reported once
@@ -269,14 +235,14 @@ func (c *BCClock) currentSyncState() SyncState {
 }
 
 // SystemClockUpdate updates the OS clock state.
-func (c *BCClock) SystemClockUpdate(osClockState event.PTPState) {
-	c.osClockState = osClockState
-	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState, c.osClockState, c.cfgName)
+func (c *BCClock) SystemClockUpdate() {
+	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState, c.osClock.State, c.cfgName)
 }
 
 // Reset resets the clock state.
 func (c *BCClock) Reset() {
 	c.cancelHoldoverTimer()
+	c.BaseClock.Reset()
 	c.syncState = event.PTP_FREERUN
 	c.overallSyncState = event.PTP_FREERUN
 	// Clear the last-published class so the next PMC update re-emits it and

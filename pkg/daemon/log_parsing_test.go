@@ -130,7 +130,7 @@ func TestSourceLostOnListening(t *testing.T) {
 	processWithParser(process, "ptp4l[103.000]: [ptp4l.0.config:5] port 1 (ens3f0): SLAVE to LISTENING on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES")
 	evs := drainEvents(process.eventCh)
 	if assert.Len(t, evs, 1, "active slave dropping to LISTENING must emit one source-lost event") {
-		ptp, ok := evs[0].Data.(*event.PTPData)
+		ptp, ok := evs[0].Data.(*event.OffsetData)
 		assert.True(t, ok && ptp.SourceLost, "emitted event must carry SourceLost=true")
 		assert.Equal(t, "ens3f0", evs[0].IFace)
 	}

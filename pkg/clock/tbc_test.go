@@ -67,7 +67,11 @@ func (r *eventRecorder) snapshot() []event.Event {
 func newPMCTestTBCClock(pmcClient pmc.Client) *TBC {
 	rec := &ipcRecorder{}
 	return &TBC{
-		sendIPC:          rec.send,
+		BaseClock: BaseClock{
+			sendIPC:          rec.send,
+			overallSyncState: event.PTP_NOTSET,
+			osClock:          &OsClock{State: event.PTP_NOTSET},
+		},
 		sendEvent:        func(event.Event) {},
 		getUtcOffset:     stubUtcOffset,
 		pmcClient:        pmcClient,
@@ -927,7 +931,7 @@ func TestUpdateBCState(t *testing.T) {
 func TestProcessSyncE(t *testing.T) {
 	t.Run("state event emits synce_state IPC", func(t *testing.T) {
 		rio := &ipcRecorder{}
-		bc := &TBC{cfgName: testPTP4lCfg, sendIPC: rio.send}
+		bc := TBC{BaseClock: BaseClock{cfgName: testPTP4lCfg, sendIPC: rio.send}}
 		ev := event.Event{
 			Source: event.SYNCE,
 			IFace:  testEns7f0,
@@ -945,7 +949,7 @@ func TestProcessSyncE(t *testing.T) {
 
 	t.Run("quality event emits synce_clock_quality IPC", func(t *testing.T) {
 		rio := &ipcRecorder{}
-		bc := &TBC{cfgName: testPTP4lCfg, sendIPC: rio.send}
+		bc := TBC{BaseClock: BaseClock{cfgName: testPTP4lCfg, sendIPC: rio.send}}
 		ev := event.Event{
 			Source: event.SYNCE,
 			IFace:  testEns7f0,
@@ -963,7 +967,7 @@ func TestProcessSyncE(t *testing.T) {
 
 	t.Run("nil Data does not panic", func(t *testing.T) {
 		rio := &ipcRecorder{}
-		bc := &TBC{cfgName: testPTP4lCfg, sendIPC: rio.send}
+		bc := TBC{BaseClock: BaseClock{cfgName: testPTP4lCfg, sendIPC: rio.send}}
 		bc.processSyncE(event.Event{Source: event.SYNCE, Data: nil})
 		assert.Empty(t, rio.messages)
 	})
@@ -977,9 +981,10 @@ func TestUpdateOSClockState(t *testing.T) {
 		bc.syncState.State = event.PTP_LOCKED
 		bc.overallSyncState = event.PTP_LOCKED
 
-		bc.SystemClockUpdate(event.PTP_FREERUN)
+		bc.osClock.State = event.PTP_FREERUN // Set on osClock on Clock Manager which this is a pointer to
+		bc.SystemClockUpdate()
 		assert.Equal(t, event.PTP_FREERUN, bc.overallSyncState)
-		assert.Equal(t, event.PTP_FREERUN, bc.osClockState)
+		assert.Equal(t, event.PTP_FREERUN, bc.osClock.State)
 		require.Len(t, rio.messages, 1)
 		assert.Equal(t, ipc.TypeSyncState, rio.messages[0].Type)
 		assert.Equal(t, ipc.SyncStateValue{State: ipc.StateFreerun}, rio.messages[0].Values)
@@ -992,7 +997,8 @@ func TestUpdateOSClockState(t *testing.T) {
 		bc.syncState.State = event.PTP_LOCKED
 		bc.overallSyncState = event.PTP_LOCKED
 
-		bc.SystemClockUpdate(event.PTP_LOCKED)
+		bc.osClock.State = event.PTP_LOCKED // Set on osClock on Clock Manager which this is a pointer to
+		bc.SystemClockUpdate()
 		assert.Equal(t, event.PTP_LOCKED, bc.overallSyncState)
 		assert.Empty(t, rio.messages)
 	})
@@ -1086,19 +1092,21 @@ func tbcLeadingClockParams() *LeadingClockParams {
 func newLockedTBCClock() (*TBC, *ipcRecorder) {
 	rec := ipcRecorder{}
 	bc := &TBC{
-		sendIPC:          rec.send,
+		BaseClock: BaseClock{
+			cfgName:          testTS2PHCCfg,
+			sendIPC:          rec.send,
+			overallSyncState: event.PTP_NOTSET,
+			osClock:          &OsClock{State: event.PTP_NOTSET},
+		},
 		sendEvent:        func(event.Event) {},
 		getUtcOffset:     stubUtcOffset,
 		pmcClient:        &pmc.MockClient{},
-		cfgName:          testTS2PHCCfg,
 		leadingClockData: tbcLeadingClockParams(),
 		syncState: SyncState{
 			State:         event.PTP_FREERUN,
 			ClockClass:    protocol.ClockClassUninitialized,
 			ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 		},
-		overallSyncState: event.PTP_FREERUN,
-		osClockState:     event.PTP_NOTSET,
 	}
 	bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
 	bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_LOCKED, 10, false))
