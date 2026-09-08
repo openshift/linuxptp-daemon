@@ -99,6 +99,13 @@ func Test_E825(t *testing.T) {
 	assert.Nil(t, d)
 }
 
+func Test_AfterRunPTPCommandE825_NilProfile(t *testing.T) {
+	p, d := E825("e825")
+	err := p.AfterRunPTPCommand(d, nil, "pmc")
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "e825 requires a non-Nil profile")
+}
+
 func Test_AfterRunPTPCommandE825(t *testing.T) {
 	profile, err := loadProfile("./testdata/e825-tgm.yaml")
 	assert.NoError(t, err)

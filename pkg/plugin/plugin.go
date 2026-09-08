@@ -63,6 +63,9 @@ func (pm *PluginManager) OnPTPConfigChange(nodeProfile *ptpv1.PtpProfile) []erro
 
 // AfterRunPTPCommand is plugin interface
 func (pm *PluginManager) AfterRunPTPCommand(nodeProfile *ptpv1.PtpProfile, command string) {
+	if nodeProfile == nil {
+		return
+	}
 	for pluginName, pluginObject := range pm.Plugins {
 		pluginFunc := pluginObject.AfterRunPTPCommand
 		if pluginFunc != nil {
