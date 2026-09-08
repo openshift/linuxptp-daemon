@@ -86,7 +86,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.DPLL,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0), event.PHASE_STATUS: int64(3), event.FREQUENCY_STATUS: int64(3), event.PPS_STATUS: int64(1)}},
+			data:             &event.DPLLData{State: event.PTP_LOCKED, Offset: event.Int64Ptr(0), PhaseStatus: event.Int64Ptr(3), FrequencyStatus: event.Int64Ptr(3), PPSStatus: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] unknown T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 3 offset 0 phase_status 3 pps_status 1 s2",
@@ -106,7 +106,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0)}},
+			data:             &event.OffsetData{State: event.PTP_LOCKED, Offset: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 offset 0 s2",
@@ -116,7 +116,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_FREERUN, Values: map[event.ValueType]interface{}{event.OFFSET: int64(5000)}},
+			data:             &event.OffsetData{State: event.PTP_FREERUN, Offset: 5000},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 offset 5000 s0",
@@ -126,7 +126,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0)}},
+			data:             &event.OffsetData{State: event.PTP_LOCKED, Offset: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 offset 0 s2",
@@ -146,7 +146,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.DPLL,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_HOLDOVER, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0), event.PHASE_STATUS: int64(4), event.FREQUENCY_STATUS: int64(4), event.PPS_STATUS: int64(1)}},
+			data:             &event.DPLLData{State: event.PTP_HOLDOVER, Offset: event.Int64Ptr(0), PhaseStatus: event.Int64Ptr(4), FrequencyStatus: event.Int64Ptr(4), PPSStatus: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 4 offset 0 phase_status 4 pps_status 1 s1",
@@ -156,7 +156,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.DPLL,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_FREERUN, OutOfSpec: true, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0), event.PHASE_STATUS: int64(1), event.FREQUENCY_STATUS: int64(1), event.PPS_STATUS: int64(1)}},
+			data:             &event.DPLLData{State: event.PTP_FREERUN, OutOfSpec: true, Offset: event.Int64Ptr(0), PhaseStatus: event.Int64Ptr(1), FrequencyStatus: event.Int64Ptr(1), PPSStatus: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 1 offset 0 phase_status 1 pps_status 1 s0",
@@ -176,7 +176,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.DPLL,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_LOCKED, OutOfSpec: true, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0), event.PHASE_STATUS: int64(3), event.FREQUENCY_STATUS: int64(3), event.PPS_STATUS: int64(1)}},
+			data:             &event.DPLLData{State: event.PTP_LOCKED, OutOfSpec: true, Offset: event.Int64Ptr(0), PhaseStatus: event.Int64Ptr(3), FrequencyStatus: event.Int64Ptr(3), PPSStatus: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 3 offset 0 phase_status 3 pps_status 1 s2",
@@ -186,7 +186,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_HOLDOVER, Values: map[event.ValueType]interface{}{event.OFFSET: int64(99999), event.NMEA_STATUS: int64(0)}},
+			data:             &event.OffsetData{State: event.PTP_HOLDOVER, Offset: 99999, NMEALocked: event.Ptr(false)},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 nmea_status 0 offset 99999 s1",
@@ -196,7 +196,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_FREERUN, Values: map[event.ValueType]interface{}{event.OFFSET: int64(99999), event.NMEA_STATUS: int64(0)}},
+			data:             &event.OffsetData{State: event.PTP_FREERUN, Offset: 99999, NMEALocked: event.Ptr(false)},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 nmea_status 0 offset 99999 s0",
@@ -206,7 +206,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0), event.NMEA_STATUS: int64(1)}},
+			data:             &event.OffsetData{State: event.PTP_LOCKED, Offset: 0, NMEALocked: event.Ptr(true)},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens1f0 nmea_status 1 offset 0 s2",
@@ -216,7 +216,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens2f0",
-			data:             &event.PTPData{State: event.PTP_FREERUN, Values: map[event.ValueType]interface{}{event.OFFSET: int64(5000)}},
+			data:             &event.OffsetData{State: event.PTP_FREERUN, Offset: 5000},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s0",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 248",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens2f0 offset 5000 s0",
@@ -226,7 +226,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens2f0",
-			data:             &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0), event.NMEA_STATUS: int64(1)}},
+			data:             &event.OffsetData{State: event.PTP_LOCKED, Offset: 0, NMEALocked: event.Ptr(true)},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s2",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 6",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens2f0 nmea_status 1 offset 0 s2",
@@ -246,7 +246,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.DPLL,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
-			data:             &event.PTPData{State: event.PTP_HOLDOVER, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0), event.PHASE_STATUS: int64(4), event.FREQUENCY_STATUS: int64(4), event.PPS_STATUS: int64(1)}},
+			data:             &event.DPLLData{State: event.PTP_HOLDOVER, Offset: event.Int64Ptr(0), PhaseStatus: event.Int64Ptr(4), FrequencyStatus: event.Int64Ptr(4), PPSStatus: 1},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens1f0 frequency_status 4 offset 0 phase_status 4 pps_status 1 s1",
@@ -256,7 +256,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.DPLL,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens2f0",
-			data:             &event.PTPData{State: event.PTP_HOLDOVER, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0), event.PHASE_STATUS: int64(4), event.FREQUENCY_STATUS: int64(4), event.PPS_STATUS: int64(0)}},
+			data:             &event.DPLLData{State: event.PTP_HOLDOVER, Offset: event.Int64Ptr(0), PhaseStatus: event.Int64Ptr(4), FrequencyStatus: event.Int64Ptr(4), PPSStatus: 0},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
 			wantProcessState: "dpll[0]:[ts2phc.0.config] ens2f0 frequency_status 4 offset 0 phase_status 4 pps_status 0 s1",
@@ -266,7 +266,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			processName:      event.TS2PHCProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens2f0",
-			data:             &event.PTPData{State: event.PTP_FREERUN, Values: map[event.ValueType]interface{}{event.OFFSET: int64(5000)}},
+			data:             &event.OffsetData{State: event.PTP_FREERUN, Offset: 5000},
 			wantGMState:      "GM[0]:[ts2phc.0.config] ens1f0 T-GM-STATUS s1",
 			wantClockState:   "ptp4l[0]:[ts2phc.0.config] CLOCK_CLASS_CHANGE 7",
 			wantProcessState: "ts2phc[0]:[ts2phc.0.config] ens2f0 offset 5000 s0",
@@ -407,46 +407,42 @@ func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 	// First DPLL event carries leading source configuration.
 	// AddEvent's first call creates the detail but does NOT insert into the
 	// window, so we need WindowSize+1 events per source to fill the window.
-	eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.PTPData{
-		State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{
-			event.LeadingSource: true, event.OFFSET: int64(10),
-			event.InSyncConditionThreshold: uint64(10000), event.InSyncConditionTimes: uint64(1),
-			event.ToFreeRunThreshold: uint64(1500), event.MaxInSpecOffset: uint64(500),
-		},
+	eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.DPLLData{
+		State: event.PTP_LOCKED, LeadingSource: true, Offset: event.Int64Ptr(10),
+		InSyncConditionThreshold: 10000, InSyncConditionTimes: 1,
+		ToFreeRunThreshold: 1500, MaxInSpecOffset: 500,
 	})
 	time.Sleep(100 * time.Millisecond)
 
 	// 10 more DPLL events to fill the DPLL window (first event created the detail,
 	// these 10 fill WindowSize=10)
 	for i := 0; i < 10; i++ {
-		eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+		eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.DPLLData{State: event.PTP_LOCKED, Offset: event.Int64Ptr(10)})
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	// First PTP4l event carries downstream port configuration
-	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.PTPData{
-		State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{
-			event.ControlledPortsConfig: testBCCfgPTP4l, event.ClockIDKey: testClockID,
-		},
+	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.StateData{
+		State: event.PTP_LOCKED, ControlledPortsConfig: testBCCfgPTP4l, ClockID: testClockID,
 	})
 	time.Sleep(100 * time.Millisecond)
 
 	// 10 more PTP4l events to fill the PTP4l window; the last triggers FREERUN→LOCKED
 	for i := 0; i < 10; i++ {
-		eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+		eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_LOCKED, Offset: 10})
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	// One more DPLL event in LOCKED state triggers "stay LOCKED" path:
 	// upstream ParentDataSet (class 6) != downstream (class 0) → needsDownstreamUpdate
 	// → downstreamAnnounceIWF → announceClockClass(6)
-	eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+	eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.DPLLData{State: event.PTP_LOCKED, Offset: event.Int64Ptr(10)})
 
 	assert.True(t, waitForClockClass(eventManager.GetClock(testBCCfgPTP4l), 6, 5*time.Second),
 		"expected clock class 6 after BC reaches LOCKED")
 
 	// Phase 2: PTP4l source lost triggers LOCKED→HOLDOVER (class 135)
-	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.PTPData{State: event.PTP_FREERUN, SourceLost: true, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_FREERUN, Offset: 10, SourceLost: true})
 
 	assert.True(t, waitForClockClass(eventManager.GetClock(testBCCfgPTP4l), 135, 5*time.Second),
 		"expected clock class 135 after BC enters HOLDOVER")
@@ -556,41 +552,37 @@ func TestTBCClockClassMetric(t *testing.T) {
 	)
 
 	// Fill DPLL window: first event creates detail, next 10 fill WindowSize=10
-	eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.PTPData{
-		State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{
-			event.LeadingSource: true, event.OFFSET: int64(10),
-			event.InSyncConditionThreshold: uint64(10000), event.InSyncConditionTimes: uint64(1),
-			event.ToFreeRunThreshold: uint64(1500), event.MaxInSpecOffset: uint64(500),
-		},
+	eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.DPLLData{
+		State: event.PTP_LOCKED, LeadingSource: true, Offset: event.Int64Ptr(10),
+		InSyncConditionThreshold: 10000, InSyncConditionTimes: 1,
+		ToFreeRunThreshold: 1500, MaxInSpecOffset: 500,
 	})
 	time.Sleep(100 * time.Millisecond)
 
 	for i := 0; i < 10; i++ {
-		eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+		eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.DPLLData{State: event.PTP_LOCKED, Offset: event.Int64Ptr(10)})
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	// Fill PTP4l window
-	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.PTPData{
-		State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{
-			event.ControlledPortsConfig: testBCCfgPTP4l, event.ClockIDKey: testClockID,
-		},
+	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.StateData{
+		State: event.PTP_LOCKED, ControlledPortsConfig: testBCCfgPTP4l, ClockID: testClockID,
 	})
 	time.Sleep(100 * time.Millisecond)
 
 	for i := 0; i < 10; i++ {
-		eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+		eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_LOCKED, Offset: 10})
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	// Trigger "stay LOCKED" → upstream data mismatch → announceClockClass(6)
-	eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+	eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.DPLLData{State: event.PTP_LOCKED, Offset: event.Int64Ptr(10)})
 
 	assert.True(t, waitForMetric(clockClassGauge, bcCfgPTP4l, 6, 5*time.Second),
 		"expected clock class metric = 6 for %s after LOCKED", bcCfgPTP4l)
 
 	// PTP4l source lost → LOCKED→HOLDOVER (class 135)
-	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.PTPData{State: event.PTP_FREERUN, SourceLost: true, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_FREERUN, Offset: 10, SourceLost: true})
 
 	assert.True(t, waitForMetric(clockClassGauge, bcCfgPTP4l, 135, 5*time.Second),
 		"expected clock class metric = 135 for %s after HOLDOVER", bcCfgPTP4l)
@@ -777,9 +769,9 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 		case event.GNSS:
 			data = &event.GNSSData{GPSStatus: 3, Offset: 0, SourceLost: sourceLost}
 		case event.DPLL:
-			data = &event.PTPData{State: state, SourceLost: sourceLost, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0)}}
+			data = &event.DPLLData{State: state, Offset: event.Int64Ptr(0), SourceLost: sourceLost}
 		default:
-			data = &event.PTPData{State: state, SourceLost: sourceLost, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0)}}
+			data = &event.OffsetData{State: state, Offset: 0, SourceLost: sourceLost}
 		}
 		return event.Event{
 			Source: process, IFace: gmIface, CfgName: gmCfg,
@@ -903,29 +895,25 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 
 	drainIPCMessages(socketCh, 200*time.Millisecond)
 
-	eChannel <- tbcEvent(tbcTS2HC, event.DPLL, &event.PTPData{
-		State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{
-			event.LeadingSource: true, event.OFFSET: int64(10),
-			event.InSyncConditionThreshold: uint64(10000), event.InSyncConditionTimes: uint64(1),
-			event.ToFreeRunThreshold: uint64(1500), event.MaxInSpecOffset: uint64(500),
-		},
+	eChannel <- tbcEvent(tbcTS2HC, event.DPLL, &event.DPLLData{
+		State: event.PTP_LOCKED, LeadingSource: true, Offset: event.Int64Ptr(10),
+		InSyncConditionThreshold: 10000, InSyncConditionTimes: 1,
+		ToFreeRunThreshold: 1500, MaxInSpecOffset: 500,
 	})
 	time.Sleep(100 * time.Millisecond)
 
 	for i := 0; i < 10; i++ {
-		eChannel <- tbcEvent(tbcTS2HC, event.DPLL, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+		eChannel <- tbcEvent(tbcTS2HC, event.DPLL, &event.DPLLData{State: event.PTP_LOCKED, Offset: event.Int64Ptr(10)})
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	eChannel <- tbcEvent(tbcPTP4l, event.PTP4l, &event.PTPData{
-		State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{
-			event.ControlledPortsConfig: tbcPTP4l, event.ClockIDKey: testClockID,
-		},
+	eChannel <- tbcEvent(tbcPTP4l, event.PTP4l, &event.StateData{
+		State: event.PTP_LOCKED, ControlledPortsConfig: tbcPTP4l, ClockID: testClockID,
 	})
 	time.Sleep(100 * time.Millisecond)
 
 	for i := 0; i < 10; i++ {
-		eChannel <- tbcEvent(tbcPTP4l, event.PTP4l, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+		eChannel <- tbcEvent(tbcPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_LOCKED, Offset: 10})
 		time.Sleep(50 * time.Millisecond)
 	}
 
@@ -951,7 +939,7 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 
 	drainIPCMessages(socketCh, 200*time.Millisecond)
 
-	eChannel <- tbcEvent(tbcPTP4l, event.PTP4l, &event.PTPData{State: event.PTP_FREERUN, SourceLost: true, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+	eChannel <- tbcEvent(tbcPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_FREERUN, Offset: 10, SourceLost: true})
 
 	msgs = drainIPCMessages(socketCh, 2*time.Second)
 
@@ -980,7 +968,7 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 
 	drainIPCMessages(socketCh, 200*time.Millisecond)
 
-	eChannel <- tbcEvent(tbcTS2HC, event.DPLL, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(50000)}})
+	eChannel <- tbcEvent(tbcTS2HC, event.DPLL, &event.DPLLData{State: event.PTP_LOCKED, Offset: event.Int64Ptr(50000)})
 
 	msgs = drainIPCMessages(socketCh, 2*time.Second)
 
@@ -1010,7 +998,7 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 	drainIPCMessages(socketCh, 200*time.Millisecond)
 
 	for i := 0; i < 5; i++ {
-		eChannel <- tbcEvent(tbcTS2HC, event.DPLL, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(50000)}})
+		eChannel <- tbcEvent(tbcTS2HC, event.DPLL, &event.DPLLData{State: event.PTP_LOCKED, Offset: event.Int64Ptr(50000)})
 		time.Sleep(50 * time.Millisecond)
 	}
 
@@ -1094,29 +1082,25 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	// --- Phase 1: Lock both TBCClocks' PTP state ---
 
 	lockTBCClock := func(cfgDPLL, cfgPTP4l string) {
-		eChannel <- bcEvent(cfgDPLL, event.DPLL, &event.PTPData{
-			State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{
-				event.LeadingSource: true, event.OFFSET: int64(10),
-				event.InSyncConditionThreshold: uint64(10000), event.InSyncConditionTimes: uint64(1),
-				event.ToFreeRunThreshold: uint64(1500), event.MaxInSpecOffset: uint64(500),
-			},
+		eChannel <- bcEvent(cfgDPLL, event.DPLL, &event.DPLLData{
+			State: event.PTP_LOCKED, LeadingSource: true, Offset: event.Int64Ptr(10),
+			InSyncConditionThreshold: 10000, InSyncConditionTimes: 1,
+			ToFreeRunThreshold: 1500, MaxInSpecOffset: 500,
 		})
 		time.Sleep(100 * time.Millisecond)
 
 		for i := 0; i < 10; i++ {
-			eChannel <- bcEvent(cfgDPLL, event.DPLL, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+			eChannel <- bcEvent(cfgDPLL, event.DPLL, &event.DPLLData{State: event.PTP_LOCKED, Offset: event.Int64Ptr(10)})
 			time.Sleep(50 * time.Millisecond)
 		}
 
-		eChannel <- bcEvent(cfgPTP4l, event.PTP4l, &event.PTPData{
-			State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{
-				event.ControlledPortsConfig: cfgPTP4l, event.ClockIDKey: testClockID,
-			},
+		eChannel <- bcEvent(cfgPTP4l, event.PTP4l, &event.StateData{
+			State: event.PTP_LOCKED, ControlledPortsConfig: cfgPTP4l, ClockID: testClockID,
 		})
 		time.Sleep(100 * time.Millisecond)
 
 		for i := 0; i < 10; i++ {
-			eChannel <- bcEvent(cfgPTP4l, event.PTP4l, &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(10)}})
+			eChannel <- bcEvent(cfgPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_LOCKED, Offset: 10})
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
@@ -1155,8 +1139,9 @@ func TestOverallClockStateIntegration(t *testing.T) {
 		CfgName:   testBCCfgPTP4l,
 		ClockType: event.TBC,
 		Time:      time.Now().UnixMilli(),
-		Data: &event.PTPData{
-			State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.OFFSET: int64(5)},
+		Data: &event.OffsetData{
+			State:  event.PTP_LOCKED,
+			Offset: 5,
 		},
 	}
 
@@ -1195,8 +1180,9 @@ func TestOverallClockStateIntegration(t *testing.T) {
 		CfgName:   testBCCfgPTP4l,
 		ClockType: event.TBC,
 		Time:      time.Now().UnixMilli(),
-		Data: &event.PTPData{
-			State: event.PTP_FREERUN, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0)},
+		Data: &event.OffsetData{
+			State:  event.PTP_FREERUN,
+			Offset: 0,
 		},
 	}
 
@@ -1223,8 +1209,9 @@ func TestOverallClockStateIntegration(t *testing.T) {
 		CfgName:   testBCCfgPTP4l,
 		ClockType: event.TBC,
 		Time:      time.Now().UnixMilli(),
-		Data: &event.PTPData{
-			State: event.PTP_FREERUN, Values: map[event.ValueType]interface{}{event.OFFSET: int64(0)},
+		Data: &event.OffsetData{
+			State:  event.PTP_FREERUN,
+			Offset: 0,
 		},
 	}
 
@@ -1303,7 +1290,12 @@ func TestSyncEIPCIntegration(t *testing.T) {
 		CfgName:    "synce4l.0.config",
 		Time:       time.Now().UnixMilli(),
 		WriteToLog: true,
-		Data:       &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.EEC_STATE: "EEC_LOCKED", event.DEVICE: "synce1", event.NETWORK_OPTION: 1}},
+		Data: &event.SyncEData{
+			State:         event.PTP_LOCKED,
+			EECState:      "EEC_LOCKED",
+			Device:        "synce1",
+			NetworkOption: 1,
+		},
 	}
 
 	msg, ok := waitForIPCMessage(socketCh, ipc.TypeSyncEState, 2*time.Second)
@@ -1326,7 +1318,14 @@ func TestSyncEIPCIntegration(t *testing.T) {
 		CfgName:    "synce4l.0.config",
 		Time:       time.Now().UnixMilli(),
 		WriteToLog: true,
-		Data:       &event.PTPData{State: event.PTP_LOCKED, Values: map[event.ValueType]interface{}{event.QL: byte(4), event.EXT_QL: byte(0xFF), event.CLOCK_QUALITY: "PRS", event.DEVICE: "synce1", event.NETWORK_OPTION: 1}},
+		Data: &event.SyncEData{
+			State:         event.PTP_LOCKED,
+			QL:            event.BytePtr(4),
+			ExtQL:         event.BytePtr(0xFF),
+			ClockQuality:  "PRS",
+			Device:        "synce1",
+			NetworkOption: 1,
+		},
 	}
 
 	msg, ok = waitForIPCMessage(socketCh, ipc.TypeSyncEClockQuality, 2*time.Second)
@@ -1349,7 +1348,12 @@ func TestSyncEIPCIntegration(t *testing.T) {
 		CfgName:    "synce4l.0.config",
 		Time:       time.Now().UnixMilli(),
 		WriteToLog: true,
-		Data:       &event.PTPData{State: event.PTP_FREERUN, Values: map[event.ValueType]interface{}{event.EEC_STATE: "EEC_FREERUN", event.DEVICE: "synce1", event.NETWORK_OPTION: 1}},
+		Data: &event.SyncEData{
+			State:         event.PTP_FREERUN,
+			EECState:      "EEC_FREERUN",
+			Device:        "synce1",
+			NetworkOption: 1,
+		},
 	}
 
 	msgs := drainIPCMessages(socketCh, 1*time.Second)
@@ -1392,11 +1396,10 @@ func TestApplyingSkipsTBCEvents(t *testing.T) {
 	eChannel <- event.Event{
 		Source: event.DPLL, IFace: "ens1f0", CfgName: cfg, ClockType: event.TBC,
 		Time: time.Now().UnixMilli(), WriteToLog: true,
-		Data: &event.PTPData{
-			State: event.PTP_LOCKED,
-			Values: map[event.ValueType]interface{}{
-				event.OFFSET: int64(5), event.LeadingSource: true,
-			},
+		Data: &event.DPLLData{
+			State:         event.PTP_LOCKED,
+			Offset:        event.Int64Ptr(5),
+			LeadingSource: true,
 		},
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -1410,11 +1413,10 @@ func TestApplyingSkipsTBCEvents(t *testing.T) {
 	eChannel <- event.Event{
 		Source: event.DPLL, IFace: "ens1f0", CfgName: cfg, ClockType: event.TBC,
 		Time: time.Now().UnixMilli(), WriteToLog: true,
-		Data: &event.PTPData{
-			State: event.PTP_LOCKED,
-			Values: map[event.ValueType]interface{}{
-				event.OFFSET: int64(5), event.LeadingSource: true,
-			},
+		Data: &event.DPLLData{
+			State:         event.PTP_LOCKED,
+			Offset:        event.Int64Ptr(5),
+			LeadingSource: true,
 		},
 	}
 	time.Sleep(200 * time.Millisecond)

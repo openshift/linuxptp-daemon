@@ -150,9 +150,9 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 				IFace:     ptpMetrics.Iface,
 				ClockType: process.clockType,
 				Time:      time.Now().UnixMilli(),
-				Data: &event.PTPData{
+				Data: &event.OffsetData{
 					State:  state,
-					Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+					Offset: int64(ptpMetrics.Offset),
 				},
 			}:
 			default:
@@ -161,11 +161,12 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	case ts2phcProcessName:
 		// Send event for ts2phc
 		eventSource := process.ifaces.GetEventSource(process.ifaces.GetPhcID2IFace(ptpMetrics.Iface))
-		values := map[event.ValueType]interface{}{
-			event.OFFSET: int64(ptpMetrics.Offset),
+		od := &event.OffsetData{
+			State:  state,
+			Offset: int64(ptpMetrics.Offset),
 		}
 		if eventSource == event.GNSS {
-			values[event.NMEA_STATUS] = int64(1)
+			od.NMEALocked = event.Ptr(true)
 		}
 		select {
 		case process.eventCh <- event.Event{
@@ -176,10 +177,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			Time:       time.Now().UnixMilli(),
 			WriteToLog: eventSource == event.GNSS,
 			Reset:      false,
-			Data: &event.PTPData{
-				State:  state,
-				Values: values,
-			},
+			Data:       od,
 		}:
 		default:
 		}
@@ -191,9 +189,9 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			IFace:     ptpMetrics.Iface,
 			ClockType: process.clockType,
 			Time:      time.Now().UnixMilli(),
-			Data: &event.PTPData{
+			Data: &event.OffsetData{
 				State:  state,
-				Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+				Offset: int64(ptpMetrics.Offset),
 			},
 		}:
 		default:
@@ -206,9 +204,9 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			IFace:     ptpMetrics.Iface,
 			ClockType: process.clockType,
 			Time:      time.Now().UnixMilli(),
-			Data: &event.PTPData{
+			Data: &event.OffsetData{
 				State:  state,
-				Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+				Offset: int64(ptpMetrics.Offset),
 			},
 		}:
 		default:
@@ -259,7 +257,7 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 						IFace:     interfaceName,
 						ClockType: process.clockType,
 						Time:      time.Now().UnixMilli(),
-						Data:      &event.PTPData{SourceLost: true},
+						Data:      &event.OffsetData{SourceLost: true},
 					}:
 					default:
 					}

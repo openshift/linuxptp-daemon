@@ -135,8 +135,16 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 		d.AddEvent(ev)
 		d.UpdateState()
 
-		ptp, ok := ev.Data.(*event.PTPData)
-		if !ok || ptp == nil {
+		sourceLost := false
+		switch data := ev.Data.(type) {
+		case *event.OffsetData:
+			sourceLost = data.SourceLost
+		case *event.StateData:
+			sourceLost = ev.Data.(*event.StateData).SourceLost
+		case *event.DPLLData:
+			sourceLost = ev.Data.(*event.DPLLData).SourceLost
+		case *event.SyncEData:
+		default:
 			return c.currentSyncState()
 		}
 
@@ -146,8 +154,8 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 		}
 
 		prev := c.syncState
-		switch {
-		case ptp.SourceLost:
+		// TODO: Feels like we should have SourceLost Data type.
+		if sourceLost {
 			// ptp4l lost contact with its master (slave port faulty), so there
 			// is no offset to range-check. Coast in HOLDOVER until the timer
 			// expires or the source returns; if we were not LOCKED there is
@@ -156,18 +164,20 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 				c.syncState = event.PTP_HOLDOVER
 				c.armHoldoverTimer()
 			}
-		default:
-			offset, hasOffset := ptpOffset(ptp)
-			if !hasOffset {
-				return c.currentSyncState()
-			}
-			// We have offset data again, so cancel the timer to enter freerun
-			c.cancelHoldoverTimer()
-			if isOffsetInRange(offset, c.threshold.MaxOffsetThreshold, c.threshold.MinOffsetThreshold) {
-				c.syncState = event.PTP_LOCKED
-			} else {
-				c.syncState = event.PTP_FREERUN
-			}
+			c.onStateChanged(prev, ev.IFace)
+			return c.currentSyncState()
+		}
+
+		offset, hasOffset := ptpOffset(ev)
+		if !hasOffset {
+			return c.currentSyncState()
+		}
+		// We have offset data again, so cancel the timer to enter freerun
+		c.cancelHoldoverTimer()
+		if isOffsetInRange(offset, c.threshold.MaxOffsetThreshold, c.threshold.MinOffsetThreshold) {
+			c.syncState = event.PTP_LOCKED
+		} else {
+			c.syncState = event.PTP_FREERUN
 		}
 
 		c.onStateChanged(prev, ev.IFace)
@@ -295,11 +305,12 @@ func isOffsetInRange(offset, maxOffset, minOffset int64) bool {
 }
 
 // ptpOffset extracts the OFFSET value from PTP data, if present.
-func ptpOffset(ptp *event.PTPData) (int64, bool) {
-	if v, ok := ptp.Values[event.OFFSET]; ok {
-		if i, isInt := v.(int64); isInt {
-			return i, true
-		}
+func ptpOffset(ev event.Event) (int64, bool) {
+	switch data := ev.Data.(type) {
+	case *event.OffsetData:
+		return data.Offset, true
+	case *event.DPLLData:
+		return *data.Offset, true
 	}
 	return 0, false
 }

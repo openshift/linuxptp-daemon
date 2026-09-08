@@ -2,7 +2,6 @@ package event
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -144,40 +143,118 @@ func (d *GNSSData) String() string {
 	return fmt.Sprintf("%s %d %s %d %s", GPS_STATUS, d.GPSStatus, OFFSET, d.Offset, state)
 }
 
-// PTPData carries PTP synchronization status (DPLL, ts2phc, ptp4l, SyncE).
-type PTPData struct {
-	State              PTPState
-	Values             map[ValueType]interface{}
-	OutOfSpec          bool
-	SourceLost         bool
-	FrequencyTraceable bool
+// OffsetData is a ptp4l/ts2phc/phc2sys/chronyd offset sample.
+type OffsetData struct {
+	State      PTPState
+	Offset     int64
+	SourceLost bool
+	NMEALocked *bool // ts2phc GNSS only
 }
 
-func (*PTPData) eventData() {}
+func (*OffsetData) eventData() {}
 
-func (d *PTPData) String() string {
-	logData := make([]string, 0, len(d.Values))
-	for k, v := range d.Values {
-		switch val := v.(type) {
-		case int64:
-			logData = append(logData, fmt.Sprintf("%s %d", k, val))
-		case int:
-			logData = append(logData, fmt.Sprintf("%s %d", k, val))
-		case float64:
-			logData = append(logData, fmt.Sprintf("%s %f", k, val))
-		case string:
-			logData = append(logData, fmt.Sprintf("%s %s", k, val))
-		case byte:
-			logData = append(logData, fmt.Sprintf("%s %#x", k, val))
-		default:
-			continue
-		}
+func (d *OffsetData) String() string {
+	parts := make([]string, 0, 3)
+	if d.NMEALocked != nil {
+		parts = append(parts, fmt.Sprintf("%s %t", NMEA_STATUS, *d.NMEALocked))
 	}
-	sort.Strings(logData)
+	parts = append(parts, fmt.Sprintf("%s %d", OFFSET, d.Offset), string(d.State))
+	return strings.Join(parts, " ")
+}
+
+// DPLLData is a DPLL status sample. Offset/PhaseStatus/FrequencyStatus are nil when FlagNo* is set.
+type DPLLData struct {
+	State                    PTPState
+	OutOfSpec                bool
+	SourceLost               bool
+	FrequencyTraceable       bool
+	LeadingSource            bool
+	Offset                   *int64
+	PhaseStatus              *int64
+	FrequencyStatus          *int64
+	PPSStatus                int
+	InSyncConditionThreshold uint64
+	InSyncConditionTimes     uint64
+	ToFreeRunThreshold       uint64
+	MaxInSpecOffset          uint64
+}
+
+func (*DPLLData) eventData() {}
+
+func (d *DPLLData) String() string {
+	parts := make([]string, 0, 5)
+	if d.FrequencyStatus != nil {
+		parts = append(parts, fmt.Sprintf("%s %d", FREQUENCY_STATUS, *d.FrequencyStatus))
+	}
+	if d.Offset != nil {
+		parts = append(parts, fmt.Sprintf("%s %d", OFFSET, *d.Offset))
+	}
+	if d.PhaseStatus != nil {
+		parts = append(parts, fmt.Sprintf("%s %d", PHASE_STATUS, *d.PhaseStatus))
+	}
+	parts = append(parts, fmt.Sprintf("%s %d", PPS_STATUS, d.PPSStatus), string(d.State))
+	return strings.Join(parts, " ")
+}
+
+// SyncEData is a synce4l quality or EEC state sample. QL/ExtQL are nil when that TLV is absent.
+type SyncEData struct {
+	State         PTPState
+	Device        string
+	QL            *byte
+	ExtQL         *byte
+	ClockQuality  string
+	EECState      string
+	NetworkOption int
+}
+
+func (*SyncEData) eventData() {}
+
+func (d *SyncEData) String() string {
+	parts := make([]string, 0, 7)
+	if d.ClockQuality != "" {
+		parts = append(parts, fmt.Sprintf("%s %s", CLOCK_QUALITY, d.ClockQuality))
+	}
+	if d.Device != "" {
+		parts = append(parts, fmt.Sprintf("%s %s", DEVICE, d.Device))
+	}
+	if d.EECState != "" {
+		parts = append(parts, fmt.Sprintf("%s %s", EEC_STATE, d.EECState))
+	}
+	if d.ExtQL != nil {
+		parts = append(parts, fmt.Sprintf("%s %#x", EXT_QL, *d.ExtQL))
+	}
+	if d.NetworkOption != 0 {
+		parts = append(parts, fmt.Sprintf("%s %d", NETWORK_OPTION, d.NetworkOption))
+	}
+	if d.QL != nil {
+		parts = append(parts, fmt.Sprintf("%s %#x", QL, *d.QL))
+	}
 	if d.State != "" && d.State != PTP_UNKNOWN {
-		logData = append(logData, string(d.State))
+		parts = append(parts, string(d.State))
 	}
-	return strings.Join(logData, " ")
+	return strings.Join(parts, " ")
+}
+
+// StateData is a lock/holdover transition. ClockID and ControlledPortsConfig are set on T-BC transitions.
+type StateData struct {
+	State                 PTPState
+	SourceLost            bool
+	ControlledPortsConfig string
+	ClockID               string
+}
+
+func (*StateData) eventData() {}
+
+func (d *StateData) String() string {
+	parts := make([]string, 0, 3)
+	if d.ClockID != "" {
+		parts = append(parts, fmt.Sprintf("%s %s", ClockIDKey, d.ClockID))
+	}
+	if d.ControlledPortsConfig != "" {
+		parts = append(parts, fmt.Sprintf("%s %s", ControlledPortsConfig, d.ControlledPortsConfig))
+	}
+	parts = append(parts, string(d.State))
+	return strings.Join(parts, " ")
 }
 
 // PtpClockThreshold carries the resolved clock thresholds used by BC/OC state
@@ -253,6 +330,10 @@ func (d *PluginData) String() string { return d.EventName }
 
 // Int64Ptr returns a pointer to v. Used by DPLL/offset senders for optional fields.
 func Int64Ptr(v int64) *int64 { return &v }
+
+// Ptr returns a pointer to the type you pass in it the type is ambiguious
+// e.g. Ptr(15) you have coherse the type by using Ptr[int64](15)
+func Ptr[T any](v T) *T { return &v }
 
 // BytePtr returns a pointer to v. Used by SyncE senders for optional QL fields.
 func BytePtr(v byte) *byte { return &v }

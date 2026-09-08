@@ -838,22 +838,26 @@ func (d *DpllConfig) sendDpllEvent() {
 	if d.sourceLost {
 		ppsStatus = 0
 	}
-	vals := map[event.ValueType]interface{}{
-		event.PPS_STATUS:               int64(ppsStatus),
-		event.InSyncConditionThreshold: d.inSyncConditionThreshold,
-		event.InSyncConditionTimes:     d.inSyncConditionTimes,
-		event.ToFreeRunThreshold:       d.LocalMaxHoldoverOffSet,
-		event.MaxInSpecOffset:          d.MaxInSpecOffset,
-		event.LeadingSource:            d.hasLeadingSource(),
+	dpllData := &event.DPLLData{
+		State:                    d.state,
+		OutOfSpec:                !d.inSpec,
+		SourceLost:               d.sourceLost, // Here source lost is either GNSS or PPS , nmea string lost is captured by ts2phc
+		FrequencyTraceable:       d.frequencyTraceable,
+		LeadingSource:            d.hasLeadingSource(),
+		PPSStatus:                ppsStatus,
+		InSyncConditionThreshold: d.inSyncConditionThreshold,
+		InSyncConditionTimes:     d.inSyncConditionTimes,
+		ToFreeRunThreshold:       d.LocalMaxHoldoverOffSet,
+		MaxInSpecOffset:          d.MaxInSpecOffset,
 	}
 	if !d.hasFlag(FlagNoFreqencyStatus) {
-		vals[event.FREQUENCY_STATUS] = d.frequencyStatus
+		dpllData.FrequencyStatus = event.Int64Ptr(d.frequencyStatus)
 	}
 	if !d.hasFlag(FlagNoPhaseStatus) {
-		vals[event.PHASE_STATUS] = d.phaseStatus
+		dpllData.PhaseStatus = event.Int64Ptr(d.phaseStatus)
 	}
 	if !d.hasFlag(FlagNoPhaseOffset) {
-		vals[event.OFFSET] = d.phaseOffset
+		dpllData.Offset = event.Int64Ptr(d.phaseOffset)
 	}
 	eventData := event.Event{
 		Source:     event.DPLL,
@@ -863,13 +867,7 @@ func (d *DpllConfig) sendDpllEvent() {
 		Time:       time.Now().UnixMilli(),
 		WriteToLog: true,
 		Reset:      false,
-		Data: &event.PTPData{
-			State:              d.state,
-			OutOfSpec:          !d.inSpec,
-			SourceLost:         d.sourceLost,
-			FrequencyTraceable: d.frequencyTraceable,
-			Values:             vals,
-		},
+		Data:       dpllData,
 	}
 	select {
 	case d.processConfig.EventChannel <- eventData:

@@ -446,7 +446,14 @@ func (c OnProcessDown) GetWindowRequests() []WindowRequest {
 }
 
 func eventPTPState(data event.EventData) (event.PTPState, bool) {
-	if d, ok := data.(*event.PTPData); ok {
+	switch d := data.(type) {
+	case *event.OffsetData:
+		return d.State, true
+	case *event.DPLLData:
+		return d.State, true
+	case *event.StateData:
+		return d.State, true
+	case *event.SyncEData:
 		return d.State, true
 	}
 	return "", false

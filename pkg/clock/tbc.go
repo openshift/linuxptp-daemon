@@ -70,16 +70,19 @@ func nextAnnounceToken() uint64 { return announceSeq.Add(1) }
 
 // TBC is a Telecom Boundary Clock instance
 type TBC struct {
-	cfgName                    string
-	sendIPC                    func(ipc.Message)
-	sendEvent                  func(event.Event)
-	getUtcOffset               func() int
-	pmcClient                  pmc.Client
-	syncState                  SyncState
-	overallSyncState           event.PTPState
-	osClockState               event.PTPState
-	data                       []*event.Data
-	leadingClockData           *LeadingClockParams
+	cfgName          string
+	sendIPC          func(ipc.Message)
+	sendEvent        func(event.Event)
+	getUtcOffset     func() int
+	pmcClient        pmc.Client
+	syncState        SyncState
+	overallSyncState event.PTPState
+	osClockState     event.PTPState
+	data             []*event.Data
+	leadingClockData *LeadingClockParams
+	// configuredLeadingInterface is the profile leadingInterface. It survives
+	// Reset so T-BC clock-state reporting is not blocked waiting for a DPLL
+	// LeadingSource event that may have been skipped during profile apply.
 	configuredLeadingInterface string
 	// announceToken is a process-unique token identifying the current downstream
 	// request. It advances at construction, on Reset, and on every downstream
@@ -147,11 +150,6 @@ func (c *TBC) GetData(processName event.EventSource) *event.Data {
 // ProcessData returns all clock data accumulated from processed events.
 func (c *TBC) ProcessData() []*event.Data {
 	return c.data
-}
-
-// SetConfiguredLeadingInterface records the profile leadingInterface.
-func (c *TBC) SetConfiguredLeadingInterface(iface string) {
-	c.configuredLeadingInterface = iface
 }
 
 // AddEvent processes an event and updates clock state.
@@ -733,6 +731,11 @@ func (c *TBC) getLeadingInterfaceBC() string {
 	return event.LEADING_INTERFACE_UNKNOWN
 }
 
+// SetConfiguredLeadingInterface records the profile leadingInterface.
+func (c *TBC) SetConfiguredLeadingInterface(iface string) {
+	c.configuredLeadingInterface = iface
+}
+
 // SystemClockUpdate updates the OS clock state.
 func (c *TBC) SystemClockUpdate(osClockState event.PTPState) {
 	c.osClockState = osClockState
@@ -741,69 +744,68 @@ func (c *TBC) SystemClockUpdate(osClockState event.PTPState) {
 }
 
 func (c *TBC) processSyncE(ev event.Event) {
-	ptp, ok := ev.Data.(*event.PTPData)
-	if !ok || ptp == nil {
+	data, ok := ev.Data.(*event.SyncEData)
+	if !ok || data == nil {
 		return
 	}
 	profile := strings.Replace(c.cfgName, "ts2phc", "ptp4l", 1)
 
-	eecState, hasEEC := ptp.Values[event.EEC_STATE].(string)
-	if hasEEC {
+	if data.EECState != "" {
 		c.sendIPC(ipc.Message{
 			Type:    ipc.TypeSyncEState,
 			Profile: profile,
 			IFace:   ev.IFace,
-			Values:  ipc.SyncEStateValue{State: eecState},
+			Values:  ipc.SyncEStateValue{State: data.EECState},
 		})
 	}
 
-	ql, hasQL := ptp.Values[event.QL].(byte)
-	extQL, hasExtQL := ptp.Values[event.EXT_QL].(byte)
-	if hasQL || hasExtQL {
+	if data.QL != nil || data.ExtQL != nil {
+		ql, extQL := 0, 0
+		if data.QL != nil {
+			ql = int(*data.QL)
+		}
+		if data.ExtQL != nil {
+			extQL = int(*data.ExtQL)
+		}
 		c.sendIPC(ipc.Message{
 			Type:    ipc.TypeSyncEClockQuality,
 			Profile: profile,
 			IFace:   ev.IFace,
-			Values:  ipc.SyncEClockQualityValue{QL: int(ql), ExtendedQL: int(extQL)},
+			Values:  ipc.SyncEClockQualityValue{QL: ql, ExtendedQL: extQL},
 		})
 	}
 }
 
 func (c *TBC) updateLeadingClockData(ev event.Event) {
-	ptp, ok := ev.Data.(*event.PTPData)
-	if !ok {
-		return
-	}
-	switch ev.Source {
-	case event.PTP4lProcessName:
-		cpc, found := ptp.Values[event.ControlledPortsConfig].(string)
-		if found {
-			c.leadingClockData.controlledPortsConfig = cpc
+	switch data := ev.Data.(type) {
+	case *event.StateData:
+		if ev.Source != event.PTP4lProcessName {
+			return
 		}
-		id, found := ptp.Values[event.ClockIDKey].(string)
-		if found {
-			c.leadingClockData.clockID = id
+		if data.ControlledPortsConfig != "" {
+			c.leadingClockData.controlledPortsConfig = data.ControlledPortsConfig
 		}
-	case event.DPLL:
-		ls, found := ptp.Values[event.LeadingSource].(bool)
-		if found && ls {
+		if data.ClockID != "" {
+			c.leadingClockData.clockID = data.ClockID
+		}
+	case *event.DPLLData:
+		if ev.Source != event.DPLL {
+			return
+		}
+		if data.LeadingSource {
 			c.leadingClockData.leadingInterface = ev.IFace
 		}
-		inSyncTh, found := ptp.Values[event.InSyncConditionThreshold].(uint64)
-		if found {
-			c.leadingClockData.inSyncConditionThreshold = int(inSyncTh)
+		if data.InSyncConditionThreshold != 0 {
+			c.leadingClockData.inSyncConditionThreshold = int(data.InSyncConditionThreshold)
 		}
-		inSyncTimes, found := ptp.Values[event.InSyncConditionTimes].(uint64)
-		if found {
-			c.leadingClockData.inSyncConditionTimes = int(inSyncTimes)
+		if data.InSyncConditionTimes != 0 {
+			c.leadingClockData.inSyncConditionTimes = int(data.InSyncConditionTimes)
 		}
-		toFreeRunTh, found := ptp.Values[event.ToFreeRunThreshold].(uint64)
-		if found {
-			c.leadingClockData.toFreeRunThreshold = int(toFreeRunTh)
+		if data.ToFreeRunThreshold != 0 {
+			c.leadingClockData.toFreeRunThreshold = int(data.ToFreeRunThreshold)
 		}
-		maxInSpec, found := ptp.Values[event.MaxInSpecOffset].(uint64)
-		if found {
-			c.leadingClockData.MaxInSpecOffset = maxInSpec
+		if data.MaxInSpecOffset != 0 {
+			c.leadingClockData.MaxInSpecOffset = data.MaxInSpecOffset
 		}
 	}
 }

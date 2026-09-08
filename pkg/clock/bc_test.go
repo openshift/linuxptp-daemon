@@ -36,7 +36,7 @@ func newTestBCClock() (*BCClock, *ipcRecorder) {
 func offsetEvent(iface string, offset int64) event.Event { //nolint:unparam // iface kept for readability at call sites
 	return event.Event{
 		IFace: iface,
-		Data:  &event.PTPData{Values: map[event.ValueType]interface{}{event.OFFSET: offset}},
+		Data:  &event.OffsetData{Offset: offset},
 	}
 }
 
@@ -66,9 +66,9 @@ func TestBCClock_AddEvent_StateTransitions(t *testing.T) {
 		// State says LOCKED but the offset is out of range: FREERUN wins.
 		cs := bc.AddEvent(event.Event{
 			IFace: testEns7f0,
-			Data: &event.PTPData{
+			Data: &event.OffsetData{
 				State:  event.PTP_LOCKED,
-				Values: map[event.ValueType]interface{}{event.OFFSET: int64(9999)},
+				Offset: 9999,
 			},
 		})
 		assert.Equal(t, event.PTP_FREERUN, cs.State)
@@ -82,19 +82,11 @@ func TestBCClock_AddEvent_StateTransitions(t *testing.T) {
 		assert.Empty(t, rio.messages)
 	})
 
-	t.Run("nil PTPData returns current state unchanged", func(t *testing.T) {
+	t.Run("nil Data returns current state unchanged", func(t *testing.T) {
 		bc, rio := newTestBCClock()
 		bc.syncState = event.PTP_FREERUN
 		cs := bc.AddEvent(event.Event{Data: nil})
 		assert.Equal(t, event.PTP_FREERUN, cs.State)
-		assert.Empty(t, rio.messages)
-	})
-
-	t.Run("PTPData without an offset value is a no-op", func(t *testing.T) {
-		bc, rio := newTestBCClock()
-		bc.syncState = event.PTP_LOCKED
-		cs := bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.PTPData{}})
-		assert.Equal(t, event.PTP_LOCKED, cs.State)
 		assert.Empty(t, rio.messages)
 	})
 }
@@ -104,7 +96,7 @@ func TestBCClock_Holdover(t *testing.T) {
 		bc, rio := newTestBCClock()
 		bc.iface = testEns7f0
 		bc.syncState = event.PTP_LOCKED
-		cs := bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.PTPData{SourceLost: true}})
+		cs := bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.OffsetData{SourceLost: true}})
 		assert.Equal(t, event.PTP_HOLDOVER, cs.State)
 		assert.NotNil(t, bc.holdoverCancel, "timer should be armed")
 		require.Len(t, rio.messages, 1)
@@ -115,7 +107,7 @@ func TestBCClock_Holdover(t *testing.T) {
 	t.Run("source lost while not LOCKED drops to FREERUN without arming timer", func(t *testing.T) {
 		bc, _ := newTestBCClock()
 		bc.syncState = event.PTP_FREERUN
-		cs := bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.PTPData{SourceLost: true}})
+		cs := bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.OffsetData{SourceLost: true}})
 		assert.Equal(t, event.PTP_FREERUN, cs.State)
 		assert.Nil(t, bc.holdoverCancel)
 	})
@@ -124,7 +116,7 @@ func TestBCClock_Holdover(t *testing.T) {
 		bc, _ := newTestBCClock()
 		bc.iface = testEns7f0
 		bc.syncState = event.PTP_LOCKED
-		bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.PTPData{SourceLost: true}})
+		bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.OffsetData{SourceLost: true}})
 		require.NotNil(t, bc.holdoverCancel)
 
 		cs := bc.AddEvent(offsetEvent(testEns7f0, 10))
@@ -157,7 +149,7 @@ func TestBCClock_Holdover(t *testing.T) {
 
 		// Enter holdover: arms timer T1 (generation captured as staleGen).
 		bc.syncState = event.PTP_LOCKED
-		bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.PTPData{SourceLost: true}})
+		bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.OffsetData{SourceLost: true}})
 		require.Equal(t, event.PTP_HOLDOVER, bc.syncState)
 		staleGen := bc.holdoverGen
 
@@ -165,7 +157,7 @@ func TestBCClock_Holdover(t *testing.T) {
 		// generation) — this is the flap that supersedes T1.
 		bc.AddEvent(offsetEvent(testEns7f0, 10))
 		require.Equal(t, event.PTP_LOCKED, bc.syncState)
-		bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.PTPData{SourceLost: true}})
+		bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.OffsetData{SourceLost: true}})
 		require.Equal(t, event.PTP_HOLDOVER, bc.syncState)
 		require.NotEqual(t, staleGen, bc.holdoverGen, "re-arm must use a new generation")
 
@@ -189,7 +181,7 @@ func TestBCClock_Holdover(t *testing.T) {
 		got := make(chan event.Event, 1)
 		bc.sendEvent = func(ev event.Event) { got <- ev }
 		bc.syncState = event.PTP_LOCKED
-		bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.PTPData{SourceLost: true}})
+		bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.OffsetData{SourceLost: true}})
 
 		select {
 		case ev := <-got:

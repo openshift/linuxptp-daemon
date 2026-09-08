@@ -265,7 +265,7 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 	t.Run("skips when clockClass is uninitialized", func(t *testing.T) {
 		gm, _, pmcMock := newTestGMClock()
 		gm.announceClockClassIfChanged(
-			event.Event{Source: event.DPLL, Data: &event.PTPData{Values: map[event.ValueType]interface{}{event.OFFSET: int64(50)}}},
+			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: event.Int64Ptr(50)}},
 			SyncState{State: event.PTP_LOCKED, ClockClass: protocol.ClockClassUninitialized},
 		)
 		assert.Empty(t, pmcMock.SnapshotSetCalls())
@@ -304,7 +304,7 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 		gm.announcedClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
 		gm.syncState.ClockClass = fbprotocol.ClockClass7
 		gm.announceClockClassIfChanged(
-			event.Event{Source: event.DPLL, Data: &event.PTPData{Values: map[event.ValueType]interface{}{event.OFFSET: int64(500)}}},
+			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: event.Int64Ptr(500)}},
 			SyncState{State: event.PTP_HOLDOVER, ClockClass: fbprotocol.ClockClass7},
 		)
 		setCalls := pmcMock.SnapshotSetCalls()
@@ -374,9 +374,9 @@ func TestUpdateGMState(t *testing.T) {
 			}
 			e.Data = &event.GNSSData{GPSStatus: gpsStatus, Offset: 0, SourceLost: sourceLost}
 		} else {
-			e.Data = &event.PTPData{
+			e.Data = &event.OffsetData{
 				State:      state,
-				Values:     map[event.ValueType]interface{}{event.OFFSET: int64(0)},
+				Offset:     0,
 				SourceLost: sourceLost,
 			}
 		}
