@@ -11,6 +11,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
 	ptpscheme "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned/scheme"
@@ -38,7 +39,7 @@ func Test_reportedClockType(t *testing.T) {
 			name: "ptpSettings clockType T-GM",
 			proc: &ptpProcess{
 				clockType: event.GM,
-				nodeProfile: ptpv1.PtpProfile{
+				nodeProfile: &ptpv1.PtpProfile{
 					PtpSettings: map[string]string{"clockType": TGM},
 				},
 			},
@@ -48,7 +49,7 @@ func Test_reportedClockType(t *testing.T) {
 			name: "ptpSettings clockType T-BC",
 			proc: &ptpProcess{
 				clockType: event.BC,
-				nodeProfile: ptpv1.PtpProfile{
+				nodeProfile: &ptpv1.PtpProfile{
 					PtpSettings: map[string]string{"clockType": TBC},
 				},
 			},
@@ -58,7 +59,7 @@ func Test_reportedClockType(t *testing.T) {
 			name: "inferred GM is reported as T-GM",
 			proc: &ptpProcess{
 				clockType:   event.GM,
-				nodeProfile: ptpv1.PtpProfile{},
+				nodeProfile: &ptpv1.PtpProfile{},
 			},
 			want: TGM,
 		},
@@ -66,7 +67,7 @@ func Test_reportedClockType(t *testing.T) {
 			name: "inferred BC",
 			proc: &ptpProcess{
 				clockType:   event.BC,
-				nodeProfile: ptpv1.PtpProfile{},
+				nodeProfile: &ptpv1.PtpProfile{},
 			},
 			want: string(event.BC),
 		},
@@ -74,7 +75,7 @@ func Test_reportedClockType(t *testing.T) {
 			name: "inferred OC",
 			proc: &ptpProcess{
 				clockType:   event.OC,
-				nodeProfile: ptpv1.PtpProfile{},
+				nodeProfile: &ptpv1.PtpProfile{},
 			},
 			want: string(event.OC),
 		},
@@ -191,9 +192,9 @@ func Test_runSyncStatusUpdate_skipsWhileApplying(t *testing.T) {
 		ptpClient: newTestPTPClient(t, fake),
 		processManager: &ProcessManager{
 			clockMgr: mgr,
-			process: []*ptpProcess{{
+			process: []process.Process{&ptpProcess{
 				clockType:   event.GM,
-				nodeProfile: ptpv1.PtpProfile{Name: &profile},
+				nodeProfile: &ptpv1.PtpProfile{Name: &profile},
 			}},
 		},
 	}
@@ -216,11 +217,16 @@ func Test_runSyncStatusUpdate(t *testing.T) {
 		for _, iface := range ifaces {
 			faces = append(faces, config.Iface{Name: iface})
 		}
+
+		state := process.Running
+		if stopped {
+			state = process.Stopped
+		}
 		return &ptpProcess{
+			ExecProcess: ExecProcess{state: state},
 			clockType:   clockType,
-			stopped:     stopped,
 			ifaces:      faces,
-			nodeProfile: ptpv1.PtpProfile{Name: name},
+			nodeProfile: &ptpv1.PtpProfile{Name: name},
 		}
 	}
 
@@ -237,7 +243,7 @@ func Test_runSyncStatusUpdate(t *testing.T) {
 			nodeName:  testNodeName,
 			ptpClient: newTestPTPClient(t, fake),
 			processManager: &ProcessManager{
-				process: []*ptpProcess{
+				process: []process.Process{
 					nil,
 					newProc(&profileA, event.GM, false, "ens1f0", ""),
 					newProc(&profileA, event.GM, false, "ens1f1"),
@@ -272,7 +278,7 @@ func Test_runSyncStatusUpdate(t *testing.T) {
 			nodeName:  testNodeName,
 			ptpClient: newTestPTPClient(t, fake),
 			processManager: &ProcessManager{
-				process: []*ptpProcess{newProc(nil, event.OC, false)},
+				process: []process.Process{newProc(nil, event.OC, false)},
 			},
 		}
 
@@ -295,7 +301,7 @@ func Test_runSyncStatusUpdate(t *testing.T) {
 			nodeName:  testNodeName,
 			ptpClient: newTestPTPClient(t, fake),
 			processManager: &ProcessManager{
-				process: []*ptpProcess{newProc(&profileB, event.BC, true, "ens2f0")},
+				process: []process.Process{newProc(&profileB, event.BC, true, "ens2f0")},
 			},
 		}
 
@@ -335,7 +341,7 @@ func Test_runSyncStatusUpdate(t *testing.T) {
 			nodeName:  testNodeName,
 			ptpClient: newTestPTPClient(t, fake),
 			processManager: &ProcessManager{
-				process: []*ptpProcess{newProc(&profileA, event.GM, false, "ens1f0")},
+				process: []process.Process{newProc(&profileA, event.GM, false, "ens1f0")},
 			},
 		}
 

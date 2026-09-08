@@ -8,15 +8,14 @@ import (
 
 	"github.com/golang/glog"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
 type ntpFailoverPluginData struct {
 	gnssFailover    bool
-	cmdSetEnabled   map[string]func(bool)
-	enableQueues    map[string]chan bool
-	enableQueueMu   sync.Mutex
+	eventChannel    chan<- event.Event
 	pcfsmState      int
 	pcfsmMutex      sync.Mutex
 	ts2phcTolerance time.Duration
@@ -31,60 +30,19 @@ type ntpFailoverOpts struct {
 }
 
 const ( // phc2sys/chronyd Finite State Machine States
-	pcsmsStartupDefault int = iota // Just started, both are unknown
-	pcsmsStartupPhc2sys            // phc2sys setting time
-	pcsmsStartupChronyd            // phc2sys setting time
-	pcsmsStartupBoth               // phc2sys setting time
-	pcsmsActive                    // phc2sys setting time
-	pcsmsOutOfSpec                 // switch to chronyd setting time
+	pcsmsStartupDefault int = iota // Just started, waiting for first log line
+	pcsmsActive                    // phc2sys setting time, ts2phc healthy
+	pcsmsOutOfSpec                 // ts2phc stale, waiting for confirmation
 	pcsmsFailover                  // chronyd setting time
 )
 
 const (
-	ts2phcPname  = "ts2phc"
-	chronydPname = "chronyd"
-	phc2sysPname = "phc2sys"
+	ts2phcPname = "ts2phc"
 )
 
 var (
-	ts2phcOffsetRegex  = regexp.MustCompile("offset .*s3 freq")
-	chronydOnlineRegex = regexp.MustCompile("chronyd .* starting")
+	ts2phcOffsetRegex = regexp.MustCompile("offset .*s3 freq")
 )
-
-// invokeSetEnabled queues enable/disable on a persistent per-process worker so
-// requests stay ordered and off the ProcessLog/scanner goroutine.
-func invokeSetEnabled(pluginData *ntpFailoverPluginData, pname string, enabled bool) {
-	if pluginData == nil {
-		return
-	}
-	if pluginData.cmdSetEnabled[pname] == nil {
-		return
-	}
-	pluginData.queueFor(pname) <- enabled
-}
-
-func (d *ntpFailoverPluginData) queueFor(pname string) chan bool {
-	d.enableQueueMu.Lock()
-	defer d.enableQueueMu.Unlock()
-	if d.enableQueues == nil {
-		d.enableQueues = make(map[string]chan bool)
-	}
-	ch, ok := d.enableQueues[pname]
-	if ok {
-		return ch
-	}
-	ch = make(chan bool, 16)
-	d.enableQueues[pname] = ch
-	go func() {
-		for enabled := range ch {
-			fn := d.cmdSetEnabled[pname]
-			if fn != nil {
-				fn(enabled)
-			}
-		}
-	}()
-	return ch
-}
 
 func onPTPConfigChangeNtpFailover(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	var _ntpFailoverOpts ntpFailoverOpts
@@ -95,9 +53,6 @@ func onPTPConfigChangeNtpFailover(data *interface{}, nodeProfile *ptpv1.PtpProfi
 	if data != nil {
 		_data := *data
 		var pluginData = _data.(*ntpFailoverPluginData)
-		if pluginData.cmdSetEnabled == nil {
-			pluginData.cmdSetEnabled = make(map[string]func(bool))
-		}
 		for name, opts := range (*nodeProfile).Plugins {
 			if name == "ntpfailover" {
 				optsByteArray, _ := json.Marshal(opts)
@@ -126,17 +81,9 @@ func onPTPConfigChangeNtpFailover(data *interface{}, nodeProfile *ptpv1.PtpProfi
 	return nil
 }
 
-func registerProcessNtpFailover(data *interface{}, pname string, cmdSetEnabled func(bool)) {
-	if data != nil {
-		_data := *data
-
-		var pluginData = _data.(*ntpFailoverPluginData)
-		if pluginData.gnssFailover {
-			if pluginData.cmdSetEnabled == nil {
-				pluginData.cmdSetEnabled = make(map[string]func(bool))
-			}
-			pluginData.cmdSetEnabled[pname] = cmdSetEnabled
-		}
+func (pd *ntpFailoverPluginData) emitEvent(eventName string) {
+	if pd.eventChannel != nil {
+		pd.eventChannel <- event.PluginEvent("ntpfailover", eventName)
 	}
 }
 
@@ -162,34 +109,6 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 			for {
 				switch pluginData.pcfsmState {
 				case pcsmsStartupDefault:
-					_, foundChronyd := pluginData.cmdSetEnabled[chronydPname]
-					_, foundPhc2Sys := pluginData.cmdSetEnabled[phc2sysPname]
-					if foundChronyd && foundPhc2Sys {
-						pluginData.pcfsmState = pcsmsStartupBoth
-					} else if foundChronyd {
-						pluginData.pcfsmState = pcsmsStartupChronyd
-					} else if foundPhc2Sys {
-						pluginData.pcfsmState = pcsmsStartupPhc2sys
-					} else {
-						break done
-					}
-				case pcsmsStartupPhc2sys:
-					_, foundChronyd := pluginData.cmdSetEnabled[chronydPname]
-					if foundChronyd {
-						pluginData.pcfsmState = pcsmsStartupBoth
-					} else {
-						break done
-					}
-				case pcsmsStartupChronyd:
-					_, foundPhc2Sys := pluginData.cmdSetEnabled[phc2sysPname]
-					if foundPhc2Sys {
-						pluginData.pcfsmState = pcsmsStartupBoth
-					} else {
-						break done
-					}
-				case pcsmsStartupBoth:
-					invokeSetEnabled(pluginData, chronydPname, false)
-					invokeSetEnabled(pluginData, phc2sysPname, true)
 					pluginData.pcfsmState = pcsmsActive
 					continue
 				case pcsmsActive:
@@ -199,16 +118,13 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 							continue
 						}
 					}
-					if pname == chronydPname && chronydOnlineRegex.MatchString(log) {
-						invokeSetEnabled(pluginData, chronydPname, false)
-					}
 					break done
 				case pcsmsOutOfSpec:
 					if pname == ts2phcPname {
 						if currentTime.After(pluginData.expiryTime) {
 							pluginData.pcfsmState = pcsmsFailover
-							invokeSetEnabled(pluginData, chronydPname, true)
-							invokeSetEnabled(pluginData, phc2sysPname, false)
+							glog.Infof("ntpfailover: GNSS failover triggered")
+							pluginData.emitEvent("gnss_failover")
 							continue
 						}
 					}
@@ -217,6 +133,8 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 					if pname == ts2phcPname {
 						if currentTime.Before(pluginData.expiryTime) {
 							pluginData.pcfsmState = pcsmsStartupDefault
+							glog.Infof("ntpfailover: GNSS recovered")
+							pluginData.emitEvent("gnss_recovered")
 							continue
 						}
 					}
@@ -229,6 +147,14 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 	return ret
 }
 
+func setEventChannelNtpFailover(data *interface{}, ch chan<- event.Event) {
+	if data != nil {
+		_data := *data
+		var pluginData = _data.(*ntpFailoverPluginData)
+		pluginData.eventChannel = ch
+	}
+}
+
 // NtpFailover initializes NtpFailover plugin
 func NtpFailover(name string) (*plugin.Plugin, *interface{}) {
 	if name != "ntpfailover" {
@@ -237,15 +163,12 @@ func NtpFailover(name string) (*plugin.Plugin, *interface{}) {
 	}
 	glog.Infof("registering ntpfailover plugin")
 	_plugin := plugin.Plugin{Name: "ntpfailover",
-		OnPTPConfigChange:      onPTPConfigChangeNtpFailover,
-		RegisterEnableCallback: registerProcessNtpFailover,
-		ProcessLog:             processLogNtpFailover,
+		OnPTPConfigChange: onPTPConfigChangeNtpFailover,
+		SetEventChannel:   setEventChannelNtpFailover,
+		ProcessLog:        processLogNtpFailover,
 	}
 	pluginData := ntpFailoverPluginData{pcfsmState: pcsmsStartupDefault,
-		pcfsmMutex:    sync.Mutex{},
-		cmdSetEnabled: make(map[string]func(bool)),
-		enableQueues:  make(map[string]chan bool),
-	}
+		pcfsmMutex: sync.Mutex{}}
 	var iface interface{} = &pluginData
 	return &_plugin, &iface
 }

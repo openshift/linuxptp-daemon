@@ -24,7 +24,7 @@ type ProcessManager struct {
 	waitingProcess []process.Process
 	eventsIn       chan event.Event
 	eventsOut      chan event.Event
-	forwardOnce    sync.Once
+	processOnce    sync.Once
 	clockMgr       *clockmgr.ClockManager
 	daemon         *Daemon
 }
@@ -46,7 +46,7 @@ func startProcessWithRetry(ctx context.Context, p process.Process, timeout time.
 	for retryCount := 0; ; retryCount++ {
 		select {
 		case <-ctx.Done():
-			glog.Infof("exiting start for %s in profile %s, context cancelled", p.Name(), profileName(p))
+			glog.Infof("exiting start for %s in profile %s, context cancelled", p.Name(), getProfileName(p.Profile()))
 			return nil
 		case <-timeoutCh:
 			return fmt.Errorf("failed to start %s after %d attempts: %s", p.Name(), retryCount, lastErr)
@@ -55,22 +55,12 @@ func startProcessWithRetry(ctx context.Context, p process.Process, timeout time.
 			if err != nil {
 				lastErr = err
 				glog.Errorf("failed to start process %s: %s, retrying...", p.Name(), err)
+				time.Sleep(500 * time.Millisecond)
 				continue
 			}
 			return nil
 		}
 	}
-}
-
-func profileName(p process.Process) string {
-	if p == nil {
-		return ""
-	}
-	prof := p.Profile()
-	if prof == nil || prof.Name == nil {
-		return ""
-	}
-	return *prof.Name
 }
 
 func (pm *ProcessManager) forEachProcess(fn func(process.Process)) {
@@ -82,7 +72,7 @@ func (pm *ProcessManager) forEachProcess(fn func(process.Process)) {
 	}
 }
 
-func (pm *ProcessManager) startOne(ctx context.Context, p process.Process) {
+func (pm *ProcessManager) startProcess(ctx context.Context, p process.Process) {
 	if err := startProcessWithRetry(ctx, p, processStartTimeout); err != nil {
 		glog.Errorf("Failed to start process: %s", err)
 		return
@@ -91,11 +81,8 @@ func (pm *ProcessManager) startOne(ctx context.Context, p process.Process) {
 		if profile := p.Profile(); profile != nil {
 			pm.daemon.pluginManager.AfterRunPTPCommand(profile, p.Name())
 		}
-		// ts2phc start is now driven by conditions, not by explicit event emission
 	}
-	if syncer, ok := p.(initialStateSyncer); ok {
-		syncer.SyncInitialState()
-	}
+	p.SyncInitialState()
 }
 
 // StartProcesses initiates the event forwarding and starts processes with Immediate conditions.
@@ -108,19 +95,19 @@ func (pm *ProcessManager) StartProcesses(ctx context.Context) {
 		}
 		cond := process.GetCondition(p, process.ActionStart, immediate)
 		if _, imm := cond.(process.Immediate); imm {
-			pm.startOne(ctx, p)
+			pm.startProcess(ctx, p)
 			return
 		}
 		glog.Infof("ProcessManager: waiting to start %s until %s", p.Name(), cond)
 	})
 	pm.waitingProcess = pm.getWaitingProcesses()
 
-	pm.forwardOnce.Do(func() {
-		go pm.forwardEvents(ctx)
+	pm.processOnce.Do(func() {
+		go pm.processEvents(ctx)
 	})
 }
 
-func (pm *ProcessManager) forwardEvents(ctx context.Context) {
+func (pm *ProcessManager) processEvents(ctx context.Context) {
 	if pm.waitingProcess == nil {
 		pm.waitingProcess = pm.getWaitingProcesses()
 	}
@@ -138,10 +125,10 @@ func (pm *ProcessManager) forwardEvents(ctx context.Context) {
 			if isPS && ps.Status == PtpProcessDown {
 				pm.handleProcessDown(ctx, ev)
 			}
-			pm.evalActions(ctx, ev)
 			if !isPS {
 				pm.eventsOut <- ev
 			}
+			pm.evalActions(ctx, ev)
 		}
 	}
 }
@@ -153,16 +140,7 @@ func waitingOnCondition(p process.Process) bool {
 	case process.Stopping, process.Stopped, process.Dead:
 		return nil != process.GetCondition(p, process.ActionRestart, nil)
 	case process.Starting, process.Running:
-		if nil != process.GetCondition(p, process.ActionStop, nil) {
-			return true
-		}
-
-		if enabler, ok := p.(process.Enabler); !ok {
-			return false
-		} else if enabler.IsEnabled() {
-			return nil != process.GetCondition(p, process.ActionDisable, nil)
-		}
-		return nil != process.GetCondition(p, process.ActionEnable, nil)
+		return nil != process.GetCondition(p, process.ActionStop, nil)
 	}
 	return false
 }
@@ -205,7 +183,27 @@ func (pm *ProcessManager) collectWindowRequests() []process.WindowRequest {
 	return result
 }
 
+// stateTransitionAction returns how a process should transition its state, and when we would prefer it to.
+func stateTransitionAction(s process.State) (process.Action, process.Condition) {
+	switch s {
+	case process.Created:
+		return process.ActionStart, process.Immediate{}
+	case process.Dead:
+		return process.ActionRestart, process.Immediate{}
+	case process.Stopped:
+		return process.ActionRestart, process.Never{}
+	case process.Running:
+		return process.ActionStop, process.Never{}
+	default:
+		panic("unhandled default case")
+	}
+}
+
 func (pm *ProcessManager) evalActions(ctx context.Context, ev event.Event) {
+	if len(pm.waitingProcess) == 0 {
+		return
+	}
+
 	var stats process.EventStats
 	if pm.clockMgr != nil {
 		windowRequests := pm.collectWindowRequests()
@@ -215,53 +213,23 @@ func (pm *ProcessManager) evalActions(ctx context.Context, ev event.Event) {
 	hasChanged := false
 
 	for _, p := range pm.waitingProcess {
-		switch p.State() {
-		case process.Created:
-			if cond := process.GetCondition(p, process.ActionStart, process.Immediate{}); cond.Met(p, ev, stats) {
-				pm.startOne(ctx, p)
+		action, defaultCondition := stateTransitionAction(p.State())
+		switch action {
+		case process.ActionStart, process.ActionRestart:
+			if cond := process.GetCondition(p, action, defaultCondition); cond.Met(p, ev, stats) {
+				pm.startProcess(ctx, p)
 				hasChanged = true
 			} else {
-				glog.Infof("ProcessManager: waiting to start %s until %s", p.Name(), cond)
+				glog.Infof("ProcessManager: waiting to (re)start %s until %s", p.Name(), cond)
 			}
-		case process.Dead:
-			if cond := process.GetCondition(p, process.ActionRestart, process.Immediate{}); cond.Met(p, ev, stats) {
-				pm.startOne(ctx, p)
-				hasChanged = true
-			} else {
-				glog.Infof("ProcessManager: waiting to restart from dead %s until %s", p.Name(), cond)
-			}
-		case process.Stopped:
-			if cond := process.GetCondition(p, process.ActionRestart, process.Never{}); cond.Met(p, ev, stats) {
-				pm.startOne(ctx, p)
-				hasChanged = true
-			} else {
-				glog.Infof("ProcessManager: waiting to restart %s until %s", p.Name(), cond)
-			}
-		case process.Running:
-			if cond := process.GetCondition(p, process.ActionStop, process.Never{}); cond.Met(p, ev, stats) {
+		case process.ActionStop:
+			if cond := process.GetCondition(p, action, defaultCondition); cond.Met(p, ev, stats) {
 				glog.V(2).Infof("ProcessManager: stop condition met for %s (%s) on source=%s", p.Name(), cond, ev.Source)
 				p.Stop()
 				hasChanged = true
-				continue
 			}
-			enabler, ok := p.(process.Enabler)
-			if !ok {
-				continue
-			}
-			if enabler.IsEnabled() {
-				if cond := process.GetCondition(p, process.ActionDisable, process.Never{}); cond.Met(p, ev, stats) {
-					glog.V(2).Infof("ProcessManager: disable condition met for %s (%s) on source=%s", p.Name(), cond, ev.Source)
-					enabler.Disable()
-					hasChanged = true
-				}
-				continue
-			}
-			if cond := process.GetCondition(p, process.ActionEnable, process.Never{}); cond.Met(p, ev, stats) {
-				glog.V(2).Infof("ProcessManager: enable condition met for %s (%s) on source=%s", p.Name(), cond, ev.Source)
-				enabler.Enable()
-				hasChanged = true
-				continue
-			}
+		default:
+			continue
 		}
 	}
 	if hasChanged {
@@ -276,6 +244,14 @@ func (pm *ProcessManager) handleProcessDown(ctx context.Context, ev event.Event)
 			ev.Source, ev.CfgName, ev.IFace)
 		return
 	}
+
+	switch p.State() {
+	case process.Running:
+		UpdateProcessStatusMetrics(p.Name(), p.ConfigName(), PtpProcessUp)
+	case process.Stopped, process.Dead:
+		UpdateProcessStatusMetrics(p.Name(), p.ConfigName(), PtpProcessDown)
+	}
+
 	if p.State() != process.Dead {
 		glog.V(2).Infof("ProcessManager: process_status down ignored for %s state=%s source=%s",
 			p.Name(), p.State(), ev.Source)

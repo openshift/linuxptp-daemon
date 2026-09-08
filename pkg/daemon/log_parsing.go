@@ -132,9 +132,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		if ptpMetrics.Iface != "" && configName != "" {
 			masterOffsetIface.set(configName, ptpMetrics.Iface)
 		}
-		if ptpMetrics.Source == "master" && process.dn != nil {
-			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
-		}
+
 		// sendPtp4lOffsetEvent handles T-BC: windowed offset averaging,
 		// rate-limited to 1/sec, using tBCAttributes. It no-ops for simple
 		// OC/BC (offsetEventWindow is nil), so we send the event directly below.
@@ -161,9 +159,6 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			}
 		}
 	case ts2phcProcessName:
-		if process.dn != nil {
-			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
-		}
 		// Send event for ts2phc
 		eventSource := process.ifaces.GetEventSource(process.ifaces.GetPhcID2IFace(ptpMetrics.Iface))
 		values := map[event.ValueType]interface{}{

@@ -1,16 +1,10 @@
 package daemon
 
 import (
-	"bufio"
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
-
-	"math"
-
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -18,33 +12,29 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
+	dpllnl "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
-	dpllnl "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 
 	"github.com/golang/glog"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -65,7 +55,6 @@ func init() {
 const (
 	PTP4L_CONF_FILE_PATH            = "/etc/ptp4l.conf"
 	PTP4L_CONF_DIR                  = "/ptp4l-conf"
-	connectionRetryInterval         = 1 * time.Second
 	ipcSocket                       = "/var/run/ptp/ipc.sock"
 	ClockClassChangeIndicator       = "selected best master clock"
 	GPSDDefaultGNSSSerialPort       = "/dev/gnss0"
@@ -128,193 +117,6 @@ var ptpTmpFiles = []string{
 
 var vTbcHasHardwareConfig = false
 
-// ProcessManager manages a set of ptpProcess
-// which could be ptp4l, phc2sys or timemaster.
-// Processes in ProcessManager will be started
-// or stopped simultaneously.
-type ProcessManager struct {
-	process      []*ptpProcess
-	eventChannel chan event.Event
-	clockMgr     *clockmgr.ClockManager
-	daemon       *Daemon
-}
-
-// findProcessesByName returns a list of processes with the given name
-func (p *ProcessManager) findProcessesByName(name string) []*ptpProcess {
-	var procs []*ptpProcess
-	for _, proc := range p.process {
-		if proc != nil && proc.name == name {
-			procs = append(procs, proc)
-		}
-	}
-	return procs
-}
-
-// NewProcessManager is used by unit tests
-func NewProcessManager() *ProcessManager {
-	processPTP := &ptpProcess{}
-	processPTP.ptpClockThreshold = &ptpv1.PtpClockThreshold{
-		HoldOverTimeout:    5,
-		MaxOffsetThreshold: 100,
-		// MinOffsetThreshold is deprecated; offset evaluation only compares
-		// abs(offset) < MaxOffsetThreshold.
-	}
-	return &ProcessManager{
-		process: []*ptpProcess{processPTP},
-	}
-}
-
-// SetTestProfileProcess ...
-func (p *ProcessManager) SetTestProfileProcess(name string, ifaces config.IFaces, socketPath,
-	processConfigPath string, nodeProfile ptpv1.PtpProfile,
-) {
-	p.process = append(p.process, &ptpProcess{
-		name:              name,
-		ifaces:            ifaces,
-		processSocketPath: socketPath,
-		processConfigPath: processConfigPath,
-		execMutex:         sync.Mutex{},
-		nodeProfile:       nodeProfile,
-	})
-}
-
-// SetTestData is used by unit tests
-func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) {
-	if len(p.process) < 1 || p.process[0] == nil {
-		glog.Error("process is not initialized in SetTestData()")
-		return
-	}
-	eventChannel := make(chan event.Event)
-	p.process[0].name = name
-	p.process[0].messageTag = msgTag
-	p.process[0].ifaces = ifaces
-	p.process[0].logParser = getParser(name)
-	p.process[0].handler = clockmgr.Init("test", eventChannel, Offset, ClockState, ClockClassMetrics, nil)
-	// Reset aliases for each test to avoid cross-case collisions.
-	alias.ClearAliases()
-	// Calculate aliases for the test interfaces to ensure proper aliasing
-	for phc, ifNames := range ifaces.GetIfNamesGroupedByPhc() {
-		for _, ifname := range ifNames {
-			alias.AddInterface(phc, ifname)
-		}
-	}
-	alias.CalculateAliases()
-}
-
-// RunProcessPTPMetrics is used by unit tests
-func (p *ProcessManager) RunProcessPTPMetrics(log string) {
-	if len(p.process) < 1 || p.process[0] == nil {
-		glog.Error("process is not initialized in RunProcessPTPMetrics()")
-		return
-	}
-	p.process[0].processPTPMetrics(log)
-}
-
-// RunSynceParser is used by unit tests
-func (p *ProcessManager) RunSynceParser(log string) {
-	if len(p.process) < 1 || p.process[0] == nil {
-		glog.Error("process is not initialized in RunProcessPTPMetrics()")
-		return
-	}
-	logEntry := synce.ParseLog(log)
-	p.process[0].ProcessSynceEvents(logEntry)
-}
-
-// UpdateSynceConfig is used by unit tests
-func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
-	if len(p.process) < 1 || p.process[0] == nil {
-		glog.Error("process is not initialized in RunProcessPTPMetrics()")
-		return
-	}
-	p.process[0].syncERelations = config
-}
-
-type tBCProcessAttributes struct {
-	ttPortsConfigFile string
-	trPortsConfigFile string
-	trIfaceNames      []string
-	perPortState      map[string]event.PTPState
-	activePort        string
-	lastReportedState event.PTPState
-	lastAppliedState  event.PTPState
-	offsetFilter      *utils.Window
-	offsetThreshold   float64
-	// offsetEventWindow averages ptp4l offsets and sends them to the T-BC state machine once per second
-	offsetEventWindow  *utils.Window
-	lastOffsetEventSec int64
-}
-
-func (t *tBCProcessAttributes) activeTRPort() string {
-	if t.activePort != "" {
-		return t.activePort
-	}
-	if len(t.trIfaceNames) > 0 {
-		return t.trIfaceNames[0]
-	}
-	return ""
-}
-
-func (t *tBCProcessAttributes) allPortsLost() bool {
-	for _, state := range t.perPortState {
-		if state == event.PTP_LOCKED {
-			return false
-		}
-	}
-	return true
-}
-
-type ptpProcess struct {
-	name                  string
-	ifaces                config.IFaces
-	processSocketPath     string
-	processConfigPath     string
-	configName            string
-	messageTag            string
-	eventCh               chan event.Event
-	exitCh                chan bool
-	execMutex             sync.Mutex
-	stopped               bool
-	logFilters            []*logfilter.LogFilter // List of filters to apply to logs
-	cmd                   *exec.Cmd
-	depProcess            []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
-	nodeProfile           ptpv1.PtpProfile
-	logParser             parser.MetricsExtractor
-	clockType             event.ClockType
-	ptpClockThreshold     *ptpv1.PtpClockThreshold
-	haProfile             map[string][]string // stores list of interface name for each profile
-	syncERelations        *synce.Relations
-	hasCollectedMetrics   bool
-	tBCAttributes         tBCProcessAttributes
-	GrandmasterClockClass uint8
-	handler               *clockmgr.ClockManager
-	dn                    *Daemon
-	cmdSetEnabledMutex    sync.Mutex
-	tbcStateDetector      *hardwareconfig.PTPStateDetector // Cached PTP state detector instance
-	offset                float64
-	skipInitialStartup    string
-}
-
-func (p *ptpProcess) Stopped() bool {
-	p.execMutex.Lock()
-	me := p.stopped
-	p.execMutex.Unlock()
-	return me
-}
-
-func (p *ptpProcess) getAndSetStopped(val bool) bool {
-	p.execMutex.Lock()
-	ret := p.stopped
-	p.stopped = val
-	p.execMutex.Unlock()
-	return ret
-}
-
-func (p *ptpProcess) setStopped(val bool) {
-	p.execMutex.Lock()
-	p.stopped = val
-	p.execMutex.Unlock()
-}
-
 // Daemon is the main structure for linuxptp instance.
 // It contains all the necessary data to run linuxptp instance.
 type Daemon struct {
@@ -329,6 +131,8 @@ type Daemon struct {
 
 	processManager *ProcessManager
 	readyTracker   *ReadyTracker
+	ctx            context.Context
+	cancel         context.CancelFunc
 
 	hwconfigs   *[]ptpv1.HwConfig
 	hwconfigsMu sync.Mutex // protects hwconfigs from concurrent GPSD goroutine writes
@@ -350,19 +154,9 @@ type Daemon struct {
 	ptpClient      *ptpclient.Clientset
 	unknownPlugins []string
 
-	// syncStatusMu serializes NodePtpDevice status.sync writes so only one
-	// update runs at a time and apply can wait for it before teardown.
-	syncStatusMu sync.Mutex
-
-	delayedPhc2sys        atomic.Bool
-	delayedTs2phc         atomic.Bool
-	ts2phcSourceQualified atomic.Bool // DPLL-enable / offset-filter gate has fired for T-BC
-	delayedStartupMu      sync.Mutex  // protects skipInitialStartup on delayed phc2sys/ts2phc processes
-
 	interfaceResolver *ptpnetwork.InterfaceResolver
+	syncStatusMu      sync.Mutex
 }
-
-type initialStateSyncer interface{ SyncInitialState() }
 
 // UpdateHardwareConfig implements controller.HardwareConfigUpdateHandler.
 // It is invoked by the controller reconciler via HardwareConfigHandler
@@ -438,7 +232,8 @@ func (dn *Daemon) getInterfacesFromHardwareConfig(nodeProfile *ptpv1.PtpProfile)
 			// Get PHC ID for the interface
 			phcID := ptpnetwork.GetPhcId(networkInterface)
 
-			// Register in the alias store for PHC matching (e.g.
+			// Register in the alias store so convergeConfig can match this
+			// interface against ptp4l interfaces that share the same PHC (e.g.
 			// eno1 vs eth3 on an 8-port NIC where naming prefixes differ).
 			if phcID != "" {
 				alias.AddInterface(phcID, networkInterface)
@@ -490,11 +285,14 @@ func New(
 	InitializeOffsetMaps()
 	pluginManager, unknownPlugins := registerPlugins(plugins)
 	eventChannel := make(chan event.Event, 100)
+	handlerEvents := make(chan event.Event, 100)
+	ctx, cancel := context.WithCancel(context.Background())
 	cache := ipc.NewCache(100)
 	pm := &ProcessManager{
-		process:      nil,
-		eventChannel: eventChannel,
-		clockMgr:     clockmgr.Init(nodeName, eventChannel, Offset, ClockState, ClockClassMetrics, cache),
+		process:   nil,
+		eventsIn:  eventChannel,
+		eventsOut: handlerEvents,
+		clockMgr:  clockmgr.Init(nodeName, handlerEvents, Offset, ClockState, ClockClassMetrics, cache),
 	}
 	tracker.processManager = pm
 	go ipc.NewLink(ipcSocket, cache).Run(context.TODO())
@@ -532,6 +330,8 @@ func New(
 		pmcPollInterval:      pmcPollInterval,
 		processManager:       pm,
 		readyTracker:         tracker,
+		ctx:                  ctx,
+		cancel:               cancel,
 		stopCh:               stopCh,
 		saFileWatcher:        saFileWatch,
 	}
@@ -630,7 +430,8 @@ func (dn *Daemon) Run(ctx context.Context) {
 			}
 			glog.Errorf("fsnotify watcher error: %v", err)
 		case <-dn.stopCh:
-			dn.stopAllProcesses()
+			dn.cancel()
+			dn.processManager.stopAllProcesses()
 			glog.Infof("linuxPTP stop signal received, existing..")
 			return
 		}
@@ -698,8 +499,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 		dn.syncStatusMu.Unlock()
 	}
 
-	dn.stopAllProcesses()
-	dn.processManager.clockMgr.RemoveAllClocks()
+	dn.processManager.stopAllProcesses()
 	// All process should have been stopped,
 	// clear process in process manager.
 	// Assigning processManager.process to nil releases
@@ -707,6 +507,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// collector (assuming there are no other
 	// references).
 	dn.processManager.process = nil
+	dn.processManager.clockMgr.RemoveAllClocks()
 
 	// Purge the alias store so stale interface→PHC mappings from a previous
 	// config application do not persist. All interfaces will be re-registered
@@ -814,63 +615,8 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	}
 
 	glog.Infof("All profiles applied, starting %d processes", len(dn.processManager.process))
-	// Start all the process
-	for _, p := range dn.processManager.process {
-		if p != nil {
-			p.eventCh = dn.processManager.eventChannel
-			for _, d := range p.depProcess {
-				if d != nil {
-					time.Sleep(3 * time.Second)
-					glog.Infof("Starting %s", d.Name())
-					go d.CmdRun()
-					time.Sleep(3 * time.Second)
-					dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
-					d.MonitorProcess(config.ProcessConfig{
-						ClockType:    p.clockType,
-						ConfigName:   p.configName,
-						EventChannel: dn.processManager.eventChannel,
-						GMThreshold: config.Threshold{
-							// Min is not populated: it is deprecated and no
-							// longer consumed by dependent-process offset
-							// evaluation (dpll/gpsd isOffsetInRange), which
-							// now compare abs(offset) < Max.
-							Max:             p.ptpClockThreshold.MaxOffsetThreshold,
-							HoldOverTimeout: p.ptpClockThreshold.HoldOverTimeout,
-						},
-						InitialPTPState: event.PTP_FREERUN,
-					})
-					// Pre-populate event state immediately after the EventChannel
-					// is set up so that hardware-slaved DPLLs (e.g. E830 CF) are
-					// present in the event data before the async monitoring goroutine
-					// completes its own initial dump.
-					if syncer, ok := d.(initialStateSyncer); ok {
-						syncer.SyncInitialState()
-					}
-					glog.Infof("enabling dep process %s with Max %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
-				}
-			}
-			if p.skipInitialStartup != "" {
-				glog.Infof("Delaying %s startup: %s", p.name, p.skipInitialStartup)
-				continue
-			}
-			go p.cmdRun(&dn.pluginManager)
-			dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.name)
-		}
-	}
-	// Arm delayed-startup flags now that the startup loop is complete.
-	// Keeping them false during the loop ensures release handlers cannot
-	// clear skipInitialStartup and race with the loop's skip check.
-	for _, p := range dn.processManager.process {
-		if p == nil || p.skipInitialStartup == "" {
-			continue
-		}
-		switch p.name {
-		case phc2sysProcessName:
-			dn.delayedPhc2sys.Store(true)
-		case ts2phcProcessName:
-			dn.delayedTs2phc.Store(true)
-		}
-	}
+	dn.pluginManager.SetEventChannel(dn.processManager.eventsIn)
+	dn.processManager.StartProcesses(dn.ctx)
 	dn.hwconfigsMu.Lock()
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
 	dn.hwconfigsMu.Unlock()
@@ -934,33 +680,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	}
 	var pluginErrors []error
 
-	// Validate that all plugin names in the profile match registered plugins
-	if nodeProfile.Plugins != nil {
-		for pluginName := range nodeProfile.Plugins {
-			if _, registered := dn.pluginManager.Plugins[pluginName]; !registered {
-				pluginErrors = append(pluginErrors, fmt.Errorf(
-					"unknown plugin '%s' in profile '%s' (possible typo in hardware plugin configuration)",
-					pluginName, *nodeProfile.Name,
-				))
-			}
-		}
-	}
-
-	// Check if hardware configs are available for this profile
-	// If hardware configs arrive later, reconciliation will re-apply the profile
-	if dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
-		glog.Infof("Using hardware configs for PTP profile %s instead of plugins", *nodeProfile.Name)
-		if err := dn.hardwareConfigManager.ApplyHardwareConfigsForProfile(nodeProfile); err != nil {
-			glog.Errorf("Failed to apply hardware configs for profile %s: %v", *nodeProfile.Name, err)
-			// Fall back to plugins
-			errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
-			pluginErrors = append(pluginErrors, errs...)
-		}
-	} else {
-		glog.Infof("No hardware configs found for PTP profile %s, using plugins", *nodeProfile.Name)
-		errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
-		pluginErrors = append(pluginErrors, errs...)
-	}
+	pluginErrors = dn.checkPlugins(nodeProfile, pluginErrors)
+	pluginErrors = dn.initHardware(nodeProfile, pluginErrors)
 
 	dn.reportPluginStatus(*nodeProfile.Name, pluginErrors)
 
@@ -970,23 +691,12 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	updatePTPThresholdMetrics(nodeProfile, th)
 
 	var err error
-	var cmdLine string
-	var configPath string
-	var socketPath string
-	var configFile string
-	var configInput *string
-	var configOpts *string
-	var messageTag string
-	var cmd *exec.Cmd
-	var haProfile map[string][]string
-
-	ptpHAEnabled := len(listHaProfiles(nodeProfile)) > 0
 
 	var clockType event.ClockType
-	profileClockType, found := (*nodeProfile).PtpSettings["clockType"]
+	profileClockType, profileClockTypefound := (*nodeProfile).PtpSettings["clockType"]
 	var leadingNic string
 	var upstreamPorts []string
-	if found {
+	if profileClockTypefound {
 		switch profileClockType {
 		case TGM:
 			clockType = event.GM
@@ -1025,8 +735,13 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			return err
 		}
 	case event.TBC:
-		if c, err = clock.NewTBC(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
+		var tbc *clock.TBC
+		if tbc, err = clock.NewTBC(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
 			return err
+		}
+		c = tbc
+		if leadingNic != "" {
+			tbc.SetConfiguredLeadingInterface(leadingNic)
 		}
 	case event.BC:
 		if c, err = clock.NewBC(clockCfgName, false, th); err != nil {
@@ -1045,199 +760,29 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
 	}
 
+	env := ptpProcessEnv{
+		runID:         runID,
+		nodeProfile:   nodeProfile,
+		clockType:     clockType,
+		dn:            dn,
+		leadingNic:    leadingNic,
+		upstreamPorts: upstreamPorts,
+		hasFailover:   nodeProfile.Plugins != nil && nodeProfile.Plugins["ntpfailover"] != nil,
+	}
+
 	for _, pProcess := range ptpProcesses {
-		controlledConfigFile := ""
-		switch pProcess {
-		case ptp4lProcessName:
-			configInput = nodeProfile.Ptp4lConf
-			configOpts = nodeProfile.Ptp4lOpts
-			if configOpts == nil {
-				_configOpts := " "
-				configOpts = &_configOpts
-			}
-			socketPath = fmt.Sprintf("%s/ptp4l.%d.socket", configPrefix, runID)
-			configFile = fmt.Sprintf("ptp4l.%d.config", runID)
-			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
-			messageTag = fmt.Sprintf("[ptp4l.%d.config:{level}]", runID)
-			if controlledID, ok := nodeProfile.PtpSettings["controlledId"]; ok {
-				controlledConfigFile = fmt.Sprintf("ptp4l.%s.config", controlledID)
-			}
-
-		case phc2sysProcessName:
-			configInput = nodeProfile.Phc2sysConf
-			configOpts = nodeProfile.Phc2sysOpts
-			if !ptpHAEnabled {
-				socketPath = fmt.Sprintf("%s/ptp4l.%d.socket", configPrefix, runID)
-				messageTag = fmt.Sprintf("[ptp4l.%d.config:{level}]", runID)
-			} else { // when ptp ha enabled it has its own valid config
-				messageTag = fmt.Sprintf("[phc2sys.%d.config:{level}]", runID)
-			}
-			configFile = fmt.Sprintf("phc2sys.%d.config", runID)
-			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
-		case ts2phcProcessName:
-			configInput = nodeProfile.Ts2PhcConf
-			configOpts = nodeProfile.Ts2PhcOpts
-			socketPath = fmt.Sprintf("%s/ptp4l.%d.socket", configPrefix, runID)
-			configFile = fmt.Sprintf("ts2phc.%d.config", runID)
-			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
-			messageTag = fmt.Sprintf("[ts2phc.%d.config:{level}]", runID)
-			leap.LeapMgr.SetPtp4lConfigPath(fmt.Sprintf("ptp4l.%d.config", runID))
-			// DPLL is considered to be running along with ts2phc
-			maxInSpecOffset, maxHoldoverOffSet, maxHoldoverTimeout, inSpecTimer, frequencyTraceable := dpll.CalculateTimer(nodeProfile)
-			if clockType == event.GM {
-				// update ts2phcOpts with the new config
-				if configOpts != nil && *configOpts != "" {
-					if !strings.Contains(*configOpts, "--ts2phc.holdover") {
-						if frequencyTraceable {
-							*configOpts += " --ts2phc.holdover " + strconv.FormatInt(maxHoldoverTimeout, 10)
-						} else {
-							*configOpts += " --ts2phc.holdover " + strconv.FormatInt(min(inSpecTimer, maxHoldoverTimeout), 10)
-						}
-					} // there is a 5s delay in the NMEA driver, accepting pulses 5s after the last valid NMEA message, so that might need to be subtracted from that value
-					// need more testing to confirm
-					if !strings.Contains(*configOpts, "--servo_offset_threshold") {
-						if frequencyTraceable {
-							*configOpts += " --servo_offset_threshold " + strconv.FormatInt(maxHoldoverOffSet, 10)
-						} else {
-							*configOpts += " --servo_offset_threshold " + strconv.FormatInt(min(maxInSpecOffset, maxHoldoverOffSet), 10)
-						}
-					}
-					if !strings.Contains(*configOpts, "--servo_num_offset_values") { // if consecutive smaller offsets (less than the threshold) are not observed, the system stays in S2
-						*configOpts += " --servo_num_offset_values 10"
-					}
-				}
-			}
-		case syncEProcessName:
-			configOpts = nodeProfile.Synce4lOpts
-			configInput = nodeProfile.Synce4lConf
-			socketPath = ""
-			configFile = fmt.Sprintf("synce4l.%d.config", runID)
-			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
-			messageTag = fmt.Sprintf("[synce4l.%d.config]", runID)
-		case chronydProcessName:
-			configOpts = nodeProfile.ChronydOpts
-			configInput = nodeProfile.ChronydConf
-			socketPath = ""
-			configFile = fmt.Sprintf("chronyd.%d.config", runID)
-			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
-			messageTag = fmt.Sprintf("[chronyd.%d.config]", runID)
-		}
-
-		output := &Ptp4lConf{}
-		err = output.PopulatePtp4lConf(configInput, nil) // cli args not need as we already have clock type from ptp4l
-		if err != nil {
-			printNodeProfile(nodeProfile)
-			return err
-		}
-		output.ResolveInterfaceNames(dn.interfaceResolver)
-
+		configOpts := optsFor(pProcess, nodeProfile)
 		if configOpts == nil || *configOpts == "" {
 			glog.Infof("configOpts empty for profile %s, skipping process: %s", *nodeProfile.Name, pProcess)
 			continue
 		}
 		glog.Infof("Processing %s for profile %s with opts: %s", pProcess, *nodeProfile.Name, *configOpts)
 
-		if nodeProfile.Interface != nil && *nodeProfile.Interface != "" {
-			output.AddInterfaceSection(*nodeProfile.Interface)
-		} else {
-			iface := string("")
-			nodeProfile.Interface = &iface
-		}
-
-		if pProcess != chronydProcessName {
-			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
-		} else {
-			output.setPtp4lConfOption("", "bindcmdaddress", ChronydSocketPath, true)
-			output.profile_name = *nodeProfile.Name
-		}
-
-		// output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
-
-		// This adds the flags needed for monitor
-		addFlagsForMonitor(pProcess, configOpts, output)
-		var configOutput string
-		var relations *synce.Relations
-		var ifaces config.IFaces
-		if pProcess == syncEProcessName {
-			configOutput, relations = output.RenderSyncE4lConf(nodeProfile.PtpSettings)
-		} else {
-			configOutput, ifaces = output.RenderPtp4lConf()
-			for i := range ifaces {
-				if len(upstreamPorts) > 0 && leadingNic == ifaces[i].Name {
-					ifaces[i].Source = event.PTP4l
-				}
-			}
-		}
-
-		if configInput != nil {
-			*configInput = configOutput
-		}
-
-		cmdLine = fmt.Sprintf("/usr/sbin/%s -f %s %s", pProcess, configPath, *configOpts)
-		cmdLine = addScheduling(nodeProfile, cmdLine)
-		if pProcess == phc2sysProcessName {
-			haProfile, cmdLine = dn.ApplyHaProfiles(nodeProfile, cmdLine)
-		}
-		args := strings.Split(cmdLine, " ")
-		cmd = exec.Command(args[0], args[1:]...)
-
-		dprocess := ptpProcess{
-			name:              pProcess,
-			ifaces:            ifaces,
-			processConfigPath: configPath,
-			processSocketPath: socketPath,
-			configName:        configFile,
-			messageTag:        messageTag,
-			exitCh:            make(chan bool),
-			stopped:           true,
-			logFilters:        logfilter.GetLogFilters(pProcess, messageTag, (*nodeProfile).PtpSettings),
-			cmd:               cmd,
-			depProcess:        []process{},
-			nodeProfile:       *nodeProfile,
-			clockType:         clockType,
-			ptpClockThreshold: getPTPThreshold(nodeProfile),
-			haProfile:         haProfile,
-			syncERelations:    relations,
-			logParser:         getParser(pProcess),
-			tBCAttributes: tBCProcessAttributes{
-				ttPortsConfigFile: controlledConfigFile, trPortsConfigFile: configFile,
-				lastReportedState: event.PTP_NOTSET, lastAppliedState: event.PTP_NOTSET, offsetFilter: nil,
-			},
-			handler: dn.processManager.clockMgr,
-			dn:      dn,
-		}
-
-		if pProcess == ptp4lProcessName {
-			if len(upstreamPorts) > 0 && clockType == event.TBC {
-				dprocess.tBCAttributes.trIfaceNames = upstreamPorts
-				dprocess.tBCAttributes.perPortState = make(map[string]event.PTPState, len(upstreamPorts))
-				for _, p := range upstreamPorts {
-					dprocess.tBCAttributes.perPortState[p] = event.PTP_NOTSET
-				}
-				sInSyncConditionTh, thresholdConfigured := (*nodeProfile).PtpSettings["inSyncConditionThreshold"]
-				if thresholdConfigured {
-					dprocess.tBCAttributes.offsetThreshold, err = strconv.ParseFloat(sInSyncConditionTh, 64)
-					if err != nil {
-						return fmt.Errorf("failed to parse inSyncConditionThreshold: %s", err)
-					}
-				} else {
-					dprocess.tBCAttributes.offsetThreshold = float64(getPTPThreshold(nodeProfile).MaxOffsetThreshold)
-				}
-				offsetEventWindowSize := defaultPtp4lOffsetEventWindowSize
-				if sWindowSize, ok := (*nodeProfile).PtpSettings["ptp4lOffsetEventWindowSize"]; ok {
-					if ws, parseErr := strconv.Atoi(sWindowSize); parseErr == nil && ws > 0 {
-						offsetEventWindowSize = ws
-					} else {
-						glog.Warningf("invalid ptp4lOffsetEventWindowSize %q, using default %d", sWindowSize, defaultPtp4lOffsetEventWindowSize)
-					}
-				}
-				dprocess.tBCAttributes.offsetEventWindow = utils.NewWindow(offsetEventWindowSize)
-				dprocess.prepareTBCResources()
-			}
-		}
-
-		// TODO HARDWARE PLUGIN for e810
-		if pProcess == ptp4lProcessName {
+		var dprocess process.Process
+		switch pProcess {
+		case ptp4lProcessName:
+			var ptpProc *ptpProcess
+			ptpProc, err = NewPtp4lProcess(env)
 			// Skip PMC creation for controlled profiles
 			if controllingProfile, isControlled := (*nodeProfile).PtpSettings["controllingProfile"]; isControlled && controllingProfile != "" {
 				// See DownstreamIWF
@@ -1245,709 +790,322 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			} else if clockType == event.GM {
 				glog.Infof("Skipping PMC monitoring for GM")
 			} else {
-				pmcClockType, clockTypeFound := (*nodeProfile).PtpSettings["clockType"]
-				if !clockTypeFound {
-					pmcClockType = string(clockType)
-				}
-				pmcProcess := NewPMCProcess(runID, dn.processManager.eventChannel, pmcClockType, time.Duration(dn.pmcPollInterval)*time.Second)
-				pmcProcess.CmdInit()
 				// TODO addScheduling
-				dprocess.depProcess = append(dprocess.depProcess, pmcProcess)
+				pmcProcess := NewPMCProcess(runID, dn.processManager.eventsIn, clockType, nodeProfile, time.Duration(dn.pmcPollInterval)*time.Second)
+				ptpProc.depProcess = append(ptpProc.depProcess, pmcProcess)
 			}
-		} else if pProcess == phc2sysProcessName {
-			glog.Infof("Setting up phc2sys (%s)", clockType)
-			// Delay phc2sys startup until the clock source has synchronized.
-			dn.delayedStartupMu.Lock()
-			dprocess.skipInitialStartup = "waiting for PHC synchronization before adjusting system time"
-			dn.delayedStartupMu.Unlock()
-			glog.Infof("Delaying phc2sys startup: %s", dprocess.skipInitialStartup)
-		} else if pProcess == ts2phcProcessName { //& if the x plugin is enabled
-			// T-BC: delay ts2phc until the same gate that enables DPLL inputs
-			// (offset filter / PTPSourceQualified). T-GM must start ts2phc first.
-			if profileClockType == TBC {
-				dn.delayedStartupMu.Lock()
-				dprocess.skipInitialStartup = "waiting for PTPSourceQualified (DPLL-enable) before disciplining follower PHCs"
-				dn.delayedStartupMu.Unlock()
-				glog.Infof("Delaying ts2phc startup: %s", dprocess.skipInitialStartup)
+			dprocess = ptpProc
+		case phc2sysProcessName:
+			dprocess, err = NewPhc2sysProcess(env)
+		case ts2phcProcessName:
+			if leap.LeapMgr != nil {
+				leap.LeapMgr.SetPtp4lConfigPath(fmt.Sprintf("ptp4l.%d.config", runID))
 			}
+			var ts2phcProc *ptpProcess
+			ts2phcProc, err = NewTs2phcProcess(env)
+
 			if clockType == event.GM {
 				// If a HardwareConfig defines a GNSS source, locate the serial port and any GNSS initialization commands.
-				var gnssInitCmds ublox.CommandList
-				if nodeProfile.Name != nil && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
-					gnssPort, gnssErr := dn.hardwareConfigManager.GetGNSSSerialPort(nodeProfile)
-					if gnssErr != nil {
-						glog.Warningf("HardwareConfig GNSS device detection failed: %v", gnssErr)
-					} else if gnssPort != "" {
-						glog.Infof("HardwareConfig GNSS device detected: %s (overriding ts2phc config)", gnssPort)
-						output.gnss_serial_port = gnssPort
-					}
-
-					gnssInitCmds = dn.hardwareConfigManager.GetGNSSInitCommands(nodeProfile)
-					glog.Infof("HardwareConfig GNSS initialization added %d additional commands", len(gnssInitCmds))
-				}
-
-				if output.gnss_serial_port == "" {
-					output.gnss_serial_port = GPSDDefaultGNSSSerialPort
-					glog.Warningf("Setting GNSS serial port to %s", output.gnss_serial_port)
-				}
-				gmInterface := dprocess.ifaces.GetLeadingInterface().Name
-				glog.Infof("Working with GNSS serial port %s, leading iface %s", output.gnss_serial_port, gmInterface)
-
-				// Record ublox init results (MON-HW, etc.) to NodePtpDevice status.
-				// Replaces any previous "gnss" entries to avoid duplicates on re-init.
-				// Additionally store on HardwareConfigManager when that path is active.
-				gnssResultsFn := func(results []string) {
-					dn.hwconfigsMu.Lock()
-					defer dn.hwconfigsMu.Unlock()
-					// Remove previous gnss entries
-					filtered := (*dn.hwconfigs)[:0]
-					for _, hw := range *dn.hwconfigs {
-						if hw.DeviceID != "gnss" {
-							filtered = append(filtered, hw)
-						}
-					}
-					// Add current results
-					for _, result := range results {
-						filtered = append(filtered, ptpv1.HwConfig{
-							DeviceID: "gnss",
-							Status:   result,
-						})
-					}
-					*dn.hwconfigs = filtered
-				}
-
-				gpsDaemon := &GPSD{
-					name:          GPSD_PROCESSNAME,
-					execMutex:     sync.Mutex{},
-					cmd:           nil,
-					serialPort:    output.gnss_serial_port,
-					exitCh:        make(chan struct{}),
-					gmInterface:   gmInterface,
-					stopped:       false,
-					messageTag:    messageTag,
-					ublxTool:      nil,
-					gnssInitCmds:  gnssInitCmds,
-					gnssResultsFn: gnssResultsFn,
-				}
-				gpsDaemon.CmdInit()
-				gpsDaemon.cmdLine = addScheduling(nodeProfile, gpsDaemon.cmdLine)
-				args = strings.Split(gpsDaemon.cmdLine, " ")
-				gpsDaemon.cmd = exec.Command(args[0], args[1:]...)
-				dprocess.depProcess = append(dprocess.depProcess, gpsDaemon)
-
-				// init gpspipe
-				gpsPipeDaemon := &gpspipe{
-					name:       GPSPIPE_PROCESSNAME,
-					execMutex:  sync.Mutex{},
-					cmd:        nil,
-					serialPort: GPSPIPE_SERIALPORT,
-					exitCh:     make(chan struct{}),
-					stopped:    false,
-					messageTag: messageTag,
-				}
-				gpsPipeDaemon.CmdInit()
-				gpsPipeDaemon.cmdLine = addScheduling(nodeProfile, gpsPipeDaemon.cmdLine)
-				args = strings.Split(gpsPipeDaemon.cmdLine, " ")
-				gpsPipeDaemon.cmd = exec.Command(args[0], args[1:]...)
-				dprocess.depProcess = append(dprocess.depProcess, gpsPipeDaemon)
+				dn.setupGPSDAndGPSPipe(nodeProfile, ts2phcProc)
 			}
-			// init dpll
-			// TODO: Try to inject DPLL depProcess via plugin ?
-			var localMaxHoldoverOffSet uint64 = dpll.LocalMaxHoldoverOffSet
-			var localHoldoverTimeout uint64 = dpll.LocalHoldoverTimeout
-			var maxInSpecOffset uint64 = dpll.MaxInSpecOffset
-			var inSyncConditionTh uint64 = dpll.MaxInSpecOffset
-			var inSyncConditionTimes uint64 = 1
-			var flags dpll.Flag
-			sInSyncConditionTh, found1 := (*nodeProfile).PtpSettings["inSyncConditionThreshold"]
-			if found1 {
-				inSyncConditionTh, err = strconv.ParseUint(sInSyncConditionTh, 0, 64)
-				if err != nil {
-					return fmt.Errorf("failed to parse inSyncConditionThreshold: %s", err)
-				}
-			}
-			sInSyncConditionTim, found2 := (*nodeProfile).PtpSettings["inSyncConditionTimes"]
-			if found2 {
-				inSyncConditionTimes, err = strconv.ParseUint(sInSyncConditionTim, 0, 64)
-				if err != nil {
-					return fmt.Errorf("failed to parse inSyncConditionTimes: %s", err)
-				}
-			}
-			var clockId uint64
-			phaseOffsetPinFilter := map[string]string{}
-
-			// For T-BC mode with hardwareconfig, derive interfaces from hardwareconfig structure
-			// instead of analyzing ts2phc configuration file
-			var interfacesToUse config.IFaces
-			if profileClockType == TBC && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
-				interfacesToUse = dn.getInterfacesFromHardwareConfig(nodeProfile)
-				if len(interfacesToUse) > 0 {
-					glog.Infof("Using interfaces from hardwareconfig for T-BC profile %s: %v", *nodeProfile.Name, interfacesToUse)
-				} else {
-					glog.Warningf("Failed to derive interfaces from hardwareconfig for T-BC profile %s, falling back to ts2phc config", *nodeProfile.Name)
-					interfacesToUse = dprocess.ifaces
-				}
-			} else {
-				interfacesToUse = dprocess.ifaces
-			}
-
-			for _, iface := range interfacesToUse {
-				var eventSource []event.EventSource
-				if iface.Source == event.GNSS || iface.Source == event.PPS ||
-					(iface.Source == event.PTP4l && profileClockType == TBC) {
-					if nodeProfile.PtpSettings[dpll.PtpSettingsDpllIgnoreKey(iface.Name)] == "true" {
-						glog.Infof("Init dpll: Skipping dpll for %s", iface.Name)
-						continue
-					}
-
-					flags = 0 // Default to 0 = no flags set
-
-					glog.Info("Init dpll: ptp settings ", (*nodeProfile).PtpSettings)
-					for k, v := range (*nodeProfile).PtpSettings {
-						glog.Info("Init dpll: ptp kv ", k, " ", v)
-						if strings.Contains(k, strings.Join([]string{iface.Name, "phaseOffset"}, ".")) {
-							filterKey := strings.Split(k, ".")
-							property := filterKey[len(filterKey)-1]
-							phaseOffsetPinFilter[property] = v
-							glog.Infof("dpll phase offset filter property: %s[%s]=%s", iface.Name, property, v)
-							continue
-						}
-						i, err := strconv.ParseUint(v, 10, 64)
-						if err != nil {
-							continue
-						}
-						if k == dpll.LocalMaxHoldoverOffSetStr {
-							localMaxHoldoverOffSet = i
-						}
-						if k == dpll.LocalHoldoverTimeoutStr {
-							localHoldoverTimeout = i
-						}
-						if k == dpll.MaxInSpecOffsetStr {
-							maxInSpecOffset = i
-						}
-						if k == fmt.Sprintf("%s[%s]", dpll.ClockIdStr, iface.Name) {
-							clockId = i
-						}
-						if k == dpll.PtpSettingsDpllFlagsKey(iface.Name) {
-							flags = dpll.Flag(i)
-						}
-					}
-
-					// Try to get holdover parameters from HardwareConfig (new system)
-					// This takes precedence over plugin-provided values for better declarative configuration
-					profileName := ""
-					if nodeProfile.Name != nil {
-						profileName = *nodeProfile.Name
-					}
-					holdoverParams := dn.getHoldoverParameters(profileName, clockId)
-					if holdoverParams != nil {
-						// HardwareConfig provides holdover parameters - use them
-						maxInSpecOffset = holdoverParams.MaxInSpecOffset
-						localMaxHoldoverOffSet = holdoverParams.LocalMaxHoldoverOffset
-						localHoldoverTimeout = holdoverParams.LocalHoldoverTimeout
-						glog.Infof("Using holdover parameters from HardwareConfig for clock %#x: MaxInSpec=%dns, LocalMaxOffset=%dns, Timeout=%ds",
-							clockId, maxInSpecOffset, localMaxHoldoverOffSet, localHoldoverTimeout)
-					} else {
-						// Fall back to plugin/profile settings (backward compatibility)
-						glog.Infof("Using holdover parameters from profile/plugin for clock %#x: MaxInSpec=%dns, LocalMaxOffset=%dns, Timeout=%ds",
-							clockId, maxInSpecOffset, localMaxHoldoverOffSet, localHoldoverTimeout)
-					}
-
-					// Try to get DPLL flags from HardwareConfig (new system)
-					// This takes precedence over plugin-provided values
-					hwFlags := dn.getDPLLFlags(profileName, clockId)
-					if hwFlags != nil {
-						flags = *hwFlags
-						glog.Infof("Using DPLL flags from HardwareConfig for clock %#x: %d", clockId, flags)
-					}
-
-					// Hardware-slaved DPLLs (e.g. E830 CF cards, identified by
-					// FlagOnlyPhaseStatus) never perform holdover
-					if flags&dpll.FlagOnlyPhaseStatus == dpll.FlagOnlyPhaseStatus {
-						localMaxHoldoverOffSet = 0
-						localHoldoverTimeout = 1 //do not divide by zero in case it is ever used
-						maxInSpecOffset = 0
-						glog.Infof("Resetting holdover parameters for %s (FlagOnlyPhaseStatus): not applicable for hardware-slaved DPLLs", iface.Name)
-					}
-
-					eventSource = []event.EventSource{iface.Source}
-					// pass array of ifaces which has source + clockId -
-					// here we have multiple dpll objects identified by clock id
-					// depends on will be either PPS or  GNSS,
-					// ONLY the one with GNSS dependency will go to HOLDOVER
-					dpllDaemon := dpll.NewDpll(clockId, localMaxHoldoverOffSet, localHoldoverTimeout,
-						maxInSpecOffset, iface.Name, eventSource, dpll.NONE, dn.GetPhaseOffsetPinFilter(nodeProfile),
-						// Used only in T-BC in-sync condition:
-						inSyncConditionTh, inSyncConditionTimes, flags)
-					glog.Infof("depending on %s", dpllDaemon.DependsOn())
-					// Set hardwareconfig handler if hardwareconfig manager is available
-					dpllDaemon.SetHardwareConfigHandler(func(devices []*dpllnl.DoDeviceGetReply) error {
-						return dn.hardwareConfigManager.ProcessDPLLDeviceNotifications(devices)
-					})
-					dpllDaemon.CmdInit()
-					dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
-				}
-			}
+			dn.setupDPLL(nodeProfile, clockType, ts2phcProc)
+			dprocess = ts2phcProc
+		case syncEProcessName:
+			dprocess, err = NewSyncEProcess(env)
+		case chronydProcessName:
+			dprocess, err = NewChronydProcess(env)
 		}
-		err = os.WriteFile(configPath, []byte(configOutput), 0o644)
+
 		if err != nil {
-			printNodeProfile(nodeProfile)
-			return fmt.Errorf("failed to write the configuration file named %s: %v", configPath, err)
+			return err
 		}
-
+		if dprocess == nil {
+			continue
+		}
 		printNodeProfile(nodeProfile)
-		dn.processManager.process = append(dn.processManager.process, &dprocess)
-		dn.pluginManager.RegisterEnableCallback(dprocess.name, dprocess.cmdSetEnabled)
+		dn.processManager.process = append(dn.processManager.process, dprocess)
 		glog.Infof("Added %s process to process manager for profile %s", pProcess, *nodeProfile.Name)
-
 	}
 	glog.Infof("Completed applyNodePtpProfile for profile %s, total processes in manager: %d", *nodeProfile.Name, len(dn.processManager.process))
 	return nil
 }
 
+// Validate that all plugin names in the profile match registered plugins
+func (dn *Daemon) checkPlugins(nodeProfile *ptpv1.PtpProfile, pluginErrors []error) []error {
+	if nodeProfile.Plugins != nil {
+		for pluginName := range nodeProfile.Plugins {
+			if _, registered := dn.pluginManager.Plugins[pluginName]; !registered {
+				pluginErrors = append(pluginErrors, fmt.Errorf(
+					"unknown plugin '%s' in profile '%s' (possible typo in hardware plugin configuration)",
+					pluginName, *nodeProfile.Name,
+				))
+			}
+		}
+	}
+	return pluginErrors
+}
+
+// Check if hardware configs are available for this profile
+// If hardware configs arrive later, reconciliation will re-apply the profile
+func (dn *Daemon) initHardware(nodeProfile *ptpv1.PtpProfile, pluginErrors []error) []error {
+	if dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
+		glog.Infof("Using hardware configs for PTP profile %s instead of plugins", *nodeProfile.Name)
+		if err := dn.hardwareConfigManager.ApplyHardwareConfigsForProfile(nodeProfile); err != nil {
+			glog.Errorf("Failed to apply hardware configs for profile %s: %v", *nodeProfile.Name, err)
+			// Fall back to plugins
+			errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
+			pluginErrors = append(pluginErrors, errs...)
+		}
+	} else {
+		glog.Infof("No hardware configs found for PTP profile %s, using plugins", *nodeProfile.Name)
+		errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
+		pluginErrors = append(pluginErrors, errs...)
+	}
+	return pluginErrors
+}
+
+func processConfigFor(dprocess *ptpProcess, clockType event.ClockType, eventCh chan event.Event) config.ProcessConfig {
+	cfg := config.ProcessConfig{
+		ClockType:       clockType,
+		ConfigName:      dprocess.configName,
+		EventChannel:    eventCh,
+		InitialPTPState: event.PTP_FREERUN,
+	}
+	if dprocess.ptpClockThreshold != nil {
+		cfg.GMThreshold = config.Threshold{
+			Max:             dprocess.ptpClockThreshold.MaxOffsetThreshold,
+			Min:             dprocess.ptpClockThreshold.MinOffsetThreshold,
+			HoldOverTimeout: dprocess.ptpClockThreshold.HoldOverTimeout,
+		}
+	}
+	return cfg
+}
+
+func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *ptpProcess) {
+	var gnssInitCmds ublox.CommandList
+	if nodeProfile.Name != nil && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
+		gnssPort, gnssErr := dn.hardwareConfigManager.GetGNSSSerialPort(nodeProfile)
+		if gnssErr != nil {
+			glog.Warningf("HardwareConfig GNSS device detection failed: %v", gnssErr)
+		} else if gnssPort != "" {
+			glog.Infof("HardwareConfig GNSS device detected: %s (overriding ts2phc config)", gnssPort)
+			dprocess.gnssSerialPort = gnssPort
+		}
+
+		gnssInitCmds = dn.hardwareConfigManager.GetGNSSInitCommands(nodeProfile)
+		glog.Infof("HardwareConfig GNSS initialization added %d additional commands", len(gnssInitCmds))
+	}
+
+	if dprocess.gnssSerialPort == "" {
+		dprocess.gnssSerialPort = GPSDDefaultGNSSSerialPort
+		glog.Warningf("Setting GNSS serial port to %s", dprocess.gnssSerialPort)
+	}
+	gmInterface := dprocess.ifaces.GetLeadingInterface().Name
+	glog.Infof("Working with GNSS serial port %s, leading iface %s", dprocess.gnssSerialPort, gmInterface)
+
+	// Record ublox init results (MON-HW, etc.) to NodePtpDevice status.
+	// Replaces any previous "gnss" entries to avoid duplicates on re-init.
+	// Additionally store on HardwareConfigManager when that path is active.
+	gnssResultsFn := func(results []string) {
+		dn.hwconfigsMu.Lock()
+		defer dn.hwconfigsMu.Unlock()
+		// Remove previous gnss entries
+		filtered := (*dn.hwconfigs)[:0]
+		for _, hw := range *dn.hwconfigs {
+			if hw.DeviceID != "gnss" {
+				filtered = append(filtered, hw)
+			}
+		}
+		// Add current results
+		for _, result := range results {
+			filtered = append(filtered, ptpv1.HwConfig{
+				DeviceID: "gnss",
+				Status:   result,
+			})
+		}
+		*dn.hwconfigs = filtered
+	}
+
+	gpsdProcess := NewGpsdProcess(dprocess.gnssSerialPort, gmInterface, dprocess.messageTag, gnssInitCmds, gnssResultsFn, nodeProfile, dn.processManager.eventsIn, processConfigFor(dprocess, dprocess.clockType, dn.processManager.eventsIn))
+	dprocess.depProcess = append(dprocess.depProcess, gpsdProcess)
+	// init gpspipe
+	gpsPipeProcess := NewGpsPipeProcess(dprocess.messageTag, nodeProfile, dn.processManager.eventsIn)
+	dprocess.depProcess = append(dprocess.depProcess, gpsPipeProcess)
+	dprocess.conditions = map[process.Action]process.Condition{
+		process.ActionStart: process.OnProcessUp{
+			Source:     event.GPSD,
+			ConfigName: dprocess.configName,
+		},
+	}
+}
+
+func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.ClockType, dprocess *ptpProcess) error {
+	// TODO: Try to inject DPLL depProcess via plugin ?
+	var localMaxHoldoverOffSet uint64 = dpll.LocalMaxHoldoverOffSet
+	var localHoldoverTimeout uint64 = dpll.LocalHoldoverTimeout
+	var maxInSpecOffset uint64 = dpll.MaxInSpecOffset
+	var inSyncConditionTh uint64 = dpll.MaxInSpecOffset
+	var inSyncConditionTimes uint64 = 1
+	var flags dpll.Flag
+	var err error
+	sInSyncConditionTh, found1 := nodeProfile.PtpSettings["inSyncConditionThreshold"]
+	if found1 {
+		inSyncConditionTh, err = strconv.ParseUint(sInSyncConditionTh, 0, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse inSyncConditionThreshold: %s", err)
+		}
+	}
+
+	sInSyncConditionTim, found2 := (*nodeProfile).PtpSettings["inSyncConditionTimes"]
+	if found2 {
+		inSyncConditionTimes, err = strconv.ParseUint(sInSyncConditionTim, 0, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse inSyncConditionTimes: %s", err)
+		}
+	}
+
+	var clockID uint64
+	phaseOffsetPinFilter := map[string]string{}
+	// For T-BC mode with hardwareconfig, derive interfaces from hardwareconfig structure
+	// instead of analyzing ts2phc configuration file
+	var interfacesToUse config.IFaces
+	if profileClockType(nodeProfile) == TBC && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
+		interfacesToUse = dn.getInterfacesFromHardwareConfig(nodeProfile)
+		if len(interfacesToUse) > 0 {
+			glog.Infof("Using interfaces from hardwareconfig for T-BC profile %s: %v", *nodeProfile.Name, interfacesToUse)
+		} else {
+			glog.Warningf("Failed to derive interfaces from hardwareconfig for T-BC profile %s, falling back to ts2phc config", *nodeProfile.Name)
+			interfacesToUse = dprocess.ifaces
+		}
+	} else {
+		interfacesToUse = dprocess.ifaces
+	}
+
+	for _, iface := range interfacesToUse {
+		var eventSource []event.EventSource
+		if iface.Source == event.GNSS || iface.Source == event.PPS ||
+			(iface.Source == event.PTP4l && profileClockType(nodeProfile) == TBC) {
+			if nodeProfile.PtpSettings[dpll.PtpSettingsDpllIgnoreKey(iface.Name)] == "true" {
+				glog.Infof("Init dpll: Skipping dpll for %s", iface.Name)
+				continue
+			}
+
+			flags = 0 // Default to 0 = no flags set
+
+			glog.Info("Init dpll: ptp settings ", (*nodeProfile).PtpSettings)
+			for k, v := range (*nodeProfile).PtpSettings {
+				glog.Info("Init dpll: ptp kv ", k, " ", v)
+				if strings.Contains(k, strings.Join([]string{iface.Name, "phaseOffset"}, ".")) {
+					filterKey := strings.Split(k, ".")
+					property := filterKey[len(filterKey)-1]
+					phaseOffsetPinFilter[property] = v
+					glog.Infof("dpll phase offset filter property: %s[%s]=%s", iface.Name, property, v)
+					continue
+				}
+				var i uint64
+				i, err = strconv.ParseUint(v, 10, 64)
+				if err != nil {
+					continue
+				}
+				if k == dpll.LocalMaxHoldoverOffSetStr {
+					localMaxHoldoverOffSet = i
+				}
+				if k == dpll.LocalHoldoverTimeoutStr {
+					localHoldoverTimeout = i
+				}
+				if k == dpll.MaxInSpecOffsetStr {
+					maxInSpecOffset = i
+				}
+				if k == fmt.Sprintf("%s[%s]", dpll.ClockIdStr, iface.Name) {
+					clockID = i
+				}
+				if k == dpll.PtpSettingsDpllFlagsKey(iface.Name) {
+					flags = dpll.Flag(i)
+				}
+			}
+
+			// Try to get holdover parameters from HardwareConfig (new system)
+			// This takes precedence over plugin-provided values for better declarative configuration
+			profileName := ""
+			if nodeProfile.Name != nil {
+				profileName = *nodeProfile.Name
+			}
+			holdoverParams := dn.getHoldoverParameters(profileName, clockID)
+			if holdoverParams != nil {
+				// HardwareConfig provides holdover parameters - use them
+				maxInSpecOffset = holdoverParams.MaxInSpecOffset
+				localMaxHoldoverOffSet = holdoverParams.LocalMaxHoldoverOffset
+				localHoldoverTimeout = holdoverParams.LocalHoldoverTimeout
+				glog.Infof("Using holdover parameters from HardwareConfig for clock %#x: MaxInSpec=%dns, LocalMaxOffset=%dns, Timeout=%ds",
+					clockID, maxInSpecOffset, localMaxHoldoverOffSet, localHoldoverTimeout)
+			} else {
+				// Fall back to plugin/profile settings (backward compatibility)
+				glog.Infof("Using holdover parameters from profile/plugin for clock %#x: MaxInSpec=%dns, LocalMaxOffset=%dns, Timeout=%ds",
+					clockID, maxInSpecOffset, localMaxHoldoverOffSet, localHoldoverTimeout)
+			}
+
+			// Try to get DPLL flags from HardwareConfig (new system)
+			// This takes precedence over plugin-provided values
+			hwFlags := dn.getDPLLFlags(profileName, clockID)
+			if hwFlags != nil {
+				flags = *hwFlags
+				glog.Infof("Using DPLL flags from HardwareConfig for clock %#x: %d", clockID, flags)
+			}
+
+			// Hardware-slaved DPLLs (e.g. E830 CF cards, identified by
+			// FlagOnlyPhaseStatus) never perform holdover
+			if flags&dpll.FlagOnlyPhaseStatus == dpll.FlagOnlyPhaseStatus {
+				localMaxHoldoverOffSet = 0
+				localHoldoverTimeout = 1 //do not divide by zero in case it is ever used
+				maxInSpecOffset = 0
+				glog.Infof("Resetting holdover parameters for %s (FlagOnlyPhaseStatus): not applicable for hardware-slaved DPLLs", iface.Name)
+			}
+
+			eventSource = []event.EventSource{iface.Source}
+			// pass array of ifaces which has source + clockId -
+			// here we have multiple dpll objects identified by clock id
+			// depends on will be either PPS or  GNSS,
+			// ONLY the one with GNSS dependency will go to HOLDOVER
+			dpllDaemon := dpll.NewDpll(clockID, localMaxHoldoverOffSet, localHoldoverTimeout,
+				maxInSpecOffset, iface.Name, eventSource, dpll.NONE, dn.GetPhaseOffsetPinFilter(nodeProfile),
+				// Used only in T-BC in-sync condition:
+				inSyncConditionTh, inSyncConditionTimes, flags,
+				processConfigFor(dprocess, clockType, dn.processManager.eventsIn), nodeProfile)
+			glog.Infof("depending on %s", dpllDaemon.DependsOn())
+			// Set hardwareconfig handler if hardwareconfig manager is available
+			dpllDaemon.SetHardwareConfigHandler(func(devices []*dpllnl.DoDeviceGetReply) error {
+				return dn.hardwareConfigManager.ProcessDPLLDeviceNotifications(devices)
+			})
+			dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
+		}
+	}
+	return nil
+}
+
+// GetPhaseOffsetPinFilter returns a map of phase offset pin filters from the node profile.
 func (dn *Daemon) GetPhaseOffsetPinFilter(nodeProfile *ptpv1.PtpProfile) map[string]map[string]string {
 	phaseOffsetPinFilter := map[string]map[string]string{}
 	for k, v := range (*nodeProfile).PtpSettings {
 		if strings.Contains(k, "phaseOffsetFilter") {
 			filterKey := strings.Split(k, ".")
 			property := filterKey[len(filterKey)-1]
-			clockIdStr := filterKey[len(filterKey)-2]
-			if len(phaseOffsetPinFilter[clockIdStr]) == 0 {
-				phaseOffsetPinFilter[clockIdStr] = map[string]string{}
+			clockIDStr := filterKey[len(filterKey)-2]
+			if len(phaseOffsetPinFilter[clockIDStr]) == 0 {
+				phaseOffsetPinFilter[clockIDStr] = map[string]string{}
 			}
-			phaseOffsetPinFilter[clockIdStr][property] = v
+			phaseOffsetPinFilter[clockIDStr][property] = v
 			continue
 		}
 	}
 	return phaseOffsetPinFilter
 }
 
-// Add fifo scheduling if specified in nodeProfile
-func addScheduling(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
-	if nodeProfile.PtpSchedulingPolicy != nil && *nodeProfile.PtpSchedulingPolicy == "SCHED_FIFO" {
-		if nodeProfile.PtpSchedulingPriority == nil {
-			glog.Errorf("Priority must be set for SCHED_FIFO; using default scheduling.")
-			return cmdLine
-		}
-		priority := *nodeProfile.PtpSchedulingPriority
-		if priority < 1 || priority > 65 {
-			glog.Errorf("Invalid priority %d; using default scheduling.", priority)
-			return cmdLine
-		}
-		cmdLine = fmt.Sprintf("/bin/chrt -f %d %s", priority, cmdLine)
-		glog.Infof(cmdLine)
-		return cmdLine
+func getProfileName(profile *ptpv1.PtpProfile) string {
+	profileName := "<nil>"
+	if profile != nil && profile.Name != nil {
+		profileName = *profile.Name
 	}
-	return cmdLine
-}
-
-func processStatus(processName, messageTag string, status int64) {
-	cfgName := configNameFromMessageTag(messageTag)
-	glog.V(14).Infof("processStatus: process=%s config=%s status=%d", processName, cfgName, status)
-	UpdateProcessStatusMetrics(processName, cfgName, status)
-}
-
-// prepareTBCResources prepares cached resources for T-BC processing
-// This method caches expensive operations that would otherwise be repeated 16x/second
-func (p *ptpProcess) prepareTBCResources() {
-	// Cache hardwareconfig availability (expensive lookup)
-	if p.dn != nil {
-		vTbcHasHardwareConfig = p.dn.hardwareConfigManager.HasHardwareConfigForProfile(&p.nodeProfile)
-	}
-
-	// Cache PTP state detector instance (expensive creation)
-	if vTbcHasHardwareConfig {
-		p.tbcStateDetector = p.dn.hardwareConfigManager.GetPTPStateDetector()
-	}
-}
-
-// tBCTransitionCheck performs ultra-fast T-BC transition detection (called 16x/second)
-// Uses cached values and optimized processing to minimize performance impact
-func (p *ptpProcess) tBCTransitionCheck(output string, pm *plugin.PluginManager) {
-	// Use cached hardwareconfig availability (no expensive lookups)
-	if vTbcHasHardwareConfig && p.tbcStateDetector != nil {
-		// Hardwareconfig path: Use cached PTP state detector
-		p.processTBCTransitionHardwareConfig(output)
-	} else {
-		// Legacy path: Use optimized string matching
-		p.processTBCTransitionLegacy(output, pm)
-	}
-}
-
-// checkOffsetFilterAndTransition checks if offset filter conditions are met and transitions to LOCKED state
-// This function is called for every log line when processing the TR ports config file.
-// It collects offset samples and only transitions when the filter is full and mean offset is below threshold.
-// The transitionAction callback is called when conditions are met to perform the actual transition.
-func (p *ptpProcess) checkOffsetFilterAndTransition(transitionAction func()) {
-	if p.configName != p.tBCAttributes.trPortsConfigFile || p.tBCAttributes.offsetFilter == nil {
-		return
-	}
-
-	p.tBCAttributes.offsetFilter.Insert(math.Abs(p.offset))
-	if p.tBCAttributes.lastReportedState == event.PTP_LOCKED &&
-		p.tBCAttributes.lastAppliedState != event.PTP_LOCKED {
-		// Require filter to be full before sending event to ensure meaningful filtering
-		if p.tBCAttributes.offsetFilter.IsFull() {
-			tempOffset := p.tBCAttributes.offsetFilter.Mean()
-			glog.Infof("Filtered Offset: %f, threshold %f", tempOffset, p.tBCAttributes.offsetThreshold)
-			if tempOffset < p.tBCAttributes.offsetThreshold {
-				glog.Infof("T-BC MOVE TO NORMAL STATE")
-				transitionAction()
-				p.tBCAttributes.lastAppliedState = event.PTP_LOCKED
-			}
-		}
-	}
-}
-
-// sendPtp4lOffsetEvent inserts the current ptp4l offset into a sliding window and,
-// once per second, sends the window average to the T-BC state machine via the event
-// channel. This gives tbc.go visibility into ptp4l-level offsets for
-// freeRunCondition and getLargestOffset calculations.
-func (p *ptpProcess) sendPtp4lOffsetEvent() {
-	if p.configName != p.tBCAttributes.trPortsConfigFile || p.tBCAttributes.offsetEventWindow == nil {
-		return
-	}
-	p.tBCAttributes.offsetEventWindow.Insert(p.offset)
-
-	nowSec := time.Now().Unix()
-	if nowSec == p.tBCAttributes.lastOffsetEventSec {
-		return
-	}
-	p.tBCAttributes.lastOffsetEventSec = nowSec
-
-	avgOffset := int64(p.tBCAttributes.offsetEventWindow.Mean())
-	glog.Infof("PTP4l offset event: %d", avgOffset)
-	select {
-	case p.eventCh <- event.Event{
-		Source:    event.PTP4l,
-		CfgName:   p.configName,
-		IFace:     p.tBCAttributes.activeTRPort(),
-		ClockType: p.clockType,
-		Time:      time.Now().UnixMilli(),
-		Data: &event.PTPData{
-			State: p.tBCAttributes.lastReportedState,
-			Values: map[event.ValueType]any{
-				event.OFFSET: avgOffset,
-			},
-		},
-	}:
-	default:
-	}
-}
-
-// processTBCTransitionHardwareConfig handles T-BC transitions using hardwareconfig.
-// Tracks per-port state and derives aggregate state:
-//   - Any upstream port in SLAVE -> aggregate LOCKED
-//   - All upstream ports lost SLAVE -> aggregate LOST (enter holdover)
-//
-// During a switchover (one port loses SLAVE, BMCA promotes the other), there is a
-// brief gap where no port is SLAVE. Entering holdover during this gap is correct
-// because the DPLL is not being disciplined by PTP. When the new port reaches SLAVE,
-// the offset filter will confirm stability before exiting holdover.
-func (p *ptpProcess) processTBCTransitionHardwareConfig(output string) {
-	portName, conditionType := p.tbcStateDetector.DetectStateChange(output)
-
-	switch conditionType {
-	case hardwareconfig.ConditionTypeLocked:
-		p.tBCAttributes.perPortState[portName] = event.PTP_LOCKED
-		p.tBCAttributes.activePort = portName
-		p.tBCAttributes.lastReportedState = event.PTP_LOCKED
-		glog.Infof("T-BC port %s LOCKED (reported state)", portName)
-		p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
-
-	case hardwareconfig.ConditionTypeLost:
-		p.tBCAttributes.perPortState[portName] = event.PTP_FREERUN
-		glog.Infof("T-BC port %s lost SLAVE", portName)
-
-		if p.tBCAttributes.allPortsLost() {
-			if err := p.dn.hardwareConfigManager.ApplyConditionForProfile(&p.nodeProfile, hardwareconfig.ConditionTypeLost); err != nil {
-				glog.Errorf("Failed to apply hardware config for '%s' condition: %v", hardwareconfig.ConditionTypeLost, err)
-			} else {
-				glog.Infof("Successfully applied hardware config for '%s' condition", hardwareconfig.ConditionTypeLost)
-			}
-
-			p.tBCAttributes.lastReportedState = event.PTP_FREERUN
-			p.tBCAttributes.activePort = ""
-			p.tBCAttributes.offsetFilter = nil
-			glog.Info("T-BC all upstream ports lost - MOVE TO HOLDOVER")
-			p.sendPtp4lEvent()
-			p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
-		}
-	}
-
-	p.checkOffsetFilterAndTransition(func() {
-		if err := p.dn.hardwareConfigManager.ApplyConditionForProfile(&p.nodeProfile, hardwareconfig.ConditionTypeLocked); err != nil {
-			glog.Errorf("Failed to apply hardware config for '%s' condition: %v", hardwareconfig.ConditionTypeLocked, err)
-		} else {
-			glog.Infof("Successfully applied hardware config for '%s' condition", hardwareconfig.ConditionTypeLocked)
-		}
-		p.sendPtp4lEvent()
-		if p.dn != nil {
-			p.dn.NotifyTs2phcSourceQualified(p.nodeProfile.Name)
-		}
-	})
-}
-
-// processTBCTransitionLegacy is the original implementation as ultimate fallback
-func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.PluginManager) {
-	portMatched := false
-	for _, iface := range p.tBCAttributes.trIfaceNames {
-		if strings.Contains(output, iface) {
-			portMatched = true
-			break
-		}
-	}
-	if portMatched {
-		if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
-			portName := parser.ExtractPortName(output)
-			if portName != "" {
-				if len(p.tBCAttributes.trIfaceNames) > 1 && !slices.Contains(p.tBCAttributes.trIfaceNames, portName) {
-					glog.Warningf("Ignoring non-TR port in legacy MASTER_CLOCK_SELECTED event: %s", portName)
-				} else {
-					p.tBCAttributes.activePort = portName
-					glog.Infof("T-BC active upstream port: %s", portName)
-				}
-			}
-			p.tBCAttributes.lastReportedState = event.PTP_LOCKED
-			p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
-		} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
-			strings.Contains(output, "SLAVE to") {
-			pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
-			p.tBCAttributes.lastReportedState = event.PTP_FREERUN
-			glog.Info("T-BC MOVE TO HOLDOVER")
-			p.sendPtp4lEvent()
-			p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
-			p.tBCAttributes.offsetFilter = nil
-		}
-	}
-
-	p.checkOffsetFilterAndTransition(func() {
-		pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
-		p.sendPtp4lEvent()
-		if p.dn != nil {
-			p.dn.NotifyTs2phcSourceQualified(p.nodeProfile.Name)
-		}
-	})
-}
-
-// cmdRun runs given ptpProcess and restarts on errors
-// processOutput handles shared per-line processing for all process types:
-// chronyd prefix, plugin processing, clock ID replacement, log filtering,
-// metrics extraction, TBC transition check, and HA failover.
-func (p *ptpProcess) processOutput(output string, pm *plugin.PluginManager, profileClockType string) string {
-	if p.name == chronydProcessName {
-		output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
-	}
-	output = pm.ProcessLog(p.name, output)
-	output = p.replaceClockID(output)
-	printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
-	p.processPTPMetrics(output)
-	if p.name == ptp4lProcessName {
-		if profileClockType == TBC {
-			p.tBCTransitionCheck(output, pm)
-		}
-	} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-		p.announceHAFailOver(output)
-	}
-	return output
-}
-
-func (p *ptpProcess) cmdRun(pm *plugin.PluginManager) {
-	cmd := p.cmd
-	stopped := p.getAndSetStopped(false)
-	if !stopped {
-		glog.Infof("%s is already running", p.name)
-		return
-	}
-	doneCh := make(chan struct{})
-	defer func() {
-		p.exitCh <- true
-	}()
-
-	profileClockType, pctFound := p.nodeProfile.PtpSettings["clockType"]
-	if !pctFound {
-		profileClockType = string(event.ClockUnset)
-	}
-	for {
-		glog.Infof("Starting %s...", p.name)
-		glog.Infof("%s cmd: %+v", p.name, cmd)
-
-		cmdReader, err := cmd.StdoutPipe()
-		if err != nil {
-			glog.Errorf("CmdRun() error creating StdoutPipe for %s: %v", p.name, err)
-			break
-		}
-
-		cmd.Stderr = cmd.Stdout
-
-		scanner := bufio.NewScanner(cmdReader)
-		processStatus(p.name, p.messageTag, PtpProcessUp)
-		go func() {
-			for scanner.Scan() {
-				p.processOutput(scanner.Text(), pm, profileClockType)
-			}
-			doneCh <- struct{}{}
-		}()
-
-		if !p.Stopped() {
-			glog.Infof("starting %s...", p.name)
-			p.cmd = cmd
-			err = cmd.Start()
-			if err != nil {
-				glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
-			}
-
-			<-doneCh
-			err = cmd.Wait()
-
-			glog.Infof("done waiting for %s...", p.name)
-			if err != nil {
-				glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
-			}
-			processStatus(p.name, p.messageTag, PtpProcessDown)
-			p.updateGMStatusOnProcessDown(p.name)
-		}
-
-		if profileClockType == TBC && p.name == ptp4lProcessName {
-			pm.AfterRunPTPCommand(&p.nodeProfile, "reset-to-default")
-		}
-		time.Sleep(connectionRetryInterval)
-		if p.Stopped() {
-			glog.Infof("Not recreating %s...", p.name)
-			break
-		} else {
-			glog.Infof("Recreating %s...", p.name)
-			newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
-			cmd = newCmd
-		}
-	}
-}
-
-// for ts2phc along with processing metrics need to identify event
-func (p *ptpProcess) processPTPMetrics(output string) {
-	state := event.PTP_FREERUN
-	if p.logParser != nil {
-		processWithParser(p, output)
-	} else if p.name == syncEProcessName {
-		configName := strings.Replace(strings.Replace(p.messageTag, "]", "", 1), "[", "", 1)
-		if configName == "" {
-			return
-		}
-		logEntry := synce.ParseLog(output)
-		p.ProcessSynceEvents(logEntry)
-	} else {
-		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
-		p.hasCollectedMetrics = true
-		p.offset = ptpOffset
-		if iface != "" { // for ptp4l/phc2sys this function only update metrics
-			var values map[event.ValueType]interface{}
-			ifaceName := masterOffsetIface.getByAlias(configName, iface).name
-			if iface != clockRealTime && p.name == ts2phcProcessName {
-				eventSource := p.ifaces.GetEventSource(ifaceName)
-				if eventSource == event.GNSS {
-					values = map[event.ValueType]interface{}{event.NMEA_STATUS: int64(1)}
-				}
-			}
-			// ts2phc has to be handled differently since it announce holdover state when gnss is lost
-			// TODO: verify how 1pps is handled when lost
-			switch clockState {
-			case FREERUN:
-				state = event.PTP_FREERUN
-			case LOCKED:
-				state = event.PTP_LOCKED
-			case HOLDOVER:
-				state = event.PTP_HOLDOVER // consider s1 state as holdover,this passed to event to create metrics and events
-			}
-			p.ProcessTs2PhcEvents(ptpOffset, source, ifaceName, state, values)
-		}
-	}
-}
-
-// cmdStop stops ptpProcess launched by cmdRun.
-// Only one caller owns the stop: getAndSetStopped prevents concurrent waiters
-// on the unbuffered exitCh.
-func (p *ptpProcess) cmdStop() {
-	glog.Infof("stopping %s...", p.name)
-	cmd := p.cmd
-	if cmd == nil {
-		glog.Infof("cmdStop is nil %s", p.name)
-		return
-	}
-	// getAndSetStopped returns the previous value: true means already stopped.
-	if p.getAndSetStopped(true) {
-		glog.Infof("%s is already stopped", p.name)
-		return
-	}
-	glog.Infof("%s setStopped true", p.name)
-
-	if cmd.Process != nil {
-		glog.Infof("Sending TERM to (%s) PID: %d", p.name, cmd.Process.Pid)
-		err := cmd.Process.Signal(syscall.SIGTERM)
-		if err != nil {
-			// If the process is already terminated, we will get an error here
-			glog.Errorf("failed to send SIGTERM to %s (%d): %v", p.name, cmd.Process.Pid, err)
-			return
-		}
-	} else {
-		glog.Infof("not Sending TERM to (%s) which is nil", p.name)
-	}
-	<-p.exitCh
-}
-
-func (p *ptpProcess) cmdSetEnabled(enabled bool) {
-	glog.Infof("cmdSetEnabled %s set to %t", p.name, enabled)
-	switch p.name {
-	case chronydProcessName, phc2sysProcessName, ts2phcProcessName:
-		p.cmdSetEnabledMutex.Lock()
-		defer p.cmdSetEnabledMutex.Unlock()
-		if enabled {
-			// Respect the delayed-startup gate. ntpfailover may call enable during
-			// chronyd's first log line, long before PHC/UTC offset is ready; starting
-			// then makes phc2sys exit ("failed to get UTC offset") and cmdRun
-			// crash-loops it. Release paths (HandleDelayedPhc2sysStartup /
-			// TryReleaseDelayedTs2phc) clear skipInitialStartup before calling us.
-			if p.skipInitialStartup != "" {
-				glog.Infof("cmdSetEnabled %s deferred: %s", p.name, p.skipInitialStartup)
-				return
-			}
-			if p.Stopped() && p.cmd != nil {
-				cmd := p.cmd
-				newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
-				p.cmd = newCmd
-				go p.cmdRun(&p.dn.pluginManager)
-			}
-		} else {
-			// Never block the caller on exitCh. ProcessLog (and thus ntpfailover)
-			// runs on the process stdout scanner; a synchronous cmdStop from that
-			// path deadlocks because exitCh is only signaled after the scanner ends.
-			go p.cmdStop()
-		}
-	default:
-		glog.Warningf("cmdSetEnabled called for unhandled process %s", p.name)
-	}
-}
-
-// getPTPThreshold resolves the effective PtpClockThreshold for a profile.
-// MinOffsetThreshold is deprecated and is never populated on the returned
-// value (regardless of what the profile explicitly configures): nothing in
-// np-linuxptp-daemon reads it anymore, since offset evaluation only compares
-// abs(offset) < MaxOffsetThreshold.
-func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
-	if nodeProfile.PtpClockThreshold != nil {
-		return &ptpv1.PtpClockThreshold{
-			HoldOverTimeout:    nodeProfile.PtpClockThreshold.HoldOverTimeout,
-			MaxOffsetThreshold: nodeProfile.PtpClockThreshold.MaxOffsetThreshold,
-		}
-	} else if isNtpFailoverEnabled(nodeProfile) {
-		return &ptpv1.PtpClockThreshold{
-			HoldOverTimeout:    5,
-			MaxOffsetThreshold: 1000,
-		}
-	}
-	return &ptpv1.PtpClockThreshold{
-		HoldOverTimeout:    5,
-		MaxOffsetThreshold: 100,
-	}
+	return profileName
 }
 
 // resolvePTPThreshold resolves a profile's clock thresholds (max/min offset in
@@ -1978,202 +1136,20 @@ func resolvePTPThreshold(nodeProfile *ptpv1.PtpProfile) event.PtpClockThreshold 
 	}
 }
 
-func isNtpFailoverEnabled(nodeProfile *ptpv1.PtpProfile) bool {
-	pluginOpts, ok := nodeProfile.Plugins["ntpfailover"]
-	if !ok || pluginOpts == nil {
-		return false
-	}
-	var opts struct {
-		GnssFailover bool `json:"gnssFailover"`
-	}
-	if err := json.Unmarshal(pluginOpts.Raw, &opts); err != nil {
-		return false
-	}
-	return opts.GnssFailover
-}
-
-func (p *ptpProcess) MonitorEvent(offset float64, clockState string) {
-	// not implemented
-}
-
-// HandleDelayedPhc2sysStartup checks if phc2sys was delayed and if the current offset is within the 1s threshold, starts it.
-func (dn *Daemon) HandleDelayedPhc2sysStartup(source string, offset float64, profileName *string) {
-	if profileName == nil {
-		return
-	}
-	if !dn.delayedPhc2sys.Load() {
-		return
-	}
-	if math.Abs(offset) < 1000000000 {
-		dn.delayedStartupMu.Lock()
-		if !dn.delayedPhc2sys.Load() { // re-check under lock
-			dn.delayedStartupMu.Unlock()
-			return
-		}
-		for _, proc := range dn.processManager.findProcessesByName(phc2sysProcessName) {
-			if proc.skipInitialStartup == "" || proc.nodeProfile.Name == nil {
-				continue
-			}
-			// Match if the reporting process is in the same profile as phc2sys,
-			// or in one of phc2sys's HA-linked profiles. The latter handles the
-			// case where phc2sys is in a dedicated profile with no ptp4l of its
-			// own (e.g. test-dual-nic-bc-ha with haProfiles=master1,master2).
-			_, linkedByHA := proc.haProfile[*profileName]
-			if *proc.nodeProfile.Name == *profileName || linkedByHA {
-				glog.Infof("%s offset is %f (sub-second); enabling %s", source, offset, proc.name)
-				proc.skipInitialStartup = ""
-				proc.cmdSetEnabled(true)
-				dn.pluginManager.AfterRunPTPCommand(&proc.nodeProfile, proc.name)
-			}
-		}
-		// Only clear the daemon-wide flag once no phc2sys processes remain delayed.
-		phc2sysStillDelayed := false
-		for _, proc := range dn.processManager.findProcessesByName(phc2sysProcessName) {
-			if proc.skipInitialStartup != "" {
-				phc2sysStillDelayed = true
-				break
-			}
-		}
-		if !phc2sysStillDelayed {
-			dn.delayedPhc2sys.Store(false)
-		}
-		dn.delayedStartupMu.Unlock()
-		// phc2sys may have been the last blocker for a already-qualified ts2phc.
-		dn.TryReleaseDelayedTs2phc(profileName)
-	}
-}
-
-// NotifyTs2phcSourceQualified records that the T-BC DPLL-enable / offset-filter
-// gate has been met and attempts to start any delayed ts2phc processes.
-func (dn *Daemon) NotifyTs2phcSourceQualified(profileName *string) {
-	dn.ts2phcSourceQualified.Store(true)
-	dn.TryReleaseDelayedTs2phc(profileName)
-}
-
-// TryReleaseDelayedTs2phc starts delayed T-BC ts2phc processes once the
-// DPLL-enable gate has fired and phc2sys (if present) is no longer delayed.
-func (dn *Daemon) TryReleaseDelayedTs2phc(profileName *string) {
-	if !dn.delayedTs2phc.Load() || !dn.ts2phcSourceQualified.Load() {
-		return
-	}
-	dn.delayedStartupMu.Lock()
-	defer dn.delayedStartupMu.Unlock()
-	if !dn.delayedTs2phc.Load() || !dn.ts2phcSourceQualified.Load() {
-		return
-	}
-	if dn.phc2sysBlocksTs2phcLocked(profileName) {
-		glog.Infof("ts2phc remains delayed: waiting for phc2sys release before starting")
-		return
-	}
-	for _, proc := range dn.processManager.findProcessesByName(ts2phcProcessName) {
-		if proc.skipInitialStartup == "" || proc.nodeProfile.Name == nil {
-			continue
-		}
-		if profileName != nil && *proc.nodeProfile.Name != *profileName {
-			_, linkedByHA := proc.haProfile[*profileName]
-			if !linkedByHA {
-				continue
-			}
-		}
-		glog.Infof("PTPSourceQualified (DPLL-enable) met; enabling %s", proc.name)
-		proc.skipInitialStartup = ""
-		proc.cmdSetEnabled(true)
-		dn.pluginManager.AfterRunPTPCommand(&proc.nodeProfile, proc.name)
-	}
-	for _, proc := range dn.processManager.findProcessesByName(ts2phcProcessName) {
-		if proc.skipInitialStartup != "" {
-			return
-		}
-	}
-	dn.delayedTs2phc.Store(false)
-}
-
-// phc2sysBlocksTs2phcLocked reports whether a still-delayed phc2sys should
-// prevent ts2phc release. Caller must hold delayedStartupMu.
-func (dn *Daemon) phc2sysBlocksTs2phcLocked(profileName *string) bool {
-	for _, proc := range dn.processManager.findProcessesByName(phc2sysProcessName) {
-		if proc.skipInitialStartup == "" {
-			continue
-		}
-		if profileName == nil || proc.nodeProfile.Name == nil {
-			return true
-		}
-		if *proc.nodeProfile.Name == *profileName {
-			return true
-		}
-		if _, linkedByHA := proc.haProfile[*profileName]; linkedByHA {
-			return true
-		}
-	}
-	return false
-}
-
-func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string, state event.PTPState, extraValue map[event.ValueType]interface{}) {
-	var ptpState event.PTPState
-	ptpState = state
-	ptpOffsetInt64 := int64(ptpOffset)
-	// if state is HOLDOVER do not update the state
-	// transition to FREERUN if offset is outside configured thresholds
-	if shouldFreeRun(state, ptpOffset, p.ptpClockThreshold) {
-		ptpState = event.PTP_FREERUN
-	}
-
-	if source == ts2phcProcessName { // for ts2phc send it to event to create metrics and events
-		if p.dn != nil {
-			p.dn.HandleDelayedPhc2sysStartup(source, ptpOffset, p.nodeProfile.Name)
-		}
-		values := make(map[event.ValueType]interface{})
-
-		values[event.OFFSET] = ptpOffsetInt64
-		for k, v := range extraValue {
-			values[k] = v
-		}
-		select {
-		case p.eventCh <- event.Event{
-			Source:    event.TS2PHC,
-			CfgName:   p.configName,
-			IFace:     iface,
-			ClockType: p.clockType,
-			Time:      time.Now().UnixMilli(),
-			WriteToLog: func() bool { // only write to log if there is something extra
-				if len(extraValue) > 0 {
-					return true
-				}
-				return false
-			}(),
-			Reset: false,
-			Data: &event.PTPData{
-				State:  ptpState,
-				Values: values,
-			},
-		}:
-		default:
-		}
-
-	} else {
-		if iface != "" && iface != clockRealTime {
-			iface = alias.GetAlias(iface)
-		}
-		switch ptpState {
-		case event.PTP_LOCKED:
-			updateClockStateMetrics(p.name, iface, LOCKED, "")
-		case event.PTP_FREERUN:
-			updateClockStateMetrics(p.name, iface, FREERUN, "")
-		case event.PTP_HOLDOVER:
-			updateClockStateMetrics(p.name, iface, HOLDOVER, "")
-		}
-	}
-}
-
 func (dn *Daemon) ApplyHaProfiles(nodeProfile *ptpv1.PtpProfile, cmdLine string) (map[string][]string, string) {
 	lsProfiles := listHaProfiles(nodeProfile)
 	haProfiles := make(map[string][]string, len(lsProfiles))
 	updateHaProfileToSocketPath := make([]string, 0, len(lsProfiles))
 	for _, profileName := range lsProfiles {
 		for _, dmProcess := range dn.processManager.process {
-			if dmProcess.nodeProfile.Name != nil && *dmProcess.nodeProfile.Name == profileName {
-				updateHaProfileToSocketPath = append(updateHaProfileToSocketPath, "-z "+dmProcess.processSocketPath)
+			dmProcess, ok := dmProcess.(*ptpProcess)
+			if !ok {
+				continue
+			}
+			if profile := dmProcess.Profile(); profile != nil && profile.Name != nil && dmProcess.Profile().Name != nil && *dmProcess.Profile().Name == profileName {
+				updateHaProfileToSocketPath = append(updateHaProfileToSocketPath, "-z "+dmProcess.socketPath)
 				var ifaces []string
+
 				for _, iface := range dmProcess.ifaces {
 					ifaces = append(ifaces, iface.Name)
 				}
@@ -2199,373 +1175,27 @@ func listHaProfiles(nodeProfile *ptpv1.PtpProfile) (haProfiles []string) {
 	return
 }
 
-func (p *ptpProcess) announceHAFailOver(output string) {
-	defer func() {
-		if r := recover(); r != nil {
-			glog.Errorf("Recovered in f %#v", r)
-		}
-	}()
-	var activeIFace string
-	var match []string
-	// selecting ens2f2 as out-of-domain source clock - 0
-	// selecting ens2f0 as domain source clock - 1
-	domainState, activeState := failOverIndicator(output, len(p.haProfile))
-
-	if domainState == 1 {
-		match = haInDomainRegEx.FindStringSubmatch(output)
-	} else if domainState == 0 && activeState == 1 {
-		match = haOutDomainRegEx.FindStringSubmatch(output)
-	} else {
-		return
+// haLinkedPtp4lConfigNames returns ptp4l config names for profiles listed in
+// this profile's haProfiles setting. The HA ptp4l processes must already exist.
+func (dn *Daemon) haLinkedPtp4lConfigNames(nodeProfile *ptpv1.PtpProfile) []string {
+	if dn == nil || dn.processManager == nil {
+		return nil
 	}
-
-	if match != nil {
-		activeIFace = match[1]
-	} else {
-		glog.Errorf("couldn't retrieve interface name from fail over logs %s\n", output)
-		return
-	}
-	// find profile name and construct the log-out and metrics
-	var currentProfile string
-	var inActiveProfiles []string
-	for profile, ifaces := range p.haProfile {
-		for _, iface := range ifaces {
-			if iface == activeIFace {
-				currentProfile = profile
-				break
+	var cfgs []string
+	for _, profileName := range listHaProfiles(nodeProfile) {
+		for _, proc := range dn.processManager.process {
+			if proc.Name() != ptp4lProcessName {
+				continue
 			}
-		}
-		// mark all other profiles as inactive
-		if currentProfile != profile && activeState == 1 {
-			inActiveProfiles = append(inActiveProfiles, profile)
-		}
-	}
-	// log both active and inactive profiles
-	logString := []string{fmt.Sprintf("%s[%d]:[%s] ptp_ha_profile %s state %d\n", p.name, time.Now().Unix(), p.configName, currentProfile, activeState)}
-	for _, inActive := range inActiveProfiles {
-		logString = append(logString, fmt.Sprintf("%s[%d]:[%s] ptp_ha_profile %s state %d\n", p.name, time.Now().Unix(), p.configName, inActive, 0))
-	}
-	for _, logProfile := range logString {
-		fmt.Printf("%s", logProfile)
-	}
-	UpdatePTPHAMetrics(currentProfile, inActiveProfiles, activeState)
-}
-
-// 1= In domain 0 out of domain
-// All the profiles are in domain for their own domain.
-// If there are multiple domains/profiles, then both are active in their own domain, and one of them is also active out of domain
-// returns domain state and activeState 3 and 1 = Active,2 is inActive
-func failOverIndicator(output string, count int) (int64, int64) {
-	if strings.Contains(output, HAInDomainIndicator) { // when single profile then it's always 1
-		if count == 1 {
-			return 1, 1 // 1= in ; 1= active profile =3
-		} else {
-			return 1, 0 // 1= in ,1= inactive ==2
-		}
-	} else if strings.Contains(output, HAOutOfDomainIndicator) {
-		return 0, 1 //0=out; 1=active == 1
-	}
-	return 0, 0
-}
-
-// linuxptp 4.2 uses ptp device id ; this function will replace the ptp device id by the interface name
-func (p *ptpProcess) replaceClockID(input string) (output string) {
-	if p.name != ts2phcProcessName {
-		return input
-	}
-	// replace only for value with offset
-	if indx := strings.Index(input, offset); indx < 0 {
-		return input
-	}
-	// Replace all occurrences of the pattern with the replacement string
-	// ts2phc[1896327.319]: [ts2phc.0.config] dev/ptp4  offset    -1 s2 freq      -2
-	// Find the first match
-	match := clockIDRegEx.FindStringSubmatch(input)
-	if match == nil {
-		return input
-	}
-	// Extract the captured interface string (group 1)
-	iface := p.ifaces.GetPhcID2IFace(match[0])
-	// Fallback rationale:
-	// In some cases the ts2phc log may reference a PHC device that isn't yet
-	// present in this process' PHC->iface map (e.g., early logs before map build
-	// or when ts2phc tracks an iface not listed in ptp4lConf). To avoid
-	// mislabeling when multiple ts2phc-capable ifaces exist, we resolve the PHC
-	// by scanning all PTP-capable NICs and matching their PHC IDs.
-	if iface == match[0] || iface == "" {
-		glog.Infof("Fallback to discover PTP devices to resolve PHC ID for %s", match[0])
-		if nics, err := ptpnetwork.DiscoverPTPDevices(); err == nil {
-			for _, dev := range nics {
-				if ptpnetwork.GetPhcId(dev) == match[0] {
-					iface = dev
-					// Persist mapping so future lookups don't need fallback
-					updated := false
-					for idx := range p.ifaces {
-						if p.ifaces[idx].Name == dev {
-							p.ifaces[idx].PhcId = match[0]
-							updated = true
-							break
-						}
-					}
-					if !updated {
-						p.ifaces.Add(config.Iface{Name: dev, PhcId: match[0]})
-					}
-					break
-				}
+			profile := proc.Profile()
+			if profile == nil || profile.Name == nil || *profile.Name != profileName {
+				continue
 			}
-		}
-	}
-	if iface == "" || strings.HasPrefix(iface, "/dev/ptp") {
-		return input
-	}
-
-	output = clockIDRegEx.ReplaceAllString(input, iface)
-	return output
-}
-
-// updateGMStatusOnProcessDown send events when  ts2phc process is down by
-// send event to EventHandler
-func (p *ptpProcess) updateGMStatusOnProcessDown(process string) {
-	// need to update GM status for  following process kill for  ts2phc
-	if process == ts2phcProcessName {
-		// ts2phc process dead should update GM-STATUS
-		// Reset the entire event subsystem
-		// (this nullifies the remaining pieces in the event data if ts2phc was killed during ptp profile change)
-		select {
-		case p.eventCh <- event.Event{
-			Source:  event.TS2PHC,
-			CfgName: p.configName,
-			Reset:   true,
-		}:
-		default:
-		}
-	}
-}
-
-func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
-	//                                          STATE  VALUE  DEVICE   SOURCE EXTSOURCE
-	//------------------------------------------------------------------------------------
-	// synce4l[627685.138]: [synce4l.0.config] LOCKED   0     synce1            GNSS
-	// synce4l[627685.138]: [synce4l.0.config] LOCKED   0     synce1  ens7f0
-	// synce4l[627602.593]: [synce4l.0.config] EXT_QL  255    synce1  ens7f0
-	// synce4l[627602.593]: [synce4l.0.config] QL  255    synce1  ens7f0
-	// synce4l[627602.593]: [synce4l.0.config] CLOCK_QUALITY  PRS    synce1  ens7f0
-	// synce4l[627602.540]: [synce4l.0.config] LOCKED   0     synce1
-
-	extraValue := map[event.ValueType]interface{}{}
-	state := event.PTP_UNKNOWN
-
-	clockQuality := ""
-	iface := ""
-
-	// synce4l[627602.540]: [synce4l.0.config] LOCKED   0     synce1
-	if logEntry.State != nil && logEntry.Source != nil {
-		if sDeviceConfig := p.SyncEDeviceByInterface(*logEntry.Source); sDeviceConfig != nil {
-			extraValue[event.DEVICE] = sDeviceConfig.Name
-			extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
-			iface = *logEntry.Source
-			tState := synce.StringToEECState(strings.ReplaceAll(*logEntry.State, "EEC_LOCKED_HO_ACQ", "EEC_LOCKED"))
-			glog.Infof("STATE %s", tState)
-			state = tState.ToPTPState()
-			sDeviceConfig.LastClockState = state
-			extraValue[event.EEC_STATE] = *logEntry.State
-		}
-	} else if logEntry.State == nil && logEntry.Source != nil && (logEntry.QL != synce.QL_DEFAULT_SSM || logEntry.ExtQl != synce.QL_DEFAULT_SSM) {
-		if sDeviceConfig := p.SyncEDeviceByInterface(*logEntry.Source); sDeviceConfig != nil {
-			iface = *logEntry.Source
-			// now decide on clock quality
-			if sDeviceConfig.ExtendedTlv == synce.ExtendedTLV_DISABLED && logEntry.QL != synce.QL_DEFAULT_SSM {
-				extraValue[event.DEVICE] = sDeviceConfig.Name
-				extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
-				extraValue[event.QL] = logEntry.QL
-				sDeviceConfig.LastQLState[*logEntry.Source] = &synce.QualityLevelInfo{
-					Priority:    0,
-					SSM:         logEntry.QL,
-					ExtendedSSM: synce.QL_DEFAULT_ENHSSM,
-				}
-				clockQuality, _ = sDeviceConfig.ClockQuality(synce.QualityLevelInfo{
-					Priority:    0,
-					SSM:         logEntry.QL,
-					ExtendedSSM: 0,
-				})
-				state = sDeviceConfig.LastClockState
-				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", logEntry.QL)
-				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.QL_DEFAULT_ENHSSM)
-				UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.QL_DEFAULT_ENHSSM))
-			} else if sDeviceConfig.ExtendedTlv == synce.ExtendedTLV_ENABLED {
-				var lastQLState *synce.QualityLevelInfo
-				var ok bool
-				iface = *logEntry.Source
-				if lastQLState, ok = sDeviceConfig.LastQLState[*logEntry.Source]; !ok || lastQLState == nil {
-					lastQLState = &synce.QualityLevelInfo{
-						Priority:    0,
-						SSM:         logEntry.QL,
-						ExtendedSSM: logEntry.ExtQl,
-					}
-					sDeviceConfig.LastQLState[*logEntry.Source] = lastQLState
-				}
-				if lastQLState.SSM != synce.QL_DEFAULT_SSM && logEntry.ExtQl != synce.QL_DEFAULT_SSM { // then have both ql
-					extraValue[event.NETWORK_OPTION] = sDeviceConfig.NetworkOption
-					extraValue[event.DEVICE] = sDeviceConfig.Name
-					extraValue[event.EXT_QL] = logEntry.ExtQl
-					extraValue[event.QL] = lastQLState.SSM
-					sDeviceConfig.LastQLState[*logEntry.Source].ExtendedSSM = logEntry.ExtQl
-					clockQuality, _ = sDeviceConfig.ClockQuality(synce.QualityLevelInfo{
-						SSM:         lastQLState.SSM,
-						ExtendedSSM: lastQLState.ExtendedSSM,
-						Priority:    0,
-					})
-					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", lastQLState.SSM)
-					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", logEntry.ExtQl)
-					UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(lastQLState.SSM)+int(logEntry.ExtQl))
-
-					state = sDeviceConfig.LastClockState
-				} else if logEntry.QL != synce.QL_DEFAULT_SSM { // else we have only QL
-					lastQLState.SSM = logEntry.QL // wait for extTlv
-				}
+			if cfg := proc.ConfigName(); cfg != "" {
+				cfgs = append(cfgs, cfg)
 			}
-			if clockQuality != "" {
-				extraValue[event.CLOCK_QUALITY] = clockQuality
-			}
+			break
 		}
 	}
-	if len(extraValue) > 0 {
-		glog.Info(extraValue)
-		select {
-		case p.eventCh <- event.Event{
-			Source:  event.SYNCE,
-			CfgName: p.configName,
-			IFace:   iface,
-			Time:    time.Now().UnixMilli(),
-			WriteToLog: func() bool { // only write to log if there is something extra
-				if len(extraValue) > 0 {
-					return true
-				}
-				return false
-			}(),
-			Reset: false,
-			Data: &event.PTPData{
-				State:  state,
-				Values: extraValue,
-			},
-		}:
-		default:
-		}
-	}
-}
-
-func (p *ptpProcess) SyncEDeviceByInterface(iface string) *synce.Config {
-	if p.syncERelations != nil {
-		for _, sConfig := range p.syncERelations.Devices {
-			for _, name := range sConfig.Ifaces {
-				if name == iface {
-					return sConfig
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// SyncEDeviceByName ....
-func (p *ptpProcess) SyncEDeviceByName(name string) *synce.Config {
-	if p.syncERelations != nil {
-		for _, sConfig := range p.syncERelations.Devices {
-			if sConfig.Name == name {
-				return sConfig
-			}
-		}
-	}
-	return nil
-}
-
-func (dn *Daemon) stopAllProcesses() {
-	for _, p := range dn.processManager.process {
-		if p != nil {
-			glog.Infof("stopping process.... %s", p.name)
-			// Stop dependencies in reverse order first
-			if p.depProcess != nil {
-				for i := len(p.depProcess) - 1; i >= 0; i-- {
-					d := p.depProcess[i]
-					if d != nil {
-						glog.Infof("Stopping %s", d.Name())
-						d.CmdStop()
-						d = nil
-					}
-				}
-			}
-
-			// Stop parent process
-			glog.Infof("Stopping %s", p.name)
-			p.cmdStop()
-			p.depProcess = nil
-			p.hasCollectedMetrics = false
-
-			// Cleanup metrics
-			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName, p.messageTag)
-
-			if p.name == syncEProcessName && p.syncERelations != nil {
-				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
-			}
-
-			glog.Infof("Stopped %s", p.name)
-			p = nil
-		}
-	}
-}
-
-func (p *ptpProcess) getPTPClockID() (string, error) {
-	leadingNic, found := p.nodeProfile.PtpSettings["leadingInterface"]
-	if !found {
-		return "", fmt.Errorf("leadingInterface not found in ptpProfile")
-	}
-	key := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, leadingNic)
-	leadingClockID, found := p.nodeProfile.PtpSettings[key]
-	if !found {
-		return "", fmt.Errorf("leading interface ClockId not found in ptpProfile")
-	}
-	id, err := strconv.ParseUint(leadingClockID, 10, 64)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse clock ID string %s: %s", leadingClockID, err)
-	}
-	formatKey := fmt.Sprintf("clockIdFormat[%s]", leadingNic)
-	format, found := p.nodeProfile.PtpSettings[formatKey]
-	if found && format == "EUI-48" {
-		// MAC address format
-		return fmt.Sprintf("%06x.fffe.%06x",
-			id&0x0000ffffff000000>>24, id&0xffffff), nil
-	}
-	// Default format is EUE-64. For Intel WPC, it is EUI-64 alike, but not strictly compliant.
-	// So we will fix it
-	return fmt.Sprintf("%06x.fffe.%06x",
-		id&0xffffff0000000000>>40, id&0xffffff), nil
-}
-
-func (p *ptpProcess) sendPtp4lEvent() {
-	clockID, err := p.getPTPClockID()
-	if err != nil {
-		glog.Error(err)
-		clockID = "" // Set to empty string if error occurs
-	}
-	_ = clockID // Ensure linter sees the variable as used
-	select {
-	case p.eventCh <- event.Event{
-		Source:    event.PTP4l,
-		CfgName:   p.configName,
-		IFace:     p.tBCAttributes.activeTRPort(),
-		ClockType: p.clockType,
-		Time:      time.Now().UnixMilli(),
-		Reset:     false,
-		Data: &event.PTPData{
-			State:      p.tBCAttributes.lastReportedState,
-			SourceLost: p.tBCAttributes.lastReportedState != event.PTP_LOCKED,
-			OutOfSpec:  false,
-			Values: map[event.ValueType]any{
-				event.ControlledPortsConfig: p.tBCAttributes.ttPortsConfigFile,
-				event.ClockIDKey:            clockID,
-			},
-		},
-	}:
-	default:
-	}
+	return cfgs
 }

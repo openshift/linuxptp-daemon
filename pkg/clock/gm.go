@@ -94,7 +94,7 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 		return c.syncState
 	}
 
-	d := c.getData(ev.Source)
+	d := c.GetData(ev.Source)
 	d.AddEvent(ev)
 	d.UpdateState()
 	clockState := c.updateState()
@@ -132,7 +132,8 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 	return clockState
 }
 
-func (c *GM) getData(processName event.EventSource) *event.Data {
+// GetData returns the Data entry for the given process, creating one if needed.
+func (c *GM) GetData(processName event.EventSource) *event.Data {
 	for _, d := range c.data {
 		if d.ProcessName == processName {
 			return d
@@ -141,6 +142,11 @@ func (c *GM) getData(processName event.EventSource) *event.Data {
 	d := &event.Data{ProcessName: processName, State: event.PTP_UNKNOWN, Window: *utils.NewWindow(event.WindowSize)}
 	c.data = append(c.data, d)
 	return d
+}
+
+// ProcessData returns all clock data accumulated from processed events.
+func (c *GM) ProcessData() []*event.Data {
+	return c.data
 }
 
 func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {

@@ -8,16 +8,19 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // Common ubxtool line fixtures reused across multiple test cases.
 const (
-	navStatusHeader = "UBX-NAV-STATUS:\n"
-	navStatus3DFix  = "  iTOW 437000 gpsFix 3 flags 0xdd fixStat 0 flags2 0x08\n"
-	navClockHeader  = "UBX-NAV-CLOCK:\n"
+	navStatusHeader   = "UBX-NAV-STATUS:\n"
+	navStatus3DFix    = "  iTOW 437000 gpsFix 3 flags 0xdd fixStat 0 flags2 0x08\n"
+	navClockHeader    = "UBX-NAV-CLOCK:\n"
+	ttestTs2phcConfig = "ts2phc.0.config"
 )
 
 // TestGPSDIsOffsetInRange covers isOffsetInRange's abs(offset) <
@@ -254,9 +257,10 @@ func TestProcessGNSSLines(t *testing.T) {
 
 			eventCh := make(chan event.Event, 10)
 			g := &GPSD{
+				eventCh: eventCh,
 				processConfig: config.ProcessConfig{
 					EventChannel: eventCh,
-					ConfigName:   "ts2phc.0.config",
+					ConfigName:   ttestTs2phcConfig,
 					ClockType:    event.GM,
 					GMThreshold:  config.Threshold{Max: tt.maxOffset, Min: tt.minOffset},
 				},
@@ -288,4 +292,41 @@ func TestProcessGNSSLines(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewGpsdProcessStoresProcessConfig(t *testing.T) {
+	eventCh := make(chan event.Event, 1)
+	cfg := config.ProcessConfig{
+		ClockType:    event.GM,
+		ConfigName:   ttestTs2phcConfig,
+		EventChannel: eventCh,
+		GMThreshold:  config.Threshold{Max: 100},
+	}
+	g := NewGpsdProcess("/dev/gnss0", "ens2f0", "[ts2phc.0.config:{level}]", nil, nil, &ptpv1.PtpProfile{}, eventCh, cfg).(*GPSD)
+	g.offset = 9
+	assert.Equal(t, int64(100), g.processConfig.GMThreshold.Max)
+	assert.True(t, g.isOffsetInRange(), "offset 9 must be in range when Max is 100")
+	up, ok := g.Conditions()[process.ActionStart].(process.OnProcessUp)
+	require.True(t, ok)
+	assert.Equal(t, event.GPSPIPE, up.Source)
+	assert.Equal(t, cfg.ConfigName, up.ConfigName)
+}
+
+func TestProcessConfigForCopiesThresholds(t *testing.T) {
+	ch := make(chan event.Event, 1)
+	p := &ptpProcess{
+		ExecProcess: ExecProcess{configName: ttestTs2phcConfig},
+		ptpClockThreshold: &ptpv1.PtpClockThreshold{
+			MaxOffsetThreshold: 100,
+			MinOffsetThreshold: -100,
+			HoldOverTimeout:    5,
+		},
+	}
+	cfg := processConfigFor(p, event.GM, ch)
+	assert.Equal(t, event.GM, cfg.ClockType)
+	assert.Equal(t, ttestTs2phcConfig, cfg.ConfigName)
+	assert.Equal(t, int64(100), cfg.GMThreshold.Max)
+	assert.Equal(t, int64(-100), cfg.GMThreshold.Min)
+	assert.Equal(t, int64(5), cfg.GMThreshold.HoldOverTimeout)
+	assert.Equal(t, event.PTP_FREERUN, cfg.InitialPTPState)
 }

@@ -31,15 +31,17 @@ func TestReplayDualUpstreamLog(t *testing.T) {
 	InitializeOffsetMaps()
 
 	process := &ptpProcess{
-		name:       ptp4lProcessName,
-		configName: "ptp4l.1.config",
-		messageTag: "[ptp4l.1.config]",
+		ExecProcess: ExecProcess{
+			name:       ptp4lProcessName,
+			configName: "ptp4l.1.config",
+			messageTag: "[ptp4l.1.config]",
+			eventCh:    make(chan event.Event, 10),
+		},
 		ifaces: config.IFaces{
 			{Name: "eno8303"},
 			{Name: "eno8403"},
 		},
 		logParser: parser.NewPTP4LExtractor(),
-		eventCh:   make(chan event.Event, 10),
 	}
 
 	// --- Phase 1: Initial boot ---
@@ -96,16 +98,18 @@ func TestSourceLostOnListening(t *testing.T) {
 	InitializeOffsetMaps()
 
 	process := &ptpProcess{
-		name:       ptp4lProcessName,
-		configName: "ptp4l.0.config",
-		messageTag: "[ptp4l.0.config]",
-		clockType:  event.OC,
+		ExecProcess: ExecProcess{
+			name:       ptp4lProcessName,
+			configName: "ptp4l.0.config",
+			messageTag: "[ptp4l.0.config]",
+			eventCh:    make(chan event.Event, 10),
+		},
+		clockType: event.OC,
 		ifaces: config.IFaces{
 			{Name: "ens3f0"},
 			{Name: "ens3f1"},
 		},
 		logParser: parser.NewPTP4LExtractor(),
-		eventCh:   make(chan event.Event, 10),
 	}
 
 	// ens3f0 becomes the active slave; ens3f1 stays a passive backup in LISTENING.

@@ -1,16 +1,20 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
 const (
@@ -26,180 +30,227 @@ const (
 // This prevents race conditions when multiple gpspipe instances are created simultaneously
 var gpspipeGlobalMutex sync.Mutex
 
-type gpspipe struct {
+// GpsPipe is a process that pipes GPS data from serial port.
+type GpsPipe struct {
 	name       string
-	execMutex  sync.Mutex
+	execMutex  sync.RWMutex
 	cmdLine    string
-	cmd        *exec.Cmd
+	cmd        ProcessCmd
 	serialPort string
-	exitCh     chan struct{}
+	stopCh     chan struct{}
 	stopped    bool
 	messageTag string
+	eventCh    chan event.Event
+	state      process.State
+	profile    *ptpv1.PtpProfile
+	conditions map[process.Action]process.Condition
+	wg         sync.WaitGroup
+}
+
+// NewGpsPipeProcess creates a new GpsPipe process instance.
+func NewGpsPipeProcess(messageTag string, nodeProfile *ptpv1.PtpProfile, eventCh chan event.Event) process.Process {
+	cmdLine := addScheduling(nodeProfile, fmt.Sprintf("/usr/local/bin/gpspipe -v -R -l -o %s", GPSPIPE_SERIALPORT))
+	args := strings.Split(cmdLine, " ")
+
+	gp := &GpsPipe{
+		name:       GPSPIPE_PROCESSNAME,
+		cmdLine:    cmdLine,
+		cmd:        NewExecCmd(exec.Command(args[0], args[1:]...)),
+		serialPort: GPSPIPE_SERIALPORT,
+		messageTag: messageTag,
+		profile:    nodeProfile,
+		eventCh:    eventCh,
+		conditions: map[process.Action]process.Condition{},
+	}
+	return gp
 }
 
 // Name ... Process name
-func (gp *gpspipe) Name() string {
+func (gp *GpsPipe) Name() string {
 	return gp.name
 }
 
-// ExitCh ... exit channel
-func (gp *gpspipe) ExitCh() chan struct{} {
-	return gp.exitCh
+// ConfigName ...
+func (gp *GpsPipe) ConfigName() string {
+	return cfgNameFromMessageTag(gp.messageTag)
 }
 
-// SerialPort ... get SerialPort
-func (gp *gpspipe) SerialPort() string {
-	return gp.serialPort
+// Conditions returns the action conditions for the GpsPipe process.
+func (gp *GpsPipe) Conditions() map[process.Action]process.Condition {
+	return gp.conditions
 }
-func (gp *gpspipe) setStopped(val bool) {
+
+// SyncInitialState ...
+func (gp *GpsPipe) SyncInitialState() {}
+
+// State returns the current process state of GpsPipe.
+func (gp *GpsPipe) State() process.State {
+	gp.execMutex.RLock()
+	defer gp.execMutex.RUnlock()
+	return gp.state
+}
+
+func (gp *GpsPipe) setState(s process.State) {
 	gp.execMutex.Lock()
-	gp.stopped = val
+	gp.state = s
 	gp.execMutex.Unlock()
 }
 
-// Stopped ... check if gpspipe is stopped
-func (gp *gpspipe) Stopped() bool {
-	gp.execMutex.Lock()
-	me := gp.stopped
-	gp.execMutex.Unlock()
-	return me
+// Profile returns the PTP profile associated with GpsPipe.
+func (gp *GpsPipe) Profile() *ptpv1.PtpProfile {
+	return gp.profile
+}
+
+// ClockType returns the clock type for GpsPipe (always GM).
+func (gp *GpsPipe) ClockType() event.ClockType {
+	return event.GM
+}
+
+// DependentProcesses returns processes that depend on GpsPipe.
+func (gp *GpsPipe) DependentProcesses() []process.Process {
+	return []process.Process{}
 }
 
 // CmdStop ... stop gpspipe
-func (gp *gpspipe) CmdStop() {
+func (gp *GpsPipe) Stop() error {
 	defer func() {
-		// Clean up (delete) the named pipe, this ensures that the named pipe is deleted when the process is terminated
-		// no stale data is left in the named pipe
-		err := os.Remove(GPSPIPE_SERIALPORT)
+		pipePath := gp.serialPort
+		if pipePath == "" {
+			pipePath = GPSPIPE_SERIALPORT
+		}
+		err := os.Remove(pipePath)
 		if err != nil && !os.IsNotExist(err) {
-			glog.Errorf("Failed to delete named pipe: %s", GPSPIPE_SERIALPORT)
+			glog.Errorf("Failed to delete named pipe: %s", pipePath)
 		}
 		glog.Infof("Process %s terminated", gp.name)
 	}()
+
 	glog.Infof("stopping %s...", gp.name)
-
-	// Always set the stopped flag first
-	gp.setStopped(true)
-	gp.ProcessStatus(PtpProcessDown)
-
-	if gp.cmd == nil {
-		return
+	gp.execMutex.Lock()
+	st := gp.state
+	if st == process.Created || st == process.Stopping || st == process.Stopped || st == process.Dead {
+		gp.execMutex.Unlock()
+		glog.Infof("%s is already stopped", gp.name)
+		return nil
 	}
+	gp.state = process.Stopping
+	cmd := gp.cmd
+	stopCh := gp.stopCh
+	gp.execMutex.Unlock()
 
-	if gp.cmd.Process != nil {
-		glog.Infof("Sending TERM to (%s) PID: %d", gp.name, gp.cmd.Process.Pid)
-		signalErr := gp.cmd.Process.Signal(syscall.SIGTERM)
+	if stopCh != nil {
+		close(stopCh)
+	}
+	if cmd != nil {
+		glog.Infof("Sending TERM to (%s) PID: %d", gp.name, cmd.Pid())
+		signalErr := cmd.Signal(syscall.SIGTERM)
 		if signalErr != nil {
-			glog.Errorf("Failed to send term signal to named pipe: %s", GPSPIPE_SERIALPORT)
-			return
+			err := fmt.Errorf("failed to send term signal to named pipe: %s", GPSPIPE_SERIALPORT)
+			glog.Error(err)
+			return err
 		}
-
-		// Wait for process to terminate with timeout
-		done := make(chan error, 1)
-		go func() {
-			done <- gp.cmd.Wait()
-		}()
-
-		select {
-		case err := <-done:
-			if err != nil {
-				glog.Warningf("Process %s exited with error: %v", gp.name, err)
-			} else {
-				glog.Infof("Process %s terminated gracefully", gp.name)
-			}
-		case <-time.After(5 * time.Second):
-			glog.Warningf("Process %s did not terminate gracefully, sending SIGKILL", gp.name)
-			if err := gp.cmd.Process.Signal(syscall.SIGKILL); err != nil {
-				glog.Errorf("Failed to send SIGKILL to process %s: %v", gp.name, err)
-			}
-			// Add a second timeout to ensure Wait() doesn't hang forever
-			select {
-			case err := <-done:
-				glog.Warningf("Process %s exited after SIGKILL: %v", gp.name, err)
-			case <-time.After(2 * time.Second):
-				glog.Errorf("Process %s failed to exit even after SIGKILL", gp.name)
-			}
-		}
-
 	}
-
+	gp.wg.Wait()
+	return nil
 }
 
-// CmdInit ... initialize gpspipe
-func (gp *gpspipe) CmdInit() {
-	if gp.name == "" {
-		gp.name = GPSPIPE_PROCESSNAME
+// Start starts the GpsPipe process.
+func (gp *GpsPipe) Start(_ context.Context) error {
+	gp.execMutex.Lock()
+	st := gp.state
+	switch st {
+	case process.Starting, process.Running:
+		gp.execMutex.Unlock()
+		glog.Infof("%s is already running", gp.name)
+		return nil
+	case process.Stopping:
+		gp.execMutex.Unlock()
+		return fmt.Errorf("%s is stopping", gp.name)
 	}
-	gp.cmdLine = fmt.Sprintf("/usr/local/bin/gpspipe -v -R -l -o %s", gp.SerialPort())
+	gp.stopCh = make(chan struct{})
+	if gp.cmd != nil {
+		gp.cmd = gp.cmd.Clone()
+	}
+	gp.state = process.Starting
+	gp.execMutex.Unlock()
+
+	gp.run()
+	return nil
 }
 
-func (gp *gpspipe) ProcessStatus(status int64) {
+// ProcessStatus updates the process status for GpsPipe.
+func (gp *GpsPipe) ProcessStatus(status int64) {
 	processStatus(gp.name, gp.messageTag, status)
 }
 
-// CmdRun ... run gpspipe
-func (gp *gpspipe) CmdRun() {
-	defer func() {
-		select {
-		case gp.exitCh <- struct{}{}:
-		default:
-		}
-	}()
-
-	for {
-		// Check if we should stop before starting a new process
-		if gp.Stopped() {
+func (gp *GpsPipe) run() {
+	gp.wg.Add(1)
+	go func() {
+		defer gp.wg.Done()
+		defer func() {
+			if gp.State() == process.Stopping {
+				gp.setState(process.Stopped)
+				glog.Infof("Process %s terminated", gp.name)
+			} else {
+				gp.setState(process.Dead)
+				glog.Infof("Process %s exited unexpectedly", gp.name)
+			}
 			gp.ProcessStatus(PtpProcessDown)
-			glog.Infof("Process %s terminated and will not be restarted. Exiting.", gp.name)
-			break
+			sendProcessStatusEvent(gp.eventCh, event.GPSPIPE, cfgNameFromMessageTag(gp.messageTag), gp.ClockType(), "", PtpProcessDown)
+		}()
+
+		gp.execMutex.RLock()
+		cmd := gp.cmd
+		pipePath := gp.serialPort
+		gp.execMutex.RUnlock()
+		if cmd == nil {
+			glog.Errorf("run() nil cmd for %s", gp.Name())
+			return
+		}
+		if pipePath == "" {
+			pipePath = GPSPIPE_SERIALPORT
 		}
 
 		// Ensure named pipe is created before starting the process
 		// This handles cases where another process might have deleted the named pipe
-		if err := mkFifo(); err != nil {
+		if err := mkFifo(pipePath); err != nil {
 			glog.Errorf("Failed to create named pipe: %v", err)
 			return // Exit the process, let the daemon restart it, since mkFifo is critical for GNSS monitoring
 			// and it panics if it fails
 		}
 
-		gp.ProcessStatus(PtpProcessUp)
 		glog.Infof("Starting %s...", gp.Name())
-		glog.Infof("%s cmd: %+v", gp.Name(), gp.cmd)
-		gp.cmd.Stderr = os.Stderr
+		glog.Infof("%s cmd: %+v", gp.Name(), cmd)
+		cmd.SetStderr(os.Stderr)
 
-		// Start the process
-		err := gp.cmd.Start()
+		err := cmd.Start()
 		if err != nil {
 			glog.Errorf("CmdRun() error starting %s: %v", gp.Name(), err)
-			// Wait before retrying
-			time.Sleep(1 * time.Second)
-			continue
+			return
+		}
+		gp.execMutex.Lock()
+		if gp.state == process.Stopping {
+			gp.execMutex.Unlock()
+			_ = cmd.Signal(syscall.SIGTERM)
+		} else {
+			gp.state = process.Running
+			gp.execMutex.Unlock()
+			gp.ProcessStatus(PtpProcessUp)
+			sendProcessStatusEvent(gp.eventCh, event.GPSPIPE, cfgNameFromMessageTag(gp.messageTag), gp.ClockType(), "", PtpProcessUp)
 		}
 
-		// Wait for the process to complete using goroutine pattern
-		err = gp.cmd.Wait()
+		err = cmd.Wait()
 		if err != nil {
 			glog.Errorf("CmdRun() error waiting for %s: %v, attempting to restart", gp.Name(), err)
 		}
-
-		// Check if we should stop after process completes
-		if gp.Stopped() {
-			gp.ProcessStatus(PtpProcessDown)
-			glog.Infof("Process %s terminated and will not be restarted. Exiting.", gp.name)
-			break
-		}
-
-		// Create new command for restart
-		gp.cmd = exec.Command(gp.cmd.Args[0], gp.cmd.Args[1:]...)
-		time.Sleep(1 * time.Second)
-	}
+	}()
 }
 
 // mkFifo creates the named pipe if it doesn't exist, or removes and recreates it if it does
 // Retries up to 5 times with exponential backoff if the operation fails
 // Panics if all attempts fail as this is critical for GNSS monitoring (unless in test environment)
 // Uses global mutex to prevent race conditions when multiple gpspipe instances are created simultaneously
-func mkFifo() error {
+func mkFifo(pipePath string) error {
 	gpspipeGlobalMutex.Lock()
 	defer gpspipeGlobalMutex.Unlock()
 
@@ -207,12 +258,12 @@ func mkFifo() error {
 	const baseDelay = 100 * time.Millisecond
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		err := createNamedPipe()
+		err := createNamedPipe(pipePath)
 		if err == nil {
 			if attempt == 1 {
-				glog.Infof("Successfully created named pipe: %s", GPSPIPE_SERIALPORT)
+				glog.Infof("Successfully created named pipe: %s", pipePath)
 			} else {
-				glog.Infof("Successfully created named pipe: %s (after %d attempts)", GPSPIPE_SERIALPORT, attempt)
+				glog.Infof("Successfully created named pipe: %s (after %d attempts)", pipePath, attempt)
 			}
 			return nil
 		}
@@ -236,19 +287,20 @@ func mkFifo() error {
 }
 
 // createNamedPipe performs the actual named pipe creation logic
-func createNamedPipe() error {
+func createNamedPipe(pipePath string) error {
+	dir := filepath.Dir(pipePath)
 	// Step 1: Ensure the directory exists
-	if err := ensureDirectoryExists(); err != nil {
+	if err := ensureDirectoryExists(dir); err != nil {
 		return err
 	}
 
 	// Step 2: Remove existing named pipe if it exists
-	if err := removeExistingPipe(); err != nil {
+	if err := removeExistingPipe(pipePath); err != nil {
 		return err
 	}
 
 	// Step 3: Create the new named pipe
-	if err := createNewPipe(); err != nil {
+	if err := createNewPipe(pipePath); err != nil {
 		return err
 	}
 
@@ -257,28 +309,28 @@ func createNamedPipe() error {
 
 // ensureDirectoryExists creates the GPSD directory if it doesn't exist
 // If the directory exists but has issues, it will be removed and recreated
-func ensureDirectoryExists() error {
+func ensureDirectoryExists(dir string) error {
 	// Check if directory already exists
-	if _, err := os.Stat(GPSD_DIR); err == nil {
+	if _, err := os.Stat(dir); err == nil {
 		// Directory exists, check if it's valid
-		if isValidDirectory(GPSD_DIR) {
+		if isValidDirectory(dir) {
 			// Directory is valid, no need to recreate
 			return nil
 		}
 
 		// Directory exists but is invalid, remove it
-		glog.Infof("Directory %s exists but is invalid, removing and recreating", GPSD_DIR)
-		if err = os.RemoveAll(GPSD_DIR); err != nil {
-			return fmt.Errorf("failed to remove invalid directory %s: %v", GPSD_DIR, err)
+		glog.Infof("Directory %s exists but is invalid, removing and recreating", dir)
+		if err = os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("failed to remove invalid directory %s: %v", dir, err)
 		}
 	} else if !os.IsNotExist(err) {
 		// Some other error occurred (not just "doesn't exist")
-		return fmt.Errorf("failed to check directory %s: %v", GPSD_DIR, err)
+		return fmt.Errorf("failed to check directory %s: %v", dir, err)
 	}
 
 	// Create the directory (either it didn't exist or we just removed it)
-	if err := os.MkdirAll(GPSD_DIR, os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create directory %s: %v", GPSD_DIR, err)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create directory %s: %v", dir, err)
 	}
 
 	return nil
@@ -299,33 +351,27 @@ func isValidDirectory(dirPath string) bool {
 }
 
 // removeExistingPipe removes the named pipe if it already exists
-func removeExistingPipe() error {
+func removeExistingPipe(pipePath string) error {
 	// Check if named pipe exists
-	if _, err := os.Stat(GPSPIPE_SERIALPORT); err == nil {
+	if _, err := os.Stat(pipePath); err == nil {
 		// Named pipe exists, remove it
-		glog.Infof("Named pipe %s already exists, removing it", GPSPIPE_SERIALPORT)
-		err = os.Remove(GPSPIPE_SERIALPORT)
+		glog.Infof("Named pipe %s already exists, removing it", pipePath)
+		err = os.Remove(pipePath)
 		if err != nil {
-			return fmt.Errorf("failed to remove existing named pipe %s: %v", GPSPIPE_SERIALPORT, err)
+			return fmt.Errorf("failed to remove existing named pipe %s: %v", pipePath, err)
 		}
 	} else if !os.IsNotExist(err) {
 		// Some other error occurred (not just "doesn't exist")
-		return fmt.Errorf("failed to check named pipe %s: %v", GPSPIPE_SERIALPORT, err)
+		return fmt.Errorf("failed to check named pipe %s: %v", pipePath, err)
 	}
 	// If os.IsNotExist(err) is true, the pipe doesn't exist, which is fine
 	return nil
 }
 
 // createNewPipe creates the named pipe using syscall.Mkfifo
-func createNewPipe() error {
-	if err := syscall.Mkfifo(GPSPIPE_SERIALPORT, 0600); err != nil {
-		return fmt.Errorf("failed to create named pipe %s: %v", GPSPIPE_SERIALPORT, err)
+func createNewPipe(pipePath string) error {
+	if err := syscall.Mkfifo(pipePath, 0600); err != nil {
+		return fmt.Errorf("failed to create named pipe %s: %v", pipePath, err)
 	}
 	return nil
-}
-
-// MonitorProcess ... monitor gpspipe
-func (gp *gpspipe) MonitorProcess(config config.ProcessConfig) {
-	//TODO implement me
-	glog.Infof("monitoring for gpspipe not implemented")
 }

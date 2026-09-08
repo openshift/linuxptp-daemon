@@ -1,10 +1,16 @@
 package daemon
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
+	"github.com/stretchr/testify/require"
 )
 
 // Test-specific constants
@@ -66,31 +72,16 @@ func testCreateNamedPipe() error {
 }
 
 func TestGpspipeProcessLifecycle(t *testing.T) {
-	// Create a gpspipe instance
-	gp := &gpspipe{
-		name:       "gpspipe_test",
-		serialPort: GPSPIPE_SERIALPORT,
-		exitCh:     make(chan struct{}),
-		stopped:    false,
-	}
-	gp.CmdInit()
+	ch := make(chan event.Event, 8)
+	gp := NewTestGpsPipeProcess("", ch, NewMockCmd(), filepath.Join(t.TempDir(), "data"))
 
-	// Test that process starts when not stopped
-	if gp.Stopped() {
-		t.Error("Process should not be stopped initially")
-	}
+	require.NoError(t, gp.Start(context.TODO()))
+	waitProcessState(t, gp, process.Running)
+	waitProcessStatus(t, ch, PtpProcessUp)
 
-	// Test setting stopped flag
-	gp.setStopped(true)
-	if !gp.Stopped() {
-		t.Error("Process should be stopped after setStopped(true)")
-	}
-
-	// Test resetting stopped flag
-	gp.setStopped(false)
-	if gp.Stopped() {
-		t.Error("Process should not be stopped after setStopped(false)")
-	}
+	require.NoError(t, gp.Stop())
+	waitProcessState(t, gp, process.Stopped)
+	waitProcessStatus(t, ch, PtpProcessDown)
 }
 
 func TestMkFifoSuccess(t *testing.T) {
@@ -192,19 +183,19 @@ func TestCreateNamedPipe(t *testing.T) {
 }
 
 func TestGpspipeStopBehavior(t *testing.T) {
-	// Create a gpspipe instance
-	gp := &gpspipe{
-		name:       "gpspipe_stop_test",
-		serialPort: GPSPIPE_SERIALPORT,
-		exitCh:     make(chan struct{}),
-		stopped:    false,
-	}
-	gp.CmdInit()
+	ch := make(chan event.Event, 8)
+	gp := NewTestGpsPipeProcess("", ch, NewMockCmd(), filepath.Join(t.TempDir(), "data"))
 
-	// Test that CmdStop sets the stopped flag
-	gp.CmdStop()
-	if !gp.Stopped() {
-		t.Error("CmdStop should set the stopped flag")
+	require.NoError(t, gp.Start(context.TODO()))
+	waitProcessState(t, gp, process.Running)
+
+	require.NoError(t, gp.Stop())
+	waitProcessState(t, gp, process.Stopped)
+	waitProcessStatus(t, ch, PtpProcessDown)
+
+	require.NoError(t, gp.Stop())
+	if gp.State() != process.Stopped {
+		t.Error("Stop should be a no-op once the process is already Stopped")
 	}
 }
 

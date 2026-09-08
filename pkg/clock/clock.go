@@ -17,6 +17,8 @@ type Clock interface {
 	ClockClass() fbprotocol.ClockClass
 	SetIPC(func(message ipc.Message))
 	SetEventLoopbackFunc(f func(event.Event))
+	GetData(processName event.EventSource) *event.Data
+	ProcessData() []*event.Data
 }
 
 // SyncState holds the composite synchronization state of a clock.

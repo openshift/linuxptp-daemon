@@ -173,16 +173,13 @@ func TestDpllSendEventWithFlags(t *testing.T) {
 		assert.Equal(t, "test-iface", e.IFace)
 
 		ptpData := e.Data.(*event.PTPData)
-
 		_, hasFreq := ptpData.Values[event.FREQUENCY_STATUS]
 		assert.False(t, hasFreq, "should not have frequency status")
-
 		_, hasOffset := ptpData.Values[event.OFFSET]
 		assert.False(t, hasOffset, "should not have offset")
-
-		phase, hasPhase := ptpData.Values[event.PHASE_STATUS]
+		phaseVal, hasPhase := ptpData.Values[event.PHASE_STATUS]
 		assert.True(t, hasPhase, "should have phase status")
-		assert.Equal(t, int64(DPLL_LOCKED), phase)
+		assert.Equal(t, int64(DPLL_LOCKED), phaseVal)
 
 	case <-time.After(1 * time.Second):
 		t.Fatal("Timeout waiting for event")

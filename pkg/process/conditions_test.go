@@ -28,6 +28,7 @@ func (s *stubProc) State() State                     { return Created }
 func (s *stubProc) Profile() *ptpv1.PtpProfile       { return &ptpv1.PtpProfile{} }
 func (s *stubProc) ClockType() event.ClockType       { return event.OC }
 func (s *stubProc) DependentProcesses() []Process    { return nil }
+func (s *stubProc) SyncInitialState()                {}
 
 func TestGetCondition_MissingStartIsImmediate(t *testing.T) {
 	p := &stubProc{}
@@ -145,19 +146,6 @@ func TestOnProcessDown(t *testing.T) {
 
 	// Non-ProcessStatus event should not match
 	assert.False(t, c.Met(p, event.Event{}, EventStats{}))
-}
-
-func TestGetCondition_FallbackForNewActionTypes(t *testing.T) {
-	p := &stubProc{}
-	// Missing ActionEnable/ActionDisable should use the provided fallback
-	assert.Equal(t, Never{}, GetCondition(p, ActionEnable, Never{}))
-	assert.Equal(t, Never{}, GetCondition(p, ActionDisable, Never{}))
-
-	// When explicitly configured, should return the configured condition
-	p2 := &stubProc{conds: map[Action]Condition{
-		ActionEnable: OnPluginEvent{EventName: "gnss_failover"},
-	}}
-	assert.Equal(t, OnPluginEvent{EventName: "gnss_failover"}, GetCondition(p2, ActionEnable, Never{}))
 }
 
 func TestAny(t *testing.T) {

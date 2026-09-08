@@ -15,6 +15,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	nl "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/mdlayher/genetlink"
 	"golang.org/x/sync/semaphore"
 )
@@ -96,12 +97,14 @@ type DpllConfig struct {
 	inSpec                 bool
 	frequencyTraceable     bool
 	state                  event.PTPState
+	processState           process.State
 	onHoldover             bool
 	closing                bool
 	sourceLost             bool
 	processConfig          config.ProcessConfig
+	profile                *ptpv1.PtpProfile
 	dependsOn              []event.EventSource
-	exitCh                 chan struct{}
+	stopCh                 chan struct{}
 	holdoverCloseCh        chan bool
 	ticker                 *time.Ticker
 	apiType                dpllApiType
@@ -117,8 +120,8 @@ type DpllConfig struct {
 	// iface from other DPLL units that might be present on the system. Clock ID implementation
 	// is driver-specific and vendor-specific.
 	clockId uint64
-	sync.Mutex
-	isMonitoring             bool
+	sync.RWMutex
+	wg                       sync.WaitGroup
 	phaseOffsetPinFilter     map[string]map[string]string
 	inSyncConditionThreshold uint64
 	inSyncConditionTimes     uint64
@@ -147,8 +150,8 @@ func (d *DpllConfig) SetDependsOn(dependsOn []event.EventSource) {
 	d.dependsOn = dependsOn
 }
 
-// State ... get dpll state
-func (d *DpllConfig) State() event.PTPState {
+// PTPState returns the DPLL clock lock state (FREERUN/LOCKED/HOLDOVER).
+func (d *DpllConfig) PTPState() event.PTPState {
 	return d.state
 }
 
@@ -222,15 +225,53 @@ func (d *DpllConfig) Name() string {
 	return string(event.DPLL)
 }
 
+// ConfigName ...
+func (d *DpllConfig) ConfigName() string {
+	return d.processConfig.ConfigName
+}
+
+// Conditions returns the action conditions for the DpllConfig process.
+func (d *DpllConfig) Conditions() map[process.Action]process.Condition {
+	return map[process.Action]process.Condition{}
+}
+
+// State returns the current process state of DpllConfig.
+func (d *DpllConfig) State() process.State {
+	d.RLock()
+	defer d.RUnlock()
+	return d.processState
+}
+
+func (d *DpllConfig) setProcessState(s process.State) {
+	d.Lock()
+	d.processState = s
+	d.Unlock()
+}
+
+// Profile returns the PTP profile associated with DpllConfig.
+func (d *DpllConfig) Profile() *ptpv1.PtpProfile {
+	return d.profile
+}
+
+// ClockType returns the clock type of DpllConfig.
+func (d *DpllConfig) ClockType() event.ClockType {
+	return d.processConfig.ClockType
+}
+
+// DependentProcesses returns processes that depend on DpllConfig.
+func (d *DpllConfig) DependentProcesses() []process.Process {
+	return []process.Process{}
+}
+
 // Stopped ... stopped
 func (d *DpllConfig) Stopped() bool {
-	// TODO implement me
-	panic("implement me")
+	st := d.State()
+	return st == process.Stopped || st == process.Dead
 }
 
 // ExitCh ... exit channel
 func (d *DpllConfig) ExitCh() chan struct{} {
-	return d.exitCh
+	return d.stopCh
 }
 
 // hasGNSSSAsSource returns whether or not DPLL has GNSS as a source
@@ -256,26 +297,39 @@ func (d *DpllConfig) hasLeadingSource() bool {
 	return d.hasPTPAsSource() || d.hasGNSSAsSource()
 }
 
-// CmdStop ... stop command
-func (d *DpllConfig) CmdStop() {
-	glog.Infof("stopping %s", d.Name())
-	d.ticker.Stop()
-	glog.Infof("Ticker stopped %s", d.Name())
-	close(d.exitCh) // terminate loop
-	glog.Infof("Process %s terminated", d.Name())
+// IFace returns the network interface associated with DpllConfig.
+func (d *DpllConfig) IFace() string {
+	d.RLock()
+	defer d.RUnlock()
+	return d.iface
 }
 
-// CmdInit ... init command
-func (d *DpllConfig) CmdInit() {
-	// register to event notification from other processes
-	if d.apiType != MOCK { // use mock type unit test DPLL
-		d.setAPIType()
+// Stop stops DPLL monitoring.
+func (d *DpllConfig) Stop() error {
+	glog.Infof("stopping %s", d.Name())
+	d.Lock()
+	if d.processState == process.Created || d.processState == process.Stopping || d.processState == process.Stopped || d.processState == process.Dead {
+		d.Unlock()
+		return nil
 	}
-	glog.Infof("api type %v", d.apiType)
+	d.processState = process.Stopping
+	stopCh := d.stopCh
+	d.Unlock()
+
+	if d.ticker != nil {
+		d.ticker.Stop()
+		glog.Infof("Ticker stopped %s", d.Name())
+	}
+	if stopCh != nil {
+		close(stopCh)
+	}
+	d.wg.Wait()
+	glog.Infof("Process %s terminated", d.Name())
+	return nil
 }
 
 // SyncInitialState does a one-shot synchronous DPLL device dump and sends an
-// initial state event. It must be called after MonitorProcess has set up the
+// initial state event. It must be called after NewDpll has set up the
 // EventChannel. This closes the race window between profile application
 // (which sends a Reset that wipes all DPLL event data) and the asynchronous
 // MonitorDpllNetlink goroutine completing its own initial dump. Without this,
@@ -308,14 +362,56 @@ func (d *DpllConfig) SyncInitialState() {
 func (d *DpllConfig) ProcessStatus(_ int64) {
 }
 
-// CmdRun ... run command
-func (d *DpllConfig) CmdRun() {
+func (d *DpllConfig) emitProcessStatus(status int64) {
+	if d.processConfig.EventChannel == nil {
+		return
+	}
+	d.processConfig.EventChannel <- event.ProcessStatusEvent(event.DPLL, d.processConfig.ConfigName, d.processConfig.ClockType, d.iface, status)
+}
+
+// Start begins DPLL monitoring.
+func (d *DpllConfig) Start(_ context.Context) error {
+	d.Lock()
+	st := d.processState
+	switch st {
+	case process.Starting, process.Running:
+		d.Unlock()
+		return nil
+	case process.Stopping:
+		d.Unlock()
+		return fmt.Errorf("%s is stopping", d.Name())
+	}
+	d.stopCh = make(chan struct{})
+	d.processState = process.Starting
+	d.Unlock()
+
+	d.run()
+	return nil
+}
+
+func (d *DpllConfig) run() {
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		defer func() {
+			if d.State() == process.Stopping {
+				d.setProcessState(process.Stopped)
+			} else {
+				d.setProcessState(process.Dead)
+			}
+			d.emitProcessStatus(0)
+		}()
+		d.setProcessState(process.Running)
+		d.emitProcessStatus(1)
+		d.MonitorDpll()
+	}()
 }
 
 // NewDpll ... create new DPLL process
 func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxInSpecOffset uint64,
 	iface string, dependsOn []event.EventSource, apiType dpllApiType, phaseOffsetPinFilter map[string]map[string]string,
 	inSyncConditionTh uint64, inSyncConditionTimes uint64, dpllFlags Flag,
+	processCfg config.ProcessConfig, nodeProfile *ptpv1.PtpProfile,
 ) *DpllConfig {
 	glog.Infof("Calling NewDpll with clockId %x, localMaxHoldoverOffSet=%d, localHoldoverTimeout=%d, maxInSpecOffset=%d, iface=%s, phase offset pin filter=%v", clockId, localMaxHoldoverOffSet, localHoldoverTimeout, maxInSpecOffset, iface, phaseOffsetPinFilter)
 	d := &DpllConfig{
@@ -334,15 +430,15 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 		sourceLost:               false,
 		frequencyTraceable:       false,
 		dependsOn:                dependsOn,
-		exitCh:                   make(chan struct{}),
 		ticker:                   time.NewTicker(monitoringInterval),
-		isMonitoring:             false,
 		apiType:                  apiType,
 		phaseOffsetPinFilter:     phaseOffsetPinFilter,
 		phaseOffset:              FaultyPhaseOffset,
 		inSyncConditionThreshold: inSyncConditionTh,
 		inSyncConditionTimes:     inSyncConditionTimes,
 		flags:                    dpllFlags,
+		processConfig:            processCfg,
+		profile:                  nodeProfile,
 	}
 
 	if d.flags != 0 {
@@ -352,8 +448,12 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 
 	// time to reach maxnInSpecOffset
 	d.timer = int64(math.Round(float64(d.MaxInSpecOffset) / d.slope))
-	glog.Infof("slope %f ns/s, in spec offset %f ns, in spec timer %d /sec Max timer %d /s",
-		d.slope, float64(d.MaxInSpecOffset), d.timer, int64(d.LocalHoldoverTimeout))
+	glog.Infof("slope %f ns/s, in spec offset %d ns, in spec timer %d /sec Max timer %d /s",
+		d.slope, d.MaxInSpecOffset, d.timer, d.LocalHoldoverTimeout)
+	if d.apiType != MOCK { // use mock type unit test DPLL
+		d.setAPIType()
+	}
+	glog.Infof("api type %v", d.apiType)
 	return d
 }
 
@@ -576,7 +676,7 @@ func (d *DpllConfig) MonitorDpllNetlink() {
 
 	checkExit:
 		select {
-		case <-d.exitCh:
+		case <-d.stopCh:
 			glog.Infof("terminating netlink dpll monitoring")
 			select {
 			case d.processConfig.EventChannel <- event.Event{
@@ -634,20 +734,19 @@ func (d *DpllConfig) stopDpll() {
 	}
 }
 
-// MonitorProcess initiates monitoring of DPLL associated with a process.
-func (d *DpllConfig) MonitorProcess(processCfg config.ProcessConfig) {
-	d.processConfig = processCfg
-	d.MonitorDpll()
-}
-
 // MonitorDpll monitors DPLL on the discovered API, if any
 func (d *DpllConfig) MonitorDpll() {
 	fmt.Println(d.apiType)
 	if d.apiType == MOCK {
+		d.RLock()
+		stopCh := d.stopCh
+		d.RUnlock()
+		if stopCh != nil {
+			<-stopCh
+		}
 		return
 	} else if d.apiType == NETLINK {
-		go d.MonitorDpllNetlink()
-		d.isMonitoring = true
+		d.MonitorDpllNetlink()
 	} else {
 		glog.Errorf("dpll monitoring is not possible, netlink implementation is not present")
 		return
@@ -735,6 +834,27 @@ func (d *DpllConfig) sendDpllEvent() {
 		glog.Info("Skip event - dpll is not yet initialized")
 		return
 	}
+	ppsStatus := 1
+	if d.sourceLost {
+		ppsStatus = 0
+	}
+	vals := map[event.ValueType]interface{}{
+		event.PPS_STATUS:               int64(ppsStatus),
+		event.InSyncConditionThreshold: d.inSyncConditionThreshold,
+		event.InSyncConditionTimes:     d.inSyncConditionTimes,
+		event.ToFreeRunThreshold:       d.LocalMaxHoldoverOffSet,
+		event.MaxInSpecOffset:          d.MaxInSpecOffset,
+		event.LeadingSource:            d.hasLeadingSource(),
+	}
+	if !d.hasFlag(FlagNoFreqencyStatus) {
+		vals[event.FREQUENCY_STATUS] = d.frequencyStatus
+	}
+	if !d.hasFlag(FlagNoPhaseStatus) {
+		vals[event.PHASE_STATUS] = d.phaseStatus
+	}
+	if !d.hasFlag(FlagNoPhaseOffset) {
+		vals[event.OFFSET] = d.phaseOffset
+	}
 	eventData := event.Event{
 		Source:     event.DPLL,
 		IFace:      d.iface,
@@ -744,34 +864,12 @@ func (d *DpllConfig) sendDpllEvent() {
 		WriteToLog: true,
 		Reset:      false,
 		Data: &event.PTPData{
-			State: d.state,
-			Values: map[event.ValueType]interface{}{
-				event.PPS_STATUS: func() int {
-					if d.sourceLost {
-						return 0
-					}
-					return 1
-				}(),
-				event.LeadingSource:            d.hasLeadingSource(),
-				event.InSyncConditionThreshold: d.inSyncConditionThreshold,
-				event.InSyncConditionTimes:     d.inSyncConditionTimes,
-				event.ToFreeRunThreshold:       d.LocalMaxHoldoverOffSet,
-				event.MaxInSpecOffset:          d.MaxInSpecOffset,
-			},
+			State:              d.state,
 			OutOfSpec:          !d.inSpec,
-			SourceLost:         d.sourceLost, // Here source lost is either GNSS or PPS , nmea string lost is captured by ts2phc
+			SourceLost:         d.sourceLost,
 			FrequencyTraceable: d.frequencyTraceable,
+			Values:             vals,
 		},
-	}
-	ptpData := eventData.Data.(*event.PTPData)
-	if !d.hasFlag(FlagNoFreqencyStatus) {
-		ptpData.Values[event.FREQUENCY_STATUS] = d.frequencyStatus
-	}
-	if !d.hasFlag(FlagNoPhaseStatus) {
-		ptpData.Values[event.PHASE_STATUS] = d.phaseStatus
-	}
-	if !d.hasFlag(FlagNoPhaseOffset) {
-		ptpData.Values[event.OFFSET] = d.phaseOffset
 	}
 	select {
 	case d.processConfig.EventChannel <- eventData:

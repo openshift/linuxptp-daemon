@@ -70,16 +70,17 @@ func nextAnnounceToken() uint64 { return announceSeq.Add(1) }
 
 // TBC is a Telecom Boundary Clock instance
 type TBC struct {
-	cfgName          string
-	sendIPC          func(ipc.Message)
-	sendEvent        func(event.Event)
-	getUtcOffset     func() int
-	pmcClient        pmc.Client
-	syncState        SyncState
-	overallSyncState event.PTPState
-	osClockState     event.PTPState
-	data             []*event.Data
-	leadingClockData *LeadingClockParams
+	cfgName                    string
+	sendIPC                    func(ipc.Message)
+	sendEvent                  func(event.Event)
+	getUtcOffset               func() int
+	pmcClient                  pmc.Client
+	syncState                  SyncState
+	overallSyncState           event.PTPState
+	osClockState               event.PTPState
+	data                       []*event.Data
+	leadingClockData           *LeadingClockParams
+	configuredLeadingInterface string
 	// announceToken is a process-unique token identifying the current downstream
 	// request. It advances at construction, on Reset, and on every downstream
 	// request, so a fetch result carrying an out-of-date token (from a superseded
@@ -141,6 +142,16 @@ func (c *TBC) GetData(processName event.EventSource) *event.Data {
 	d := &event.Data{ProcessName: processName, State: event.PTP_UNKNOWN, Window: *utils.NewWindow(event.WindowSize)}
 	c.data = append(c.data, d)
 	return d
+}
+
+// ProcessData returns all clock data accumulated from processed events.
+func (c *TBC) ProcessData() []*event.Data {
+	return c.data
+}
+
+// SetConfiguredLeadingInterface records the profile leadingInterface.
+func (c *TBC) SetConfiguredLeadingInterface(iface string) {
+	c.configuredLeadingInterface = iface
 }
 
 // AddEvent processes an event and updates clock state.
@@ -715,6 +726,9 @@ func (c *TBC) inSpecCondition() bool {
 func (c *TBC) getLeadingInterfaceBC() string {
 	if c.leadingClockData.leadingInterface != "" {
 		return c.leadingClockData.leadingInterface
+	}
+	if c.configuredLeadingInterface != "" {
+		return c.configuredLeadingInterface
 	}
 	return event.LEADING_INTERFACE_UNKNOWN
 }

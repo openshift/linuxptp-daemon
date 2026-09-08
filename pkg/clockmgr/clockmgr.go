@@ -16,6 +16,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
@@ -120,6 +121,36 @@ func (m *ClockManager) AddClock(clk clock.Clock) error {
 	}
 	glog.Infof("AddClock: registered %s clock for config %s", clk.ClockType(), clk.ConfigName())
 	return nil
+}
+
+// GetWindows returns offset sample windows keyed by clock config name.
+// If requiredStatsConfigs is empty, all windows are returned.
+// Otherwise, only windows for configs in requiredStatsConfigs are returned.
+func (m *ClockManager) GetWindows(windowRequests []process.WindowRequest) map[string]map[event.EventSource]utils.ROWindow {
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+
+	out := make(map[string]map[event.EventSource]utils.ROWindow)
+	for _, req := range windowRequests {
+		clk := m.GetClock(req.ClockID)
+		if clk == nil {
+			continue
+		}
+
+		if _, ok := out[req.ClockID]; !ok {
+			out[req.ClockID] = map[event.EventSource]utils.ROWindow{}
+		}
+
+		for _, d := range clk.ProcessData() {
+			if d == nil {
+				continue
+			}
+			if d.ProcessName == req.Source {
+				out[req.ClockID][req.Source] = &d.Window
+			}
+		}
+	}
+	return out
 }
 
 // RemoveAllClocks tears down all registered clocks and cleans up associated state.

@@ -18,7 +18,7 @@ const (
 )
 
 // EventStats ...
-type EventStats map[string]map[event.EventSource]*utils.Window
+type EventStats map[string]map[event.EventSource]utils.ROWindow
 
 // WindowRequest ...
 type WindowRequest struct {
@@ -82,7 +82,7 @@ func condLog(p Process, c Condition, met bool, detail string) {
 	if p != nil {
 		name = p.Name()
 	}
-	glog.Infof("condition %s process=%s met=%v %s", c, name, met, detail)
+	glog.Infof("condition %s process=%q met=%v %s", c, name, met, detail)
 }
 
 // Immediate is a condition that is always met immediately.
@@ -150,10 +150,6 @@ func (c OnStateAndOffsetForCount) Met(p Process, ev event.Event, stats EventStat
 	nSamples := w.CountSamples(func(x float64) bool {
 		return math.Abs(x) < c.MaxOffset
 	})
-<<<<<<< HEAD
-=======
-
->>>>>>> 32c9af18 (remove logs from pm and conds)
 	met := nSamples > c.Count
 	condLog(p, c, met, fmt.Sprintf("window_samples=%d need>%d", nSamples, c.Count))
 	return met
