@@ -301,6 +301,7 @@ jobs:
           set -x
           export PATH=/usr/local/go/bin:/root/go/bin:$PATH
           export KIND_EXPERIMENTAL_PROVIDER=podman
+          export ENABLE_CEPV2=true
 
           VM_IP=$(hostname -I | awk '{print $1}')
           cd /root/ptp-operator/scripts
