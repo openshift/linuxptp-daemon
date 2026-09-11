@@ -23,12 +23,14 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -281,7 +283,8 @@ func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 	assert.NotNil(t, dn)
 	// Signal that no hardware configs are expected for this test
 	_ = dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
-	err := dn.applyNodePtpProfile(0, profile)
+	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
+	err := dn.applyNodePtpProfile(0, profile, &osClockConfigs)
 	assert.NoError(t, err)
 }
 
@@ -382,7 +385,8 @@ func Test_applyProfile_TBC(t *testing.T) {
 		profile, err := loadProfile(test.dataFile)
 		assert.NoError(t, err)
 		// Will assert inside in case of error:
-		err = dn.applyNodePtpProfile(0, profile)
+		osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
+		err = dn.applyNodePtpProfile(0, profile, &osClockConfigs)
 		assert.NoError(t, err)
 
 		// Ensure for T-BC that phc2sys has a non-Immediate start condition (delayed start)
@@ -439,8 +443,8 @@ func Test_applyProfile_TGM(t *testing.T) {
 
 	profile, err := loadProfile("testdata/profile-tgm.yaml")
 	assert.NoError(t, err)
-
-	err = dn.applyNodePtpProfile(0, profile)
+	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
+	err = dn.applyNodePtpProfile(0, profile, &osClockConfigs)
 	assert.NoError(t, err)
 
 	var ts2phcProc *ptpProcess
@@ -2748,4 +2752,116 @@ func Test_shouldFreeRun(t *testing.T) {
 			assert.Equal(t, tt.expected, actual, "shouldFreeRun result mismatch")
 		})
 	}
+}
+
+// TestDaemon_PopulateHAInterfaces tests that populateHAInterfaces correctly populates
+// the haProfile map in phc2sys process with interface names from referenced ptp4l profiles.
+func TestDaemon_PopulateHAInterfaces(t *testing.T) {
+	skip, teardownTest := testhelpers.SetupForTestBCPTPHA()
+	defer teardownTest()
+	if skip {
+		t.Skip("BC PTP-HA is not supported")
+	}
+
+	// Create two regular ptp4l profiles with interfaces
+	p1 := ptpv1.PtpProfile{
+		Name: stringPointer("profile1"),
+	}
+	p2 := ptpv1.PtpProfile{
+		Name: stringPointer("profile2"),
+	}
+	// Create a phc2sys HA profile that references the two ptp4l profiles
+	p3 := ptpv1.PtpProfile{
+		Name:        stringPointer("ha_profile1"),
+		PtpSettings: map[string]string{PTP_HA_IDENTIFIER: "profile1,profile2"},
+	}
+
+	processManager := NewProcessManager()
+
+	// Set up interfaces for profile1
+	ifaces1 := config.IFaces{
+		{
+			Name:     "ens2f2",
+			IsMaster: false,
+			Source:   "",
+			PhcId:    "phcid-2",
+		},
+	}
+
+	// Set up interfaces for profile2
+	ifaces2 := config.IFaces{
+		{
+			Name:     "ens3f2",
+			IsMaster: false,
+			Source:   "",
+			PhcId:    "phcid-2",
+		},
+	}
+
+	// Create test processes in the process manager
+	// Use "ptp4l" as the process name for ptp4l processes
+	processManager.SetTestProfileProcess("ptp4l", ifaces1, "socket1", "ptp4l.0.config", p1)
+	processManager.SetTestProfileProcess("ptp4l", ifaces2, "socket2", "ptp4l.1.config", p2)
+	processManager.SetTestProfileProcess("phc2sys", config.IFaces{}, "", "phc2sys.0.config", p3)
+
+	// Get the phc2sys process to verify haProfile population
+	var phc2sysProc *ptpProcess
+	for _, proc := range processManager.process {
+		if ptpProc, ok := proc.(*ptpProcess); ok && ptpProc.name == "phc2sys" {
+			phc2sysProc = ptpProc
+			break
+		}
+	}
+	require.NotNil(t, phc2sysProc, "phc2sys process should exist")
+
+	// Initialize haProfile map (normally done in NewPhc2sysProcess)
+	phc2sysProc.haProfile = make(map[string][]string)
+
+	// Create OSClockConfigs to simulate the HA configuration
+	osClockConfigs := OSClockConfigs{
+		haProfileNames:       []string{"ha_profile1"},
+		haReferencedProfiles: []string{"profile1", "profile2"},
+		profileRunID:         map[string]int{"profile1": 0, "profile2": 1},
+	}
+
+	// Create daemon and call populateHAInterfaces
+	dd := NewDaemonForTests(&ReadyTracker{}, processManager)
+	dd.populateHAInterfaces(&osClockConfigs)
+
+	// Verify that haProfile was populated correctly
+	require.NotNil(t, phc2sysProc.haProfile, "haProfile should not be nil")
+	require.Equal(t, 2, len(phc2sysProc.haProfile), "haProfile should have 2 entries")
+	assert.Equal(t, []string{"ens2f2"}, phc2sysProc.haProfile["profile1"], "profile1 should map to ens2f2")
+	assert.Equal(t, []string{"ens3f2"}, phc2sysProc.haProfile["profile2"], "profile2 should map to ens3f2")
+}
+
+// TestPhc2sysProcess_HASocketOptions tests that haSocketOpts generates correct
+// socket options when HA is enabled, properly referencing all profiles.
+func TestPhc2sysProcess_HASocketOptions(t *testing.T) {
+	skip, teardownTest := testhelpers.SetupForTestBCPTPHA()
+	defer teardownTest()
+	if skip {
+		t.Skip("BC PTP-HA is not supported")
+	}
+
+	// Create OSClockConfigs to simulate HA configuration with two ptp4l profiles
+	osClockConfigs := OSClockConfigs{
+		haProfileNames:       []string{"ha_profile1"},
+		haReferencedProfiles: []string{"profile1", "profile2"},
+		profileRunID:         map[string]int{"profile1": 0, "profile2": 1},
+	}
+
+	// Call haSocketOpts which should generate socket options for both referenced profiles
+	socketOpts := haSocketOpts(&osClockConfigs)
+
+	// Should contain socket options for both referenced profiles
+	assert.NotEmpty(t, socketOpts, "socketOpts should not be empty")
+	assert.Contains(t, socketOpts, "-z", "socketOpts should contain socket flag")
+	assert.Contains(t, socketOpts, "ptp4l.0.socket", "socketOpts should reference ptp4l.0.socket")
+	assert.Contains(t, socketOpts, "ptp4l.1.socket", "socketOpts should reference ptp4l.1.socket")
+	// Verify format - should have two -z options separated by space
+	parts := strings.Fields(socketOpts)
+	assert.Equal(t, 4, len(parts), "socketOpts should have 4 parts: -z socket1 -z socket2")
+	assert.Equal(t, "-z", parts[0], "First part should be -z")
+	assert.Equal(t, "-z", parts[2], "Third part should be -z")
 }

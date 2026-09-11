@@ -980,13 +980,14 @@ func addScheduling(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
 }
 
 type ptpProcessEnv struct {
-	runID         int
-	nodeProfile   *ptpv1.PtpProfile
-	clockType     event.ClockType
-	dn            *Daemon
-	leadingNic    string
-	upstreamPorts []string
-	hasFailover   bool
+	runID          int
+	nodeProfile    *ptpv1.PtpProfile
+	clockType      event.ClockType
+	dn             *Daemon
+	leadingNic     string
+	upstreamPorts  []string
+	hasFailover    bool
+	osClockConfigs *OSClockConfigs
 }
 
 func profileClockType(p *ptpv1.PtpProfile) string {
@@ -1105,14 +1106,22 @@ func (p *ptpProcess) renderPtp4lConf(env ptpProcessEnv, output *Ptp4lConf, opts 
 	return p.writeProcessConf(output, configOutput)
 }
 
+func getPtp4lSocket(configPrefix string, runID int) string {
+	return fmt.Sprintf("%s/ptp4l.%d.socket", configPrefix, runID)
+}
+
+func getPtp4lConfig(runID int) string {
+	return fmt.Sprintf("ptp4l.%d.config", runID)
+}
+
 // NewPtp4lProcess creates a new ptp4l process instance.
 func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
-	configFile := fmt.Sprintf("ptp4l.%d.config", env.runID)
+	configFile := getPtp4lConfig(env.runID)
 	p := newPtpProcess(
 		ptp4lProcessName,
 		configFile,
 		fmt.Sprintf("%s/%s", configPrefix, configFile),
-		fmt.Sprintf("%s/ptp4l.%d.socket", configPrefix, env.runID),
+		getPtp4lSocket(configPrefix, env.runID),
 		fmt.Sprintf("[ptp4l.%d.config:{level}]", env.runID),
 		env.nodeProfile,
 		env.clockType,
@@ -1199,8 +1208,12 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	if err = p.renderPtp4lConf(env, output, opts); err != nil {
 		return nil, err
 	}
+
+	if slices.Contains(env.osClockConfigs.haProfileNames, getProfileName(env.nodeProfile)) {
+		*opts += " " + haSocketOpts(env.osClockConfigs)
+	}
+
 	cmdLine := buildPtpCmdLine(phc2sysProcessName, configPath, opts, env.nodeProfile)
-	p.haProfile, cmdLine = env.dn.ApplyHaProfiles(env.nodeProfile, cmdLine)
 	p.cmd = buildCmd(cmdLine)
 	if p.conditions == nil {
 		p.conditions = map[process.Action]process.Condition{}
@@ -1218,6 +1231,16 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	return p, nil
 }
 
+func haPtp4lConfigs(osClockConfigs *OSClockConfigs) []string {
+	configs := []string{}
+	for _, profileName := range osClockConfigs.haReferencedProfiles {
+		if runID, ok := osClockConfigs.profileRunID[profileName]; ok {
+			configs = append(configs, getPtp4lConfig(runID))
+		}
+	}
+	return configs
+}
+
 // TODO: Add comment explaining the conditions and why we have them
 func phc2sysOffsetStartCondition(env ptpProcessEnv) process.Condition {
 	base := process.OnStateAndOffsetForCount{
@@ -1233,10 +1256,8 @@ func phc2sysOffsetStartCondition(env ptpProcessEnv) process.Condition {
 		return base
 	}
 	base.Source = event.PTP4l
-	var cfgs []string
-	if env.dn != nil {
-		cfgs = env.dn.haLinkedPtp4lConfigNames(env.nodeProfile)
-	}
+
+	cfgs := haPtp4lConfigs(env.osClockConfigs)
 	if len(cfgs) == 0 {
 		cfgName := fmt.Sprintf("ptp4l.%d.config", env.runID)
 		base.ClockID = cfgName
@@ -1248,12 +1269,17 @@ func phc2sysOffsetStartCondition(env ptpProcessEnv) process.Condition {
 		base.ConfigName = cfgs[0]
 		return base
 	}
+
 	conds := make([]process.Condition, 0, len(cfgs))
 	for _, cfg := range cfgs {
-		c := base
-		c.ClockID = cfg
-		c.ConfigName = cfg
-		conds = append(conds, c)
+		conds = append(conds, process.OnStateAndOffsetForCount{
+			State:      base.State,
+			MaxOffset:  base.MaxOffset,
+			Count:      base.Count,
+			Source:     base.Source,
+			ClockID:    cfg,
+			ConfigName: cfg,
+		})
 	}
 	return process.Any{Conditions: conds}
 }
@@ -1350,11 +1376,7 @@ func ts2phcConditionsForTBC(p *ptpProcess, env ptpProcessEnv) map[process.Action
 	// p.haProfile is already set at this point from ApplyHaProfiles
 	if shouldWaitForPhc2sys(env.nodeProfile, p.haProfile) {
 		cfgName := fmt.Sprintf("ptp4l.%d.config", env.runID)
-		var haConfigs []string
-		if env.dn != nil {
-			haConfigs = env.dn.haLinkedPtp4lConfigNames(env.nodeProfile)
-		}
-		if len(haConfigs) != 0 {
+		if len(env.osClockConfigs.haProfileNames) > 0 {
 			cfgName = fmt.Sprintf("phc2sys.%d.config", env.runID)
 		}
 
