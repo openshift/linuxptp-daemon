@@ -183,6 +183,40 @@ func TestResolveProfileInterfaces_PluginDevices(t *testing.T) {
 	}
 }
 
+func TestResolveProfileInterfaces_PluginInterconnections(t *testing.T) {
+	r := NewInterfaceResolverWithInterfaces([]string{testIfNew, testIf2New})
+	name := testProfile
+
+	pluginOpts := map[string]any{
+		"interconnections": []any{
+			map[string]any{
+				"id":           testIfOld,
+				"upstreamPort": testIfOld + "," + testIf2Old,
+			},
+		},
+	}
+	raw, _ := json.Marshal(pluginOpts)
+	profile := &ptpv1.PtpProfile{
+		Name: &name,
+		Plugins: map[string]*apiextensions.JSON{
+			"e810": {Raw: raw},
+		},
+	}
+	r.ResolveProfileInterfaces(profile)
+
+	var result map[string]any
+	_ = json.Unmarshal(profile.Plugins["e810"].Raw, &result)
+
+	interconnections := result["interconnections"].([]any)
+	elem := interconnections[0].(map[string]any)
+	if elem["id"].(string) != testIfNew {
+		t.Errorf("interconnections id: expected %s, got %s", testIfNew, elem["id"])
+	}
+	if elem["upstreamPort"].(string) != testIfNew+","+testIf2New {
+		t.Errorf("interconnections upstreamPort: expected %s, got %s", testIfNew+","+testIf2New, elem["upstreamPort"])
+	}
+}
+
 func TestResolveProfileInterfaces_NoChangeWhenNamesExist(t *testing.T) {
 	r := NewInterfaceResolverWithInterfaces([]string{testIfOld, testIf2Old})
 	name := testProfile

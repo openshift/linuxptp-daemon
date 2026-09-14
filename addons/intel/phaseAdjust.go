@@ -104,6 +104,9 @@ var SendDelayCompensation = sendDelayCompensation
 
 func sendDelayCompensation(comp *[]delayCompensation, pins DPLLPins) error {
 	glog.Info(comp)
+	if comp == nil {
+		return nil
+	}
 	conn, err := dpll.Dial(nil)
 	if err != nil {
 		return fmt.Errorf("failed to dial DPLL: %v", err)
