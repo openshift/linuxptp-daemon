@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -209,4 +210,46 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 	for _, expectedPin := range expectedPins {
 		assert.True(t, pinLabelsSeen[expectedPin], "should have command for pin %s", expectedPin)
 	}
+}
+
+// TestInitClockChain_ResolveError_NoPanic verifies that when resolveInterconnections
+// fails (e.g. the interconnection id's clock ID is absent from PtpSettings, as
+// happens on RHEL 10 when interconnections[].id is not resolved to the npN name),
+// InitClockChain returns a clean error instead of passing a nil compensation
+// slice into SendDelayCompensation and panicking with a nil-pointer dereference.
+func TestInitClockChain_ResolveError_NoPanic(t *testing.T) {
+	_, restoreDPLLPins := setupMockDPLLPins()
+	defer restoreDPLLPins()
+	restoreDelay := setupMockDelayCompensation()
+	defer restoreDelay()
+
+	// GnssInput reaches addClockID(card.ID), which looks up clockId[ens3f0] in
+	// PtpSettings. It is absent here, so resolveInterconnections returns an error.
+	opts := E810Opts{
+		PhaseInputs: []PhaseInputs{
+			{ID: "ens3f0", Part: "E810-XXVDA4T", GnssInput: true},
+		},
+	}
+	name := "test"
+	nodeProfile := &ptpv1.PtpProfile{
+		Name:        &name,
+		PtpSettings: map[string]string{},
+	}
+
+	var chain *ClockChain
+	var err error
+	assert.NotPanics(t, func() {
+		chain, err = InitClockChain(opts, nodeProfile)
+	}, "InitClockChain must not panic when clock ID resolution fails")
+	assert.Error(t, err, "InitClockChain should return an error when resolveInterconnections fails")
+	assert.NotNil(t, chain, "InitClockChain should still return the chain struct on error")
+}
+
+// TestSendDelayCompensation_NilNoPanic verifies the defensive nil guard in
+// sendDelayCompensation: a nil compensation slice must not be dereferenced.
+func TestSendDelayCompensation_NilNoPanic(t *testing.T) {
+	assert.NotPanics(t, func() {
+		err := sendDelayCompensation(nil, DpllPins)
+		assert.NoError(t, err)
+	})
 }
