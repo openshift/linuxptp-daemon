@@ -1,0 +1,160 @@
+1789719553.0394
+UBX-NAV-STATUS:
+  iTOW 461971000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 33838542
+
+1789719553.0395
+UBX-NAV-CLOCK:
+  iTOW 461971000 clkB 879112 clkD 322 tAcc 8 fAcc 262
+
+1789719553.0395
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+1789719554.0385
+UBX-NAV-STATUS:
+  iTOW 461972000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 33839542
+
+1789719554.0386
+UBX-NAV-CLOCK:
+  iTOW 461972000 clkB 879435 clkD 322 tAcc 8 fAcc 262
+
+1789719554.0386
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+1789719554.7404
+UBX-MON-RF:
+ version 0 nBlocks 2 reserved1 x0
+   0: blockId 0 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 x0
+      noisePerMS 29 agcCnt 5265 jamInd 2 ofsI 13 magI 156 ofsQ 2 magQ 144
+      reserved3 0 0 0
+   1: blockId 1 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 x0
+      noisePerMS 51 agcCnt 5616 jamInd 29 ofsI 15 magI 148 ofsQ 5 magQ 147
+      reserved3 0 0 0
+
+1789719555.0381
+UBX-NAV-STATUS:
+  iTOW 461973000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 33840542
+
+1789719555.0382
+UBX-NAV-CLOCK:
+  iTOW 461973000 clkB 879757 clkD 323 tAcc 8 fAcc 261
+
+1789719555.0382
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+1789719556.0366
+UBX-NAV-STATUS:
+  iTOW 461974000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 33841542
+
+1789719556.0367
+UBX-NAV-CLOCK:
+  iTOW 461974000 clkB 880080 clkD 323 tAcc 8 fAcc 259
+
+1789719556.0368
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+1789719557.0375
+UBX-NAV-STATUS:
+  iTOW 461975000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 33842542
+
+1789719557.0375
+UBX-NAV-CLOCK:
+  iTOW 461975000 clkB 880403 clkD 323 tAcc 8 fAcc 258
+
+1789719557.0376
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+1789719558.0373
+UBX-NAV-STATUS:
+  iTOW 461976000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 33843542
+
+1789719558.0374
+UBX-NAV-CLOCK:
+  iTOW 461976000 clkB 880726 clkD 323 tAcc 8 fAcc 258
+
+1789719558.0374
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+1789719558.7387
+UBX-MON-RF:
+ version 0 nBlocks 2 reserved1 x0
+   0: blockId 0 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 x0
+      noisePerMS 29 agcCnt 5265 jamInd 2 ofsI 9 magI 158 ofsQ 2 magQ 150
+      reserved3 0 0 0
+   1: blockId 1 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 x0
+      noisePerMS 51 agcCnt 5616 jamInd 30 ofsI 15 magI 149 ofsQ 2 magQ 145
+      reserved3 0 0 0
+
+1789719559.0372
+UBX-NAV-STATUS:
+  iTOW 461977000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 33844542
+
+1789719559.0373
+UBX-NAV-CLOCK:
+  iTOW 461977000 clkB 881049 clkD 323 tAcc 8 fAcc 258
+
+1789719559.0373
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+1789719560.0369
+UBX-NAV-STATUS:
+  iTOW 461978000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 33845542
+
+1789719560.0370
+UBX-NAV-CLOCK:
+  iTOW 461978000 clkB 881372 clkD 323 tAcc 8 fAcc 262
+
+1789719560.0371
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+1789719561.0385
+UBX-NAV-STATUS:
+  iTOW 461979000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 33846542
+
+1789719561.0385
+UBX-NAV-CLOCK:
+  iTOW 461979000 clkB 881694 clkD 323 tAcc 8 fAcc 259
+
+1789719561.0386
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+1789719562.0364
+UBX-NAV-STATUS:
+  iTOW 461980000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 33847542
+
+1789719562.0365
+UBX-NAV-CLOCK:
+  iTOW 461980000 clkB 882017 clkD 323 tAcc 8 fAcc 272
+
+1789719562.0366
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+

@@ -3,6 +3,7 @@ package ublox
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,10 @@ const (
 	ubxtoolStopped = 3
 
 	pollTimeout = "1000000000"
+
+	// unknownOffset is outside the configured valid range and represents an
+	// unavailable or malformed NAV-CLOCK accuracy value.
+	unknownOffset int64 = 99999999
 )
 
 const (
@@ -34,7 +39,7 @@ const (
 
 var (
 	// Disable all binary messages
-	disableBinary = Command{Args: []string{"-d", "BINARY"}}
+	disableBinary = Command{Args: []string{"-d", "BINARY"}} // nolint:goconst
 	// NAV message types to re-enable at the default rate of 1 (every second)
 	navEnableMsg = []string{
 		"CLOCK", "STATUS",
@@ -58,11 +63,12 @@ var (
 	}
 
 	monHW = Command{
-		Args:         []string{"-w", QueryTimeout, "-p", "MON-HW"},
+		Args:         []string{"-w", QueryTimeout, "-p", "MON-HW"}, // nolint:goconst
 		ReportOutput: true,
 	}
 )
 
+// batchMsgoutAllBusses creates a command that configures messages on every bus.
 func batchMsgoutAllBusses(prefix string, msgs []string, val int) Command {
 	result := Command{}
 	for _, msg := range msgs {
@@ -74,23 +80,27 @@ func batchMsgoutAllBusses(prefix string, msgs []string, val int) Command {
 }
 
 // Generates a series of UblxCmds which disable the given message type on all bus types
+// batchDisableNmeaMsgs creates commands disabling the selected NMEA messages.
 func batchDisableNmeaMsgs(msgs []string) Command {
 	return batchMsgoutAllBusses("NMEA_ID", msgs, 0)
 }
 
 // batchEnableNavMsgs generates commands to enable the given NAV message types
 // at a rate of 1 (every GPS navigation epoch, i.e. every second) on all bus types.
+// batchEnableNavMsgs creates commands enabling NAV messages at the default rate.
 func batchEnableNavMsgs(msgs []string) Command {
 	return batchMsgoutAllBusses("UBX_NAV", msgs, 1)
 }
 
 // batchEnableNavMsgsAtRate generates commands to enable the given NAV message types
 // at the specified rate (in GPS navigation epochs) on all bus types.
+// batchEnableNavMsgsAtRate creates commands enabling NAV messages at rate.
 func batchEnableNavMsgsAtRate(msgs []string, rate int) Command {
 	return batchMsgoutAllBusses("UBX_NAV", msgs, rate)
 }
 
 // Return the default set of commands we need to set at initialization
+// defaultUblxCmds returns the baseline receiver configuration sequence.
 func defaultUblxCmds() CommandList {
 	// Begin by disabling all binary commands, then re-adding the ones we need
 	cmds := CommandList{disableBinary}
@@ -145,40 +155,78 @@ type UBlox struct {
 	proc         pollProcess
 	reader       *bufio.Reader
 	match        string
-	buffer       []string
-	bufferlen    int
-	buffermutex  sync.Mutex
+
+	broker       *messageBroker
+	pollStopCh   chan struct{}
+	pollDoneCh   chan struct{}
+	pollStopMu   sync.Mutex
+	pollStopOnce sync.Once
 }
 
 // InitResults returns recorded output from extra init commands that had
-// ReportOutput set to true. Returns nil if no extra commands were provided
-// or none had ReportOutput set.
+// ReportOutput set to true. Each entry corresponds to one command and may
+// contain multiple output lines. Returns nil if no extra commands were
+// provided or none had ReportOutput set.
 func (u *UBlox) InitResults() []string {
 	return u.initResults
+}
+
+// normalizeReportedOutput removes blank lines from command output while
+// preserving the content and indentation of non-empty lines. Reported output
+// is written to a status field, where empty lines add no useful information.
+func normalizeReportedOutput(output string) string {
+	output = strings.ReplaceAll(output, "\r\n", "\n")
+	output = strings.ReplaceAll(output, "\r", "\n")
+
+	lines := strings.Split(output, "\n")
+	nonEmpty := lines[:0]
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			nonEmpty = append(nonEmpty, line)
+		}
+	}
+	return strings.Join(nonEmpty, "\n")
 }
 
 // NewUblox creates and initializes a new Ublox monitoring object.
 // Optional extraCmds are run after the default initialization commands
 // but before SAVE (e.g., GNSS configuration from HardwareConfig).
-// Returns an error if the underlying gps channel is not available or the protocol version could not be detected.
+// Returns an error if initialization fails. The returned UBlox may be non-nil
+// on initialization failure and can contain recorded results from commands that
+// requested output recording.
 func NewUblox(extraCmds ...Command) (*UBlox, error) {
-	u := UBlox{}
+	u := UBlox{broker: newMessageBroker()}
 	if err := u.Init(extraCmds...); err != nil {
-		return nil, err
+		return &u, err
 	}
 	return &u, nil
 }
 
+// Subscribe registers a consumer for the selected UBX message types. An
+// empty type list subscribes to all parsed messages. The returned channel is
+// closed when the subscription is cancelled.
+func (u *UBlox) Subscribe(ctx context.Context, types ...MessageType) *Subscription {
+	if u.broker == nil {
+		u.broker = newMessageBroker()
+	}
+	return u.broker.Subscribe(ctx, types...)
+}
+
 // Init detects the protocol version and sets up the core message types
-// we require for both GNSS monitoring and ts2phc. Optional extraCmds
-// are run after the defaults but before the final SAVE.
+// required for both GNSS monitoring and ts2phc. Optional extraCmds are run
+// after the defaults but before the final SAVE.
 func (u *UBlox) Init(extraCmds ...Command) error {
 	runner, err := NewCommandRunner()
 	if err != nil {
 		return fmt.Errorf("no version detected: %w", err)
 	}
 	u.protoVersion = runner.protoVersion
+	runner.receiver = u
 	glog.Infof("UBX protocol version detected: %s", u.protoVersion)
+
+	// Start the receiver before configuration commands so their ACK responses
+	// are available through the broker.
+	u.UbloxPollInit()
 
 	// Build the full init sequence: defaults → extras → MON-HW → SAVE
 	var cmds CommandList
@@ -188,75 +236,133 @@ func (u *UBlox) Init(extraCmds ...Command) error {
 
 	var errs []error
 	for _, cmd := range cmds {
-		output, runErr := runner.Run(cmd)
+		var output string
+		var runErr error
+		if isPollCommand(cmd.Args) && !isAckCommand(cmd.Args) {
+			responseType, responseErr := pollResponseType(cmd.Args)
+			if responseErr != nil {
+				runErr = responseErr
+			} else {
+				var response Message
+				response, runErr = runner.Poll(cmd, responseType)
+				if runErr == nil {
+					output = strings.Join(response.Raw, "\n")
+				}
+			}
+		} else {
+			output, runErr = runner.Run(cmd)
+		}
+		ignoredNAK := false
+		if runErr != nil {
+			var nakErr *CommandNAKError
+			if errors.As(runErr, &nakErr) {
+				glog.Infof("ublox: ignoring command NAK during initialization: %v", nakErr)
+				runErr = nil
+				ignoredNAK = true
+			}
+		}
 		errs = append(errs, runErr)
-		if cmd.ReportOutput {
+		if cmd.ReportOutput && !ignoredNAK {
 			if runErr != nil {
 				u.initResults = append(u.initResults, runErr.Error())
 			} else {
-				u.initResults = append(u.initResults, output)
+				// Command output is exposed as a status value. Remove blank
+				// lines so consumers do not render spurious whitespace.
+				u.initResults = append(u.initResults, normalizeReportedOutput(output))
 			}
 		}
 	}
-	return errors.Join(errs...)
-}
-
-// UbloxPollPull safely pulls data from the u.buffer
-func (u *UBlox) UbloxPollPull() string {
-	output := ""
-	u.buffermutex.Lock()
-	if u.bufferlen > 0 {
-		output = u.buffer[0]
-		u.buffer = u.buffer[1:]
-		u.bufferlen--
+	initErr := errors.Join(errs...)
+	if initErr != nil {
+		u.UbloxPollStop()
 	}
-	u.buffermutex.Unlock()
-	return output
+	return initErr
 }
 
-// UbloxPollInit initializes the poll thread
+// UbloxPollInit starts the long-running ubxtool receiver. Parsed messages
+// are published to the receiver's subscriptions.
 func (u *UBlox) UbloxPollInit() {
-	if u.getStatus() == ubxtoolNew || u.getStatus() == ubxtoolDead {
-		u.buffermutex.Lock()
-		u.bufferlen = 0
-		u.buffer = nil
-		u.buffermutex.Unlock()
+	if u.getStatus() != ubxtoolNew && u.getStatus() != ubxtoolDead {
+		return
+	}
 
-		stdout, proc, err := startPollProcess(u.protoVersion)
-		if err != nil {
-			glog.Errorf("UbloxPoll err=%s", err.Error())
-			// TODO: Switching this to ubxtoolDead would allow recovery in the
-			// future, but we are not making functional changes in this refactor.
-			u.setStatus(ubxtoolStopped)
+	stdout, proc, err := startPollProcess(u.protoVersion)
+	if err != nil {
+		glog.Errorf("UbloxPoll err=%s", err.Error())
+		u.setStatus(ubxtoolStopped)
+		return
+	}
+
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	u.pollStopMu.Lock()
+	u.pollStopCh = stopCh
+	u.pollDoneCh = doneCh
+	u.pollStopOnce = sync.Once{}
+	u.pollStopMu.Unlock()
+	u.proc = proc
+	u.reader = bufio.NewReader(stdout)
+	u.setStatus(ubxtoolActive)
+	glog.Infof("Starting ubxtool polling with PID=%d", proc.Pid())
+	go func() {
+		defer close(doneCh)
+		u.ubloxPollPushThread(u.reader, stopCh)
+	}()
+}
+
+// ubloxPollPushThread continually reads incoming data from ubxtool, parses
+// complete UBX messages, and publishes them to all matching subscriptions.
+func (u *UBlox) ubloxPollPushThread(reader *bufio.Reader, stopCh <-chan struct{}) {
+	parser := newParser()
+	for {
+		output, err := reader.ReadString('\n')
+		if !u.publishMessages(stopCh, parser.feed(output)) {
 			return
 		}
-		u.proc = proc
-		u.reader = bufio.NewReader(stdout)
-		u.setStatus(ubxtoolActive)
-		glog.Infof("Starting ubxtool polling with PID=%d", proc.Pid())
-		go u.UbloxPollPushThread()
-	}
-}
-
-// UbloxPollPushThread continually reads incoming data from the running ubxtool and safely appends it to u.buffer
-func (u *UBlox) UbloxPollPushThread() {
-	for {
-		output, err := u.reader.ReadString('\n')
 		if err != nil {
+			if !u.publishMessages(stopCh, parser.flush()) {
+				return
+			}
 			if u.getStatus() != ubxtoolStopped {
 				u.setStatus(ubxtoolDead)
 			}
 			glog.Errorf("ublox poll thread error %s", err)
 			return
-		} else if len(output) > 0 {
-			u.buffermutex.Lock()
-			u.bufferlen++
-			u.buffer = append(u.buffer, output)
-			u.buffermutex.Unlock()
+		}
+		select {
+		case <-stopCh:
+			return
+		default:
 		}
 	}
 }
 
+// publishMessages publishes messages unless the reader has been cancelled.
+// The cancellation check and publish are serialized with stopPollReader so a
+// stop cannot race a checked-but-not-yet-published message.
+func (u *UBlox) publishMessages(stopCh <-chan struct{}, messages []Message) bool {
+	for _, message := range messages {
+		u.pollStopMu.Lock()
+		select {
+		case <-stopCh:
+			u.pollStopMu.Unlock()
+			return false
+		default:
+			u.publish(message)
+			u.pollStopMu.Unlock()
+		}
+	}
+	return true
+}
+
+// publish forwards a parsed message to the receiver broker.
+func (u *UBlox) publish(message Message) {
+	if u.broker != nil {
+		u.broker.Publish(message)
+	}
+}
+
+// setStatus updates the receiver process status.
 func (u *UBlox) setStatus(val int) {
 	// glog.Infof("ubxtool setStatus=%d", val)
 	u.statusMutex.Lock()
@@ -264,6 +370,7 @@ func (u *UBlox) setStatus(val int) {
 	u.statusMutex.Unlock()
 }
 
+// getStatus returns the receiver process status.
 func (u *UBlox) getStatus() int {
 	u.statusMutex.Lock()
 	ret := u.status
@@ -272,22 +379,46 @@ func (u *UBlox) getStatus() int {
 	return ret
 }
 
-// UbloxPollReset resets the ubxtool poll process
+// stopPollReader signals the polling reader to stop.
+func (u *UBlox) stopPollReader() <-chan struct{} {
+	u.pollStopMu.Lock()
+	defer u.pollStopMu.Unlock()
+	if u.pollStopCh != nil {
+		u.pollStopOnce.Do(func() { close(u.pollStopCh) })
+	}
+	return u.pollDoneCh
+}
+
+// UbloxPollReset resets the ubxtool poll process.
 func (u *UBlox) UbloxPollReset() {
+	if u.proc == nil {
+		return
+	}
 	glog.Infof("Resetting ubxtool polling with PID=%d", u.proc.Pid())
+	doneCh := u.stopPollReader()
 	_ = u.proc.Kill()
+	_ = u.proc.Wait()
+	if doneCh != nil {
+		<-doneCh
+	}
 	if u.getStatus() != ubxtoolStopped {
 		u.setStatus(ubxtoolDead)
 	}
-	u.proc.Wait()
 }
 
-// UbloxPollStop stops the ubxtool poll process
+// UbloxPollStop stops the ubxtool poll process.
 func (u *UBlox) UbloxPollStop() {
-	glog.Infof("Stopping ubxtool polling with PID=%d", u.proc.Pid())
 	u.setStatus(ubxtoolStopped)
+	if u.proc == nil {
+		return
+	}
+	glog.Infof("Stopping ubxtool polling with PID=%d", u.proc.Pid())
+	doneCh := u.stopPollReader()
 	_ = u.proc.Kill()
-	u.proc.Wait()
+	_ = u.proc.Wait()
+	if doneCh != nil {
+		<-doneCh
+	}
 }
 
 // ExtractOffset extracts the tAcc offset from a single ubxtool data line.
@@ -396,6 +527,9 @@ func ExtractLeapSec(output []string) *TimeLs {
 	for _, line := range output {
 		fields := strings.Fields(line)
 		for i, field := range fields {
+			if i+1 >= len(fields) {
+				continue
+			}
 			switch field {
 			case "srcOfCurrLs":
 				tmp, _ := strconv.ParseUint(fields[i+1], 10, 8)
