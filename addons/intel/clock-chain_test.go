@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const partE810XXVDA4T = "E810-XXVDA4T"
+
 func Test_ProcessProfileTbcClockChain(t *testing.T) {
 	dpllMock, restoreDPLLPins := setupMockDPLLPinsFromJSON("./testdata/dpll-pins.json")
 	defer restoreDPLLPins()
@@ -227,7 +229,7 @@ func TestInitClockChain_ResolveError_NoPanic(t *testing.T) {
 	// PtpSettings. It is absent here, so resolveInterconnections returns an error.
 	opts := E810Opts{
 		PhaseInputs: []PhaseInputs{
-			{ID: "ens3f0", Part: "E810-XXVDA4T", GnssInput: true},
+			{ID: "ens3f0", Part: partE810XXVDA4T, GnssInput: true},
 		},
 	}
 	name := "test"
