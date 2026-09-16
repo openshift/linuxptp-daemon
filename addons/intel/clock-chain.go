@@ -196,7 +196,7 @@ func InitClockChain(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*C
 
 	comps, err := chain.resolveInterconnections(opts, nodeProfile)
 	if err != nil {
-		glog.Errorf("fail to get delay compensations, %s", err)
+		return chain, fmt.Errorf("fail to get delay compensations: %w", err)
 	}
 	err = SendDelayCompensation(comps, chain.DpllPins)
 	if err != nil {
