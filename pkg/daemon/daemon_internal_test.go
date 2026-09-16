@@ -43,12 +43,6 @@ const (
 	labelIface          = "iface"
 	labelNode           = "node"
 	labelProcess        = "process"
-	ts2phcConf          = "ts2phc.0.config"
-	ptp4lConf           = "ptp4l.0.config"
-	ens4f0              = "ens4f0"
-	clockIDEns4f0       = "clockId[ens4f0]"
-	testConfigName      = "test-config"
-	ptp4l1Conf          = "ptp4l.1.config"
 )
 
 // vendor defaults are embedded; no filesystem setup needed
@@ -470,7 +464,7 @@ func Test_applyProfile_TGM(t *testing.T) {
 			offsetCond, isOffsetCond := cond.(process.OnStateAndOffsetForCount)
 			assert.True(t, isOffsetCond, "T-GM phc2sys must wait on ts2phc lock/offset, got %s", cond)
 			assert.Equal(t, event.TS2PHC, offsetCond.Source)
-			assert.Equal(t, ts2phcConf, offsetCond.ConfigName)
+			assert.Equal(t, "ts2phc.0.config", offsetCond.ConfigName)
 		}
 	}
 
@@ -782,14 +776,14 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 
 		process := &ptpProcess{
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceNames: []string{ens4f0},
-				perPortState: map[string]event.PTPState{ens4f0: event.PTP_NOTSET},
+				trIfaceNames: []string{"ens4f0"},
+				perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
 			},
 			nodeProfile: &ptpv1.PtpProfile{ //nolint:govet // needed for test setup
 				Name: stringPointer("test-profile"),
 				PtpSettings: map[string]string{
-					"leadingInterface": ens4f0,
-					clockIDEns4f0:      "123456789",
+					"leadingInterface": "ens4f0",
+					"clockId[ens4f0]":  "123456789",
 				},
 			},
 			clockType:        event.BC,                                      //nolint:govet // needed for test setup
@@ -799,7 +793,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 		// Verify that hardware config path conditions are met
 		assert.NotNil(t, process.tbcStateDetector, "PTPStateDetector should be present for hardware config path")
 		assert.True(t, vTbcHasHardwareConfig, "Hardware config should be enabled")
-		assert.Equal(t, []string{ens4f0}, process.tBCAttributes.trIfaceNames, "Interface names should be set correctly")
+		assert.Equal(t, []string{"ens4f0"}, process.tBCAttributes.trIfaceNames, "Interface names should be set correctly")
 
 		// Verify the path selection logic would choose hardware config path
 		// This tests the condition: vTbcHasHardwareConfig && p.tbcStateDetector != nil
@@ -817,7 +811,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 		// Create a mock Daemon with hardwareConfigManager and set up hardware config
 		fakeClient := fake.NewClientset()
 		hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
-		err := setupHardwareConfigForTest(hcm, "test-profile", ens4f0)
+		err := setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 		assert.NoError(t, err, "Should be able to set up hardware config")
 		mockDaemon := &Daemon{
 			hardwareConfigManager: hcm,
@@ -825,28 +819,27 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 
 		detector := hardwareconfig.NewPTPStateDetector(hcm) // Use same HCM
 
-		// Verify detector has ens4f0 in monitored ports
+		// Verify detector has "ens4f0" in monitored ports
 		monitoredPorts := detector.GetMonitoredPorts()
-		assert.Contains(t, monitoredPorts, ens4f0, "ens4f0 should be in monitored ports")
+		assert.Contains(t, monitoredPorts, "ens4f0", "ens4f0 should be in monitored ports")
 
 		proc := &ptpProcess{
 			ExecProcess: ExecProcess{
 				eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
-				configName: testConfigName,            //nolint:govet // needed for test setup
-
+				configName: "test-config",             //nolint:govet // needed for test setup
 			},
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceNames:      []string{ens4f0},
-				perPortState:      map[string]event.PTPState{ens4f0: event.PTP_NOTSET},
-				trPortsConfigFile: testConfigName,
+				trIfaceNames:      []string{"ens4f0"},
+				perPortState:      map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
+				trPortsConfigFile: "test-config",
 				lastAppliedState:  event.PTP_NOTSET,
 				offsetThreshold:   10.0,
 			},
 			nodeProfile: &ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
 				PtpSettings: map[string]string{
-					"leadingInterface": ens4f0,
-					clockIDEns4f0:      "123456789",
+					"leadingInterface": "ens4f0",
+					"clockId[ens4f0]":  "123456789",
 				},
 			},
 			clockType:        event.BC,
@@ -903,7 +896,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 		// Create a mock Daemon with hardwareConfigManager and set up hardware config
 		fakeClient := fake.NewClientset()
 		hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
-		err := setupHardwareConfigForTest(hcm, "test-profile", ens4f0)
+		err := setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 		assert.NoError(t, err, "Should be able to set up hardware config")
 		mockDaemon := &Daemon{
 			hardwareConfigManager: hcm,
@@ -911,25 +904,24 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 
 		detector := hardwareconfig.NewPTPStateDetector(hcm) // Use same HCM
 
-		// Verify detector has ens4f0 in monitored ports
+		// Verify detector has "ens4f0" in monitored ports
 		monitoredPorts := detector.GetMonitoredPorts()
-		assert.Contains(t, monitoredPorts, ens4f0, "ens4f0 should be in monitored ports")
+		assert.Contains(t, monitoredPorts, "ens4f0", "ens4f0 should be in monitored ports")
 
 		process := &ptpProcess{
 			ExecProcess: ExecProcess{
 				eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
-				configName: testConfigName,            //nolint:govet // needed for test setup
-
+				configName: "test-config",             //nolint:govet // needed for test setup
 			},
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceNames: []string{ens4f0},
-				perPortState: map[string]event.PTPState{ens4f0: event.PTP_LOCKED},
+				trIfaceNames: []string{"ens4f0"},
+				perPortState: map[string]event.PTPState{"ens4f0": event.PTP_LOCKED},
 			},
 			nodeProfile: &ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
 				PtpSettings: map[string]string{
-					"leadingInterface": ens4f0,
-					clockIDEns4f0:      "123456789",
+					"leadingInterface": "ens4f0",
+					"clockId[ens4f0]":  "123456789",
 				},
 			},
 			clockType:        event.BC,
@@ -992,8 +984,8 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 
 				process := &ptpProcess{
 					tBCAttributes: tBCProcessAttributes{
-						trIfaceNames: []string{ens4f0},
-						perPortState: map[string]event.PTPState{ens4f0: event.PTP_NOTSET},
+						trIfaceNames: []string{"ens4f0"},
+						perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
 					},
 				}
 
@@ -1066,18 +1058,17 @@ func TestTBCTransitionCheck_PathSelection(t *testing.T) {
 			process := &ptpProcess{
 				ExecProcess: ExecProcess{
 					eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
-					configName: testConfigName,            //nolint:govet // needed for test setup
-
+					configName: "test-config",             //nolint:govet // needed for test setup
 				},
 				tBCAttributes: tBCProcessAttributes{
-					trIfaceNames: []string{ens4f0},
-					perPortState: map[string]event.PTPState{ens4f0: event.PTP_NOTSET},
+					trIfaceNames: []string{"ens4f0"},
+					perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
 				},
 				nodeProfile: &ptpv1.PtpProfile{ //nolint:govet // needed for test setup
 					Name: stringPointer("test-profile"),
 					PtpSettings: map[string]string{
-						"leadingInterface": ens4f0,
-						clockIDEns4f0:      "123456789",
+						"leadingInterface": "ens4f0",
+						"clockId[ens4f0]":  "123456789",
 					},
 				},
 				clockType: event.BC, //nolint:govet // needed for test setup
@@ -1157,7 +1148,7 @@ func createMockPTPStateDetectorForHardwareConfig() *hardwareconfig.PTPStateDetec
 	// Create a detector using the normal constructor - this properly initializes ptp4lExtractor
 	fakeClient := fake.NewClientset()
 	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
-	_ = setupHardwareConfigForTest(hcm, "test-profile", ens4f0)
+	_ = setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 
 	// Create detector - it will automatically populate monitoredPorts from the hardware config
 	return hardwareconfig.NewPTPStateDetector(hcm)
@@ -1179,7 +1170,7 @@ func TestProcessTBCTransitionHardwareConfig_HardwareConfigIntegration(t *testing
 
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := hardwareconfig.NewMockCommandExecutor()
-	mockCmd.SetResponse("ethtool", []string{"-i", ens4f0}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
 	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
@@ -1269,7 +1260,7 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := hardwareconfig.NewMockCommandExecutor()
-	mockCmd.SetResponse("ethtool", []string{"-i", ens4f0}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
 	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
@@ -1306,8 +1297,7 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 	process := &ptpProcess{
 		ExecProcess: ExecProcess{
 			eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
-			configName: testConfigName,            //nolint:govet // needed for test setup
-
+			configName: "test-config",             //nolint:govet // needed for test setup
 		},
 		tBCAttributes: tBCProcessAttributes{
 			trIfaceNames: []string{"ens4f1"},
@@ -1429,21 +1419,20 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 		process := &ptpProcess{
 			ExecProcess: ExecProcess{
 				eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
-				configName: testConfigName,            //nolint:govet // needed for test setup
-
+				configName: "test-config",             //nolint:govet // needed for test setup
 			},
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceNames:      []string{ens4f0},
-				perPortState:      map[string]event.PTPState{ens4f0: event.PTP_NOTSET},
-				trPortsConfigFile: testConfigName,
+				trIfaceNames:      []string{"ens4f0"},
+				perPortState:      map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
+				trPortsConfigFile: "test-config",
 				lastAppliedState:  event.PTP_NOTSET,
 				offsetThreshold:   10.0,
 			},
 			nodeProfile: &ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
 				PtpSettings: map[string]string{
-					"leadingInterface": ens4f0,
-					clockIDEns4f0:      "123456789",
+					"leadingInterface": "ens4f0",
+					"clockId[ens4f0]":  "123456789",
 				},
 			},
 			clockType: event.BC,
@@ -1490,18 +1479,17 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 		process := &ptpProcess{
 			ExecProcess: ExecProcess{
 				eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
-				configName: testConfigName,            //nolint:govet // needed for test setup
-
+				configName: "test-config",             //nolint:govet // needed for test setup
 			},
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceNames: []string{ens4f0},
-				perPortState: map[string]event.PTPState{ens4f0: event.PTP_NOTSET},
+				trIfaceNames: []string{"ens4f0"},
+				perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
 			},
 			nodeProfile: &ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
 				PtpSettings: map[string]string{
-					"leadingInterface": ens4f0,
-					clockIDEns4f0:      "123456789",
+					"leadingInterface": "ens4f0",
+					"clockId[ens4f0]":  "123456789",
 				},
 			},
 			clockType: event.BC,
@@ -1531,19 +1519,19 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 
 		process := &ptpProcess{
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceNames: []string{ens4f0},
-				perPortState: map[string]event.PTPState{ens4f0: event.PTP_NOTSET},
+				trIfaceNames: []string{"ens4f0"},
+				perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
 			},
 			nodeProfile: &ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
 				PtpSettings: map[string]string{
-					"leadingInterface": ens4f0,
-					clockIDEns4f0:      "123456789",
+					"leadingInterface": "ens4f0",
+					"clockId[ens4f0]":  "123456789",
 				},
 			},
 			ExecProcess: ExecProcess{
 				eventCh:    make(chan event.Event, 1),
-				configName: testConfigName,
+				configName: "test-config",
 			},
 			clockType: event.BC,
 		}
@@ -1623,7 +1611,7 @@ func TestTBCDualUpstream_PortALost_PortBTakesOver(t *testing.T) {
 		tBCAttributes: tBCProcessAttributes{
 			trIfaceNames:      []string{"eno2", "eno3"},
 			perPortState:      map[string]event.PTPState{"eno2": event.PTP_NOTSET, "eno3": event.PTP_NOTSET},
-			trPortsConfigFile: testConfigName,
+			trPortsConfigFile: "test-config",
 			lastAppliedState:  event.PTP_NOTSET,
 			offsetThreshold:   10.0,
 		},
@@ -1633,7 +1621,7 @@ func TestTBCDualUpstream_PortALost_PortBTakesOver(t *testing.T) {
 		},
 		ExecProcess: ExecProcess{
 			eventCh:    make(chan event.Event, 10),
-			configName: testConfigName,
+			configName: "test-config",
 		},
 		clockType:        event.BC,
 		offset:           5.0,
@@ -1691,7 +1679,7 @@ func TestTBCDualUpstream_BothPortsLost(t *testing.T) {
 			trIfaceNames:      []string{"eno2", "eno3"},
 			perPortState:      map[string]event.PTPState{"eno2": event.PTP_LOCKED, "eno3": event.PTP_LOCKED},
 			activePort:        "eno2",
-			trPortsConfigFile: testConfigName,
+			trPortsConfigFile: "test-config",
 			lastReportedState: event.PTP_LOCKED,
 			lastAppliedState:  event.PTP_LOCKED,
 			offsetThreshold:   10.0,
@@ -1702,7 +1690,7 @@ func TestTBCDualUpstream_BothPortsLost(t *testing.T) {
 		},
 		ExecProcess: ExecProcess{
 			eventCh:    make(chan event.Event, 10),
-			configName: testConfigName,
+			configName: "test-config",
 		},
 		clockType:        event.BC,
 		tbcStateDetector: detector,
@@ -1743,7 +1731,7 @@ func TestTBCDualUpstream_RecoveryAfterBothLost(t *testing.T) {
 		tBCAttributes: tBCProcessAttributes{
 			trIfaceNames:      []string{"eno2", "eno3"},
 			perPortState:      map[string]event.PTPState{"eno2": event.PTP_FREERUN, "eno3": event.PTP_FREERUN},
-			trPortsConfigFile: testConfigName,
+			trPortsConfigFile: "test-config",
 			lastReportedState: event.PTP_FREERUN,
 			lastAppliedState:  event.PTP_HOLDOVER,
 			offsetThreshold:   10.0,
@@ -1754,7 +1742,7 @@ func TestTBCDualUpstream_RecoveryAfterBothLost(t *testing.T) {
 		},
 		ExecProcess: ExecProcess{
 			eventCh:    make(chan event.Event, 10),
-			configName: testConfigName,
+			configName: "test-config",
 		},
 		clockType:        event.BC,
 		offset:           5.0,
@@ -1866,7 +1854,7 @@ func TestTBCLegacy_Switchover_ActivePortUpdated(t *testing.T) {
 			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
 			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_NOTSET},
 			activePort:        testDUTUpstream1,
-			trPortsConfigFile: testConfigName,
+			trPortsConfigFile: "test-config",
 			lastReportedState: event.PTP_LOCKED,
 			lastAppliedState:  event.PTP_LOCKED,
 			offsetThreshold:   10.0,
@@ -1877,7 +1865,7 @@ func TestTBCLegacy_Switchover_ActivePortUpdated(t *testing.T) {
 		},
 		ExecProcess: ExecProcess{
 			eventCh:    make(chan event.Event, 10),
-			configName: testConfigName,
+			configName: "test-config",
 		},
 		clockType: event.BC,
 		offset:    5.0,
@@ -1909,7 +1897,7 @@ func TestTBCLegacy_AllPortsLost_EntersHoldover(t *testing.T) {
 			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
 			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_NOTSET},
 			activePort:        testDUTUpstream1,
-			trPortsConfigFile: testConfigName,
+			trPortsConfigFile: "test-config",
 			lastReportedState: event.PTP_LOCKED,
 			lastAppliedState:  event.PTP_LOCKED,
 			offsetThreshold:   10.0,
@@ -1920,7 +1908,7 @@ func TestTBCLegacy_AllPortsLost_EntersHoldover(t *testing.T) {
 		},
 		ExecProcess: ExecProcess{
 			eventCh:    make(chan event.Event, 10),
-			configName: testConfigName,
+			configName: "test-config",
 		},
 		clockType: event.BC,
 	}
@@ -1944,7 +1932,7 @@ func TestTBCLegacy_RecoveryFromHoldover(t *testing.T) {
 		tBCAttributes: tBCProcessAttributes{
 			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
 			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_FREERUN, testDUTUpstream2: event.PTP_NOTSET},
-			trPortsConfigFile: testConfigName,
+			trPortsConfigFile: "test-config",
 			lastReportedState: event.PTP_FREERUN,
 			lastAppliedState:  event.PTP_HOLDOVER,
 			offsetThreshold:   10.0,
@@ -1955,7 +1943,7 @@ func TestTBCLegacy_RecoveryFromHoldover(t *testing.T) {
 		},
 		ExecProcess: ExecProcess{
 			eventCh:    make(chan event.Event, 10),
-			configName: testConfigName,
+			configName: "test-config",
 		},
 		clockType: event.BC,
 		offset:    5.0,
@@ -1989,7 +1977,7 @@ func TestTBCLegacy_ActiveTRPort_ReportsCorrectInterface(t *testing.T) {
 		tBCAttributes: tBCProcessAttributes{
 			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
 			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_NOTSET, testDUTUpstream2: event.PTP_NOTSET},
-			trPortsConfigFile: testConfigName,
+			trPortsConfigFile: "test-config",
 			lastAppliedState:  event.PTP_NOTSET,
 			offsetThreshold:   10.0,
 			offsetEventWindow: utils.NewWindow(16),
@@ -2000,7 +1988,7 @@ func TestTBCLegacy_ActiveTRPort_ReportsCorrectInterface(t *testing.T) {
 		},
 		ExecProcess: ExecProcess{
 			eventCh:    make(chan event.Event, 10),
-			configName: testConfigName,
+			configName: "test-config",
 		},
 		clockType: event.BC,
 		offset:    3.0,
@@ -2032,7 +2020,7 @@ func TestTBCLegacy_ActivePort_IgnoresNonTRPort(t *testing.T) {
 			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
 			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_NOTSET},
 			activePort:        testDUTUpstream1,
-			trPortsConfigFile: testConfigName,
+			trPortsConfigFile: "test-config",
 			lastReportedState: event.PTP_LOCKED,
 			lastAppliedState:  event.PTP_LOCKED,
 			offsetThreshold:   10.0,
@@ -2043,7 +2031,7 @@ func TestTBCLegacy_ActivePort_IgnoresNonTRPort(t *testing.T) {
 		},
 		ExecProcess: ExecProcess{
 			eventCh:    make(chan event.Event, 10),
-			configName: testConfigName,
+			configName: "test-config",
 		},
 		clockType: event.BC,
 	}
@@ -2299,7 +2287,7 @@ func readyProc(name string, stopped, hasMetrics bool, delayedStart bool) *ptpPro
 	if delayedStart {
 		p.conditions = map[process.Action]process.Condition{
 			process.ActionStart: process.OnStateAndOffsetForCount{
-				ConfigName: ts2phcConf,
+				ConfigName: "ts2phc.0.config",
 				Source:     event.TS2PHC,
 				State:      event.PTP_LOCKED,
 				MaxOffset:  1e9,
@@ -2380,8 +2368,8 @@ func TestReady_DelayedHaPhc2sysNotReportedAsStopped(t *testing.T) {
 	haPhc2sys := readyProc(phc2sysProcessName, true, false, false)
 	haPhc2sys.conditions = map[process.Action]process.Condition{
 		process.ActionStart: process.Any{Conditions: []process.Condition{
-			process.OnStateAndOffsetForCount{ClockID: ptp4lConf, ConfigName: ptp4lConf, Source: event.PTP4l},
-			process.OnStateAndOffsetForCount{ClockID: ptp4l1Conf, ConfigName: ptp4l1Conf, Source: event.PTP4l},
+			process.OnStateAndOffsetForCount{ClockID: "ptp4l.0.config", ConfigName: "ptp4l.0.config", Source: event.PTP4l},
+			process.OnStateAndOffsetForCount{ClockID: "ptp4l.1.config", ConfigName: "ptp4l.1.config", Source: event.PTP4l},
 		}},
 	}
 	rt := makeReadyTracker(asProcesses(
@@ -2539,7 +2527,7 @@ func TestDeleteMetrics_CleansPhc2sysProcessSeries(t *testing.T) {
 	}{
 		{
 			name:          "non-HA label from ptp4l message tag",
-			metricCfgName: ptp4l1Conf,
+			metricCfgName: "ptp4l.1.config",
 		},
 		{
 			name:          "legacy label from phc2sys config name",
