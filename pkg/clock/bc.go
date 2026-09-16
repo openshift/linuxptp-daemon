@@ -58,7 +58,7 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 			clockClass := fbprotocol.ClockClass(ds.ParentDataSet.GrandmasterClockClass)
 			c.updateClockClass(clockClass)
 		}
-		return SyncState{State: c.syncState, LeadingIFace: event.LEADING_INTERFACE_UNKNOWN}
+		return SyncState{State: c.syncState, ClockClass: c.clockClass, LeadingIFace: event.LEADING_INTERFACE_UNKNOWN}
 	default:
 		d := c.getData(ev.Source)
 		d.AddEvent(ev)
@@ -66,7 +66,7 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 
 		ptp, ok := ev.Data.(*event.PTPData)
 		if !ok || ptp == nil {
-			return SyncState{State: c.syncState, LeadingIFace: event.LEADING_INTERFACE_UNKNOWN}
+			return SyncState{State: c.syncState, ClockClass: c.clockClass, LeadingIFace: event.LEADING_INTERFACE_UNKNOWN}
 		}
 
 		if c.iface == "" && ev.IFace != "" {
@@ -87,7 +87,7 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 
 		emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState, c.osClockState, c.cfgName)
 
-		return SyncState{State: c.syncState, LeadingIFace: event.LEADING_INTERFACE_UNKNOWN}
+		return SyncState{State: c.syncState, ClockClass: c.clockClass, LeadingIFace: event.LEADING_INTERFACE_UNKNOWN}
 	}
 }
 

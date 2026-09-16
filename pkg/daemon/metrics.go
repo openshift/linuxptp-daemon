@@ -821,6 +821,12 @@ func (s *slaveInterface) set(configName string, value string) {
 	s.name[configName] = value
 }
 
+func (s *slaveInterface) get(configName string) string {
+	s.RLock()
+	defer s.RUnlock()
+	return s.name[configName]
+}
+
 func (s *slaveInterface) isFaulty(configName string, iface string) bool {
 	s.RLock()
 	defer s.RUnlock()

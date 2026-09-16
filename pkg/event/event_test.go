@@ -563,8 +563,6 @@ func waitForClockClass(clk clock.Clock, expected fbprotocol.ClockClass, timeout 
 }
 
 func TestTBCClockClassMetric(t *testing.T) {
-	// TODO: Dont skip this
-	t.Skip("Skipping metrics test")
 	pmcMock := &pmc.MockClient{
 		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
 			ParentDataSet: protocol.ParentDataSet{

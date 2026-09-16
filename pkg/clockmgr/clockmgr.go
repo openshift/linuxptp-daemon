@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
@@ -16,6 +17,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -256,6 +258,7 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 			if clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
 				m.updateClockStateMetrics(clockState.State, string(ev.ClockType), alias.GetAlias(clockState.LeadingIFace))
 			}
+			m.updateClockClassMetrics(ev.CfgName, clk.ClockClass())
 			m.updateMetrics(ev)
 			m.clockManagementMu.Unlock()
 
@@ -290,7 +293,7 @@ func (m *ClockManager) updateClockStateMetrics(state event.PTPState, process, iF
 		return
 	}
 	labels := prometheus.Labels{
-		"process": process, nodeLabel: m.nodeName, "iface": iFace}
+		processLabel: process, nodeLabel: m.nodeName, "iface": iFace}
 	switch state {
 	case event.PTP_LOCKED:
 		m.clockMetric.With(labels).Set(event.ClockStateLocked)
@@ -299,6 +302,22 @@ func (m *ClockManager) updateClockStateMetrics(state event.PTPState, process, iF
 	default:
 		m.clockMetric.With(labels).Set(event.ClockStateFreerun)
 	}
+}
+
+// updateClockClassMetrics updates the clock class gauge for a config. The class
+// is emitted under the ptp4l config name and process (matching downstream
+// consumers regardless of the source event); an uninitialized (0) class is
+// skipped since it means the clock has not yet determined its class.
+func (m *ClockManager) updateClockClassMetrics(cfgName string, clockClass fbprotocol.ClockClass) {
+	if m.clockClassMetric == nil {
+		return
+	}
+	if clockClass == protocol.ClockClassUninitialized {
+		return
+	}
+	profile := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
+	m.clockClassMetric.With(prometheus.Labels{
+		processLabel: "ptp4l", nodeLabel: m.nodeName, "config": profile}).Set(float64(clockClass))
 }
 
 // updateMetrics extracts numeric values from PTP events and updates Prometheus metrics.
@@ -346,7 +365,7 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 		}
 
 		labels := prometheus.Labels{"from": pName, nodeLabel: m.nodeName,
-			"process": string(ev.Source), "iface": iface}
+			processLabel: string(ev.Source), "iface": iface}
 
 		if entry, found := m.metricCache[key]; found {
 			entry.labels = labels
@@ -367,7 +386,7 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 						Subsystem: event.PTPSubsystem,
 						Name:      metricName,
 						Help:      event.ValueTypeHelpTxt[dataType],
-					}, []string{"from", "node", "process", "iface"})
+					}, []string{"from", "node", processLabel, "iface"})
 				glog.Infof("trying to register metrics %s for %s", metricName, dataType)
 				registerMetrics(gauge)
 				m.registeredGauges[metricName] = gauge

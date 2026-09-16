@@ -83,6 +83,21 @@ func processWithParser(process *ptpProcess, output string) {
 }
 
 func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
+	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
+	if configName != "" {
+		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
+	}
+
+	// ptp4l logs a follower's offset as "master offset ..." with no interface
+	// token, so the parser reports iface="master". Resolve it to the real
+	// follower interface recorded on the SLAVE port transition (slaveIface) so
+	// the metrics and the event emitted below are labeled with the real name.
+	if ptpMetrics.Iface == master {
+		if follower := slaveIface.get(configName); follower != "" {
+			ptpMetrics.Iface = follower
+		}
+	}
+
 	// Convert interface from possible clock id
 	iface := process.ifaces.GetPhcID2IFace(ptpMetrics.Iface)
 	if iface != clockRealTime {
@@ -95,11 +110,6 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	// Update clock state metrics if available
 	if ptpMetrics.ClockState != "" {
 		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState), ptpMetrics.ServoState)
-	}
-
-	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
-	if configName != "" {
-		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
 	}
 
 	// Handle master offset source tracking
