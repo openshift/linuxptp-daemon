@@ -110,8 +110,8 @@ func TestClockChainResolution(t *testing.T) {
 			name:              "dell/XR8720t",
 			hwConfigFile:      "testdata/gnrd-hwconfig-minimal-perla4.yaml",
 			hwDefPath:         "dell/XR8720t",
-			expectedPtpInput:  "ETH01_SDP_TIMESYNC_0",
-			expectedGnssInput: "GNSS_1PPS_IN",
+			expectedPtpInput:  testPackageLabelREF0N,
+			expectedGnssInput: testPackageLabelREF4P,
 		},
 	}
 
@@ -496,7 +496,7 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 		"NetworkInterface should be derived from first upstream port")
 
 	assert.NotEmpty(t, resolved.DPLL.PhaseInputs)
-	ptpInputPin, exists := resolved.DPLL.PhaseInputs["ETH01_SDP_TIMESYNC_0"]
+	ptpInputPin, exists := resolved.DPLL.PhaseInputs[testPackageLabelREF0N]
 	assert.True(t, exists, "PhaseInputs should contain ptpInputPin from dell/XR8720t template")
 	assert.NotNil(t, ptpInputPin.Frequency)
 	assert.Equal(t, int64(1), *ptpInputPin.Frequency)
@@ -518,7 +518,7 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 	}
 	assert.Equal(t, ptpv2alpha1.SourceTypePTP, ptpSource.SourceType)
 	assert.Equal(t, testSubsystemLeader, ptpSource.Subsystem)
-	assert.Equal(t, "ETH01_SDP_TIMESYNC_0", ptpSource.BoardLabel)
+	assert.Equal(t, testPackageLabelREF0N, ptpSource.BoardLabel)
 	assert.Equal(t, upstreamPorts, ptpSource.PTPTimeReceivers,
 		"PTPTimeReceivers should contain both upstream ports derived from PTP config")
 
@@ -526,7 +526,7 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 	initCond := findConditionByName(behavior.Conditions, "Initialize T-BC")
 	assert.NotNil(t, initCond, "Initialize T-BC condition should be present")
 	if initCond != nil && len(initCond.DesiredStates) > 0 && initCond.DesiredStates[0].DPLL != nil {
-		assert.Equal(t, "GNSS_1PPS_IN", initCond.DesiredStates[0].DPLL.BoardLabel)
+		assert.Equal(t, testPackageLabelREF4P, initCond.DesiredStates[0].DPLL.BoardLabel)
 		assert.Equal(t, testSubsystemLeader, initCond.DesiredStates[0].DPLL.Subsystem)
 	}
 

@@ -1641,7 +1641,7 @@ func TestBuildPhaseAdjustmentCommandsWithGranularity(t *testing.T) {
 
 	// Get clock ID from cache
 	var clockID uint64
-	for cid := range cache.Pins {
+	for cid := range cache.BoardLabelPins {
 		clockID = cid
 		break
 	}
