@@ -1240,7 +1240,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				if !clockTypeFound {
 					pmcClockType = string(clockType)
 				}
-				pmcProcess := NewPMCProcess(runID, dn.processManager.eventChannel, pmcClockType)
+				pmcProcess := NewPMCProcess(runID, dn.processManager.eventChannel, pmcClockType, time.Duration(dn.pmcPollInterval)*time.Second)
 				pmcProcess.CmdInit()
 				// TODO addScheduling
 				dprocess.depProcess = append(dprocess.depProcess, pmcProcess)
