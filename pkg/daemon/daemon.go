@@ -986,7 +986,7 @@ func processConfigFor(dprocess *ptpProcess, clockType event.ClockType, eventCh c
 }
 
 func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *ptpProcess) {
-	var gnssInitCmds ublox.CommandList
+	var gnssInitConfig *ublox.InitConfig
 	if nodeProfile.Name != nil && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
 		gnssPort, gnssErr := dn.hardwareConfigManager.GetGNSSSerialPort(nodeProfile)
 		if gnssErr != nil {
@@ -996,8 +996,8 @@ func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *p
 			dprocess.gnssSerialPort = gnssPort
 		}
 
-		gnssInitCmds = dn.hardwareConfigManager.GetGNSSInitCommands(nodeProfile)
-		glog.Infof("HardwareConfig GNSS initialization added %d additional commands", len(gnssInitCmds))
+		gnssInitConfig = dn.hardwareConfigManager.GetGNSSInitConfig(nodeProfile)
+		glog.Infof("HardwareConfig GNSS initialization configured: %t", gnssInitConfig != nil)
 	}
 
 	if dprocess.gnssSerialPort == "" {
@@ -1030,7 +1030,7 @@ func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *p
 		*dn.hwconfigs = filtered
 	}
 
-	gpsdProcess := NewGpsdProcess(dprocess.gnssSerialPort, gmInterface, dprocess.messageTag, gnssInitCmds, gnssResultsFn, nodeProfile, dn.processManager.eventsIn, processConfigFor(dprocess, dprocess.clockType, dn.processManager.eventsIn))
+	gpsdProcess := NewGpsdProcess(dprocess.gnssSerialPort, gmInterface, dprocess.messageTag, gnssInitConfig, gnssResultsFn, nodeProfile, dn.processManager.eventsIn, processConfigFor(dprocess, dprocess.clockType, dn.processManager.eventsIn))
 	dprocess.depProcess = append(dprocess.depProcess, gpsdProcess)
 
 	// init gpspipe

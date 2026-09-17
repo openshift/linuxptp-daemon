@@ -570,64 +570,67 @@ func TestGetGNSSSerialPort(t *testing.T) {
 	})
 }
 
-func TestGetGNSSInitCommands(t *testing.T) {
-	t.Run("returns commands for GNSS source", func(t *testing.T) {
-		hwConfig := ptpv2alpha1.HardwareConfig{
-			Spec: ptpv2alpha1.HardwareConfigSpec{
-				RelatedPtpProfileName: testHWConfigName,
-				Profile: ptpv2alpha1.HardwareProfile{
-					ClockChain: &ptpv2alpha1.ClockChain{
-						Behavior: &ptpv2alpha1.Behavior{
-							Sources: []ptpv2alpha1.SourceConfig{
-								{
-									Name:       testSourceGNSS,
-									SourceType: ptpv2alpha1.SourceTypeGNSS,
-									GNSSConfig: &ptpv2alpha1.GNSSConfig{
-										Init: ptpv2alpha1.GNSSInit{
-											AntennaVoltage: true,
-											Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
-											SurveyIn:       ptpv2alpha1.GNSSSurveyParameters{ObservationTime: 600, Accuracy: 5},
-										},
-									},
-								},
-							},
-						},
+func TestGetGNSSInitConfigMapsConfiguredSettings(t *testing.T) {
+	gnssConfig := &ptpv2alpha1.GNSSConfig{
+		Init: ptpv2alpha1.GNSSInit{
+			AntennaVoltage: true,
+			Constellations: []ptpv2alpha1.ConstellationID{
+				ptpv2alpha1.ConstellationGPS,
+				ptpv2alpha1.ConstellationGalileo,
+				ptpv2alpha1.ConstellationGLONASS,
+				ptpv2alpha1.ConstellationBeiDou,
+				ptpv2alpha1.ConstellationSBAS,
+				ptpv2alpha1.ConstellationID("unknown"),
+			},
+			SurveyIn: ptpv2alpha1.GNSSSurveyParameters{ObservationTime: 600, Accuracy: 5},
+			ExtraCommands: []ptpv2alpha1.UBLXCommand{
+				{Args: []string{"-p", testMonHW}, Record: true},
+				{Args: []string{"-p", testCfgMsg}},
+			},
+		},
+	}
+	hwConfig := ptpv2alpha1.HardwareConfig{
+		Spec: ptpv2alpha1.HardwareConfigSpec{
+			RelatedPtpProfileName: testHWConfigName,
+			Profile: ptpv2alpha1.HardwareProfile{
+				ClockChain: &ptpv2alpha1.ClockChain{
+					Behavior: &ptpv2alpha1.Behavior{
+						Sources: []ptpv2alpha1.SourceConfig{{
+							Name: testSourceGNSS, SourceType: ptpv2alpha1.SourceTypeGNSS, GNSSConfig: gnssConfig,
+						}},
 					},
 				},
 			},
+		},
+	}
+	hcm := makeTestHCM(hwConfig)
+
+	config := hcm.GetGNSSInitConfig(testProfile(testProfileName))
+	if assert.NotNil(t, config) {
+		assert.True(t, config.AntennaVoltage)
+		assert.Equal(t, []ublox.Constellation{
+			ublox.ConstellationGPS,
+			ublox.ConstellationGalileo,
+			ublox.ConstellationGLONASS,
+			ublox.ConstellationBeiDou,
+			ublox.ConstellationSBAS,
+		}, config.Constellations)
+		assert.Equal(t, &ublox.SurveyInConfig{ObservationTime: 600, AccuracyMeters: 5}, config.SurveyIn)
+		assert.Equal(t, ublox.CommandList{
+			{Args: []string{"-p", testMonHW}, ReportOutput: true},
+			{Args: []string{"-p", testCfgMsg}},
+		}, config.ExtraCommands)
+	}
+
+	t.Run("omits non-positive survey-in", func(t *testing.T) {
+		gnssConfig.Init.SurveyIn.ObservationTime = 0
+		surveyConfig := hcm.GetGNSSInitConfig(testProfile(testProfileName))
+		if assert.NotNil(t, surveyConfig) {
+			assert.Nil(t, surveyConfig.SurveyIn)
 		}
-		hcm := makeTestHCM(hwConfig)
-
-		cmds := hcm.GetGNSSInitCommands(testProfile(testProfileName))
-		// 1 antenna + 1 constellation (batched) + 1 survey = 3
-		assert.Equal(t, 3, len(cmds))
-
-		// Verify antenna voltage is first
-		assert.Equal(t, []string{"-z", testAntVoltEnable}, cmds[0].Args)
-
-		// Verify survey-in is last with ReportOutput
-		assert.True(t, cmds[2].ReportOutput)
-		assert.Contains(t, cmds[2].Args, testSurveyInArgs)
 	})
 
-	t.Run("returns nil when no GNSS source", func(t *testing.T) {
-		hwConfig := ptpv2alpha1.HardwareConfig{
-			Spec: ptpv2alpha1.HardwareConfigSpec{
-				RelatedPtpProfileName: testHWConfigName,
-				Profile: ptpv2alpha1.HardwareProfile{
-					ClockChain: &ptpv2alpha1.ClockChain{
-						Behavior: &ptpv2alpha1.Behavior{
-							Sources: []ptpv2alpha1.SourceConfig{
-								{Name: testSourcePTP, SourceType: ptpv2alpha1.SourceTypePTP},
-							},
-						},
-					},
-				},
-			},
-		}
-		hcm := makeTestHCM(hwConfig)
-
-		cmds := hcm.GetGNSSInitCommands(testProfile(testProfileName))
-		assert.Nil(t, cmds)
+	t.Run("returns nil when no GNSS source is configured", func(t *testing.T) {
+		assert.Nil(t, makeTestHCM().GetGNSSInitConfig(testProfile(testProfileName)))
 	})
 }

@@ -473,3 +473,39 @@ func TestNewCommandRunner(t *testing.T) {
 	assert.Equal(t, testProtoVersion, runner.protoVersion)
 	assert.Equal(t, 1, len(mock.calls))
 }
+
+func TestBuildInitCommandsInitialConfig(t *testing.T) {
+	t.Run("nil config", func(t *testing.T) {
+		assert.Nil(t, BuildInitCommands(testProtoVersion, nil))
+	})
+
+	t.Run("all configured settings", func(t *testing.T) {
+		config := &InitConfig{
+			AntennaVoltage: true,
+			Constellations: []Constellation{
+				ConstellationGPS,
+				ConstellationGalileo,
+				ConstellationGLONASS,
+				ConstellationBeiDou,
+				ConstellationSBAS,
+			},
+			SurveyIn: &SurveyInConfig{ObservationTime: 600, AccuracyMeters: 5},
+			ExtraCommands: CommandList{
+				{Args: []string{"-p", "MON-RF"}, ReportOutput: true},
+			},
+		}
+		assert.Equal(t, CommandList{
+			{Args: []string{"-z", "CFG-HW-ANT_CFG_VOLTCTRL,1"}},
+			{Args: []string{"-e", "GPS", "-e", "GALILEO", "-e", "GLONASS", "-e", "BEIDOU", "-e", "SBAS"}},
+			{Args: []string{"-t", "-w", "5", "-v", "1", "-e", "SURVEYIN,600,50000"}, ReportOutput: true},
+			{Args: []string{"-p", "MON-RF"}, ReportOutput: true},
+		}, BuildInitCommands(testProtoVersion, config))
+	})
+
+	t.Run("empty settings disable all constellations", func(t *testing.T) {
+		assert.Equal(t, CommandList{
+			{Args: []string{"-z", "CFG-HW-ANT_CFG_VOLTCTRL,0"}},
+			{Args: []string{"-d", "GPS", "-d", "GALILEO", "-d", "GLONASS", "-d", "BEIDOU", "-d", "SBAS"}},
+		}, BuildInitCommands(testProtoVersion, &InitConfig{}))
+	})
+}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -89,18 +88,38 @@ func (hcm *HardwareConfigManager) GetGNSSSerialPort(nodeProfile *ptpv1.PtpProfil
 	return FindGNSSDevice(source.GNSSConfig.Match)
 }
 
-// GetGNSSInitCommands returns the ublox initialization commands for the GNSS
-// source in the hardware config for the given profile. Returns nil if no GNSS
-// source is configured. The returned commands should be passed to ublox.NewUblox()
-// to run as part of the standard initialization sequence.
-func (hcm *HardwareConfigManager) GetGNSSInitCommands(nodeProfile *ptpv1.PtpProfile) ublox.CommandList {
-	source, gnssConfig := hcm.findGNSSSource(nodeProfile)
-	if source == nil {
+// GetGNSSInitConfig returns the GNSS settings for the configured source. The
+// ublox package builds the actual commands after detecting the receiver version.
+func (hcm *HardwareConfigManager) GetGNSSInitConfig(nodeProfile *ptpv1.PtpProfile) *ublox.InitConfig {
+	_, config := hcm.findGNSSSource(nodeProfile)
+	if config == nil {
 		return nil
 	}
-
-	glog.Infof("Building GNSS init commands for source %q", source.Name)
-	return buildGNSSInitCommands(gnssConfig)
+	result := &ublox.InitConfig{AntennaVoltage: config.Init.AntennaVoltage}
+	for _, constellation := range config.Init.Constellations {
+		switch constellation {
+		case ptpv2alpha1.ConstellationGPS:
+			result.Constellations = append(result.Constellations, ublox.ConstellationGPS)
+		case ptpv2alpha1.ConstellationGalileo:
+			result.Constellations = append(result.Constellations, ublox.ConstellationGalileo)
+		case ptpv2alpha1.ConstellationGLONASS:
+			result.Constellations = append(result.Constellations, ublox.ConstellationGLONASS)
+		case ptpv2alpha1.ConstellationBeiDou:
+			result.Constellations = append(result.Constellations, ublox.ConstellationBeiDou)
+		case ptpv2alpha1.ConstellationSBAS:
+			result.Constellations = append(result.Constellations, ublox.ConstellationSBAS)
+		}
+	}
+	if config.Init.SurveyIn.ObservationTime > 0 {
+		result.SurveyIn = &ublox.SurveyInConfig{
+			ObservationTime: config.Init.SurveyIn.ObservationTime,
+			AccuracyMeters:  config.Init.SurveyIn.Accuracy,
+		}
+	}
+	for _, extra := range config.Init.ExtraCommands {
+		result.ExtraCommands = append(result.ExtraCommands, ublox.Command{Args: extra.Args, ReportOutput: extra.Record})
+	}
+	return result
 }
 
 // buildGNSSInitCommands converts a GNSSConfig into the ordered list of ubxtool commands.
