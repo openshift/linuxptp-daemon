@@ -107,8 +107,10 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	// Update PTP metrics using the parsed data
 	updatePTPMetrics(ptpMetrics.Source, process.name, iface, ptpMetrics.Offset, ptpMetrics.MaxOffset, ptpMetrics.FreqAdj, ptpMetrics.Delay)
 
-	// Update clock state metrics if available
-	if ptpMetrics.ClockState != "" {
+	// Update clock state metrics if available. BC/OC clock_state is owned by the
+	// BCClock state machine (emitted from clockmgr as process="ptp4l"), so the
+	// log parser must not also emit it here.
+	if ptpMetrics.ClockState != "" && process.clockType != event.BC && process.clockType != event.OC {
 		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState), ptpMetrics.ServoState)
 	}
 
@@ -137,7 +139,12 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		// rate-limited to 1/sec, using tBCAttributes. It no-ops for simple
 		// OC/BC (offsetEventWindow is nil), so we send the event directly below.
 		process.sendPtp4lOffsetEvent()
-		if process.clockType == event.BC || process.clockType == event.OC {
+		// Only forward the offset to the BC/OC state machine once the follower
+		// interface is known. ptp4l logs the follower's offset as "master
+		// offset ..."; until the SLAVE port transition populates slaveIface the
+		// resolution above leaves Iface=="master", which is not a real interface
+		// and must not become the clock's leading interface.
+		if (process.clockType == event.BC || process.clockType == event.OC) && ptpMetrics.Iface != master {
 			select {
 			case process.eventCh <- event.Event{
 				Source:    event.PTP4l,
@@ -244,7 +251,24 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 				// Set fault metrics and clear slave & master offset interfaces
 				updatePTPMetrics(master, process.name, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
 				updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
-				updateClockStateMetrics(process.name, masterOffsetIface.get(configName).alias, FREERUN, "")
+				if process.clockType == event.BC || process.clockType == event.OC {
+					// Forward the raw fact (source lost) to the BCClock; it owns the
+					// LOCKED→HOLDOVER decision and the holdover timer. Do not emit
+					// clock_state here — clockmgr emits it from the BCClock verdict.
+					select {
+					case process.eventCh <- event.Event{
+						Source:    event.PTP4l,
+						CfgName:   configName,
+						IFace:     interfaceName,
+						ClockType: process.clockType,
+						Time:      time.Now().UnixMilli(),
+						Data:      &event.PTPData{SourceLost: true},
+					}:
+					default:
+					}
+				} else {
+					updateClockStateMetrics(process.name, masterOffsetIface.get(configName).alias, FREERUN, "")
+				}
 				masterOffsetIface.set(configName, "")
 				slaveIface.set(configName, "")
 			}

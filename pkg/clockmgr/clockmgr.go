@@ -16,7 +16,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
@@ -102,28 +101,25 @@ func Init(nodeName string, processChannel chan event.Event, offsetMetric *promet
 	}
 }
 
-// AddClock creates a Clock for the given config and registers it.
-// If a clock is already registered for cfgName it is replaced.
+// AddClock takes ownership of a given Clock
 // pmcClient may be nil for clock types that do not use PMC (e.g. BC, OC).
-func (m *ClockManager) AddClock(cfgName string, clockType event.ClockType, pmcClient pmc.Client) (clock.Clock, error) {
-	clk, err := clock.NewClock(cfgName, clockType, m.sendIPC, m.sendEvent, m.GetUtcOffset, pmcClient)
-	if err != nil {
-		return nil, err
-	}
+func (m *ClockManager) AddClock(clk clock.Clock) error {
+	clk.SetIPC(m.sendIPC)
+	clk.SetEventLoopbackFunc(m.sendEvent)
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
-	if prev, exists := m.clocks[cfgName]; exists {
-		glog.Warningf("AddClock: replacing existing %s clock for config %s", prev.ClockType(), cfgName)
+	if prev, exists := m.clocks[clk.ConfigName()]; exists {
+		glog.Warningf("AddClock: replacing existing %s clock for config %s", prev.ClockType(), clk.ConfigName())
 	}
-	m.clocks[cfgName] = clk
+	m.clocks[clk.ConfigName()] = clk
 	// BC/OC events may arrive with ts2phc.{runID}.config as cfgName,
 	// so register under that key too.
-	if clockType == event.BC || clockType == event.TBC || clockType == event.OC || clockType == event.GM {
-		ts2phcName := strings.Replace(cfgName, "ptp4l.", "ts2phc.", 1)
+	if clk.ClockType() == event.BC || clk.ClockType() == event.TBC || clk.ClockType() == event.OC || clk.ClockType() == event.GM {
+		ts2phcName := strings.Replace(clk.ConfigName(), "ptp4l.", "ts2phc.", 1)
 		m.clocks[ts2phcName] = clk
 	}
-	glog.Infof("AddClock: registered %s clock for config %s", clockType, cfgName)
-	return clk, nil
+	glog.Infof("AddClock: registered %s clock for config %s", clk.ClockType(), clk.ConfigName())
+	return nil
 }
 
 // RemoveAllClocks tears down all registered clocks and cleans up associated state.
@@ -256,9 +252,15 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 				m.signalSyncStatus()
 			}
 			if clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
-				m.updateClockStateMetrics(clockState.State, string(ev.ClockType), alias.GetAlias(clockState.LeadingIFace))
+				// BC/OC clock_state is scraped as process="ptp4l" (ptp4l is the
+				// servo), whereas GM/T-BC report under their clock-type label.
+				process := string(ev.ClockType)
+				if clk.ClockType() == event.BC || clk.ClockType() == event.OC {
+					process = string(event.PTP4l)
+				}
+				m.updateClockStateMetrics(clockState.State, process, alias.GetAlias(clockState.LeadingIFace))
 			}
-			m.updateClockClassMetrics(ev.CfgName, clk.ClockClass())
+			m.updateClockClassMetrics(lookupName, clk.ClockClass())
 			m.updateMetrics(ev)
 			m.clockManagementMu.Unlock()
 
