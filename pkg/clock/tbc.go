@@ -97,6 +97,9 @@ func (c *TBC) ClockClass() fbprotocol.ClockClass { return c.syncState.ClockClass
 // ConfigName returns the configuration name.
 func (c *TBC) ConfigName() string { return c.cfgName }
 
+// GetState returns the current PTP synchronization state.
+func (c *TBC) GetState() event.PTPState { return c.syncState.State }
+
 // GetData returns the Data entry for the given process, creating one if needed.
 func (c *TBC) GetData(processName event.EventSource) *event.Data {
 	for _, d := range c.data {

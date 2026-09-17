@@ -350,6 +350,10 @@ type Daemon struct {
 	ptpClient      *ptpclient.Clientset
 	unknownPlugins []string
 
+	// syncStatusMu serializes NodePtpDevice status.sync writes so only one
+	// update runs at a time and apply can wait for it before teardown.
+	syncStatusMu sync.Mutex
+
 	delayedPhc2sys        atomic.Bool
 	delayedTs2phc         atomic.Bool
 	ts2phcSourceQualified atomic.Bool // DPLL-enable / offset-filter gate has fired for T-BC
@@ -545,6 +549,24 @@ func (dn *Daemon) Run(ctx context.Context) {
 	glog.Info("Daemon Run() started, waiting for configuration updates...")
 	go dn.processManager.clockMgr.ProcessEvents(ctx)
 
+	// Watch for clock-state transitions and write NodePtpDevice.status.sync.
+	// Status is otherwise updated after applyNodePTPProfiles. The goroutine
+	// exits when dn.stopCh is closed.
+	go func() {
+		syncStatusCh := dn.processManager.clockMgr.SyncStatusUpdateCh()
+		for {
+			select {
+			case _, ok := <-syncStatusCh:
+				if !ok {
+					return
+				}
+				dn.runSyncStatusUpdate()
+			case <-dn.stopCh:
+				return
+			}
+		}
+	}()
+
 	// Setup fsnotify channels (may be nil if watcher initialization failed)
 	var saFilesWatcherEventCh chan fsnotify.Event
 	var saFilesWatcherErrCh chan error
@@ -668,9 +690,12 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 
 	// Suppress T-BC FSM updates during teardown/restart so in-flight DPLL
 	// events after ts2phc Reset cannot emit LOCKED→HOLDOVER / T-BC-STATUS s1.
+	// Also skip NodePtpDevice status writes until apply finishes.
 	if dn.processManager != nil && dn.processManager.clockMgr != nil {
-		dn.processManager.clockMgr.SetApplying(true)
 		defer dn.processManager.clockMgr.SetApplying(false)
+		dn.syncStatusMu.Lock()
+		dn.processManager.clockMgr.SetApplying(true)
+		dn.syncStatusMu.Unlock()
 	}
 
 	dn.stopAllProcesses()
@@ -838,6 +863,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.hwconfigsMu.Unlock()
 	*dn.refreshNodePtpDevice = true
 	dn.readyTracker.setConfig(true)
+	dn.doSyncStatusUpdate(true)
 	return nil
 }
 

@@ -41,6 +41,9 @@ func (c *GM) ClockClass() fbprotocol.ClockClass { return c.syncState.ClockClass 
 // ConfigName returns the configuration name.
 func (c *GM) ConfigName() string { return c.cfgName }
 
+// GetState returns the current PTP synchronization state.
+func (c *GM) GetState() event.PTPState { return c.syncState.State }
+
 // Reset resets the clock state.
 func (c *GM) Reset() {
 	c.syncState = SyncState{}

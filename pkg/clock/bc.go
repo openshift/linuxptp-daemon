@@ -36,6 +36,9 @@ func (c *BCClock) ClockClass() fbprotocol.ClockClass { return c.clockClass }
 // ConfigName returns the configuration name.
 func (c *BCClock) ConfigName() string { return c.cfgName }
 
+// GetState returns the current PTP synchronization state.
+func (c *BCClock) GetState() event.PTPState { return c.syncState }
+
 func (c *BCClock) getData(processName event.EventSource) *event.Data {
 	for _, d := range c.data {
 		if d.ProcessName == processName {

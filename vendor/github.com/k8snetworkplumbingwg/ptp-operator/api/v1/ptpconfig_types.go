@@ -33,17 +33,74 @@ type PtpConfigSpec struct {
 	Recommend []PtpRecommend `json:"recommend"`
 }
 
+// ProfileStatus reports the relationship and apply state of a single profile within this PtpConfig.
+type ProfileStatus struct {
+	// Name is the fully qualified profile name: <ptpconfigName>_<profileName>.
+	Name string `json:"name"`
+
+	// ControlledBy is the fully qualified name of the profile that controls this one.
+	// +optional
+	ControlledBy string `json:"controlledBy,omitempty"`
+
+	// Controls lists the fully qualified names of profiles this one controls (reverse of controllingProfile).
+	// +optional
+	Controls []string `json:"controls,omitempty"`
+
+	// HaMembers lists the fully qualified names of profiles coordinated by this HA profile.
+	// +optional
+	HaMembers []string `json:"haMembers,omitempty"`
+
+	// PartOfHa is the fully qualified name of the HA coordinator profile this one belongs to.
+	// Empty if not part of HA.
+	// +optional
+	PartOfHa string `json:"partOfHa,omitempty"`
+
+	// HasPhc2sys is true if this profile has phc2sysOpts configured (syncs system clock).
+	HasPhc2sys bool `json:"hasPhc2sys"`
+
+	// ClockType is T-GM, T-BC, BC, or OC. Written by linuxptp-daemon at apply.
+	// +optional
+	ClockType string `json:"clockType,omitempty"`
+
+	// AppliedOnNodes lists the nodes where the linuxptp-daemon has applied this profile.
+	// This is observed from NodePtpDevice.status.sync.profiles, not from matchList.
+	// +optional
+	AppliedOnNodes []string `json:"appliedOnNodes,omitempty"`
+
+	// HardwareConfigs lists HardwareConfig CRs whose relatedPtpProfileName refers to this profile.
+	// +optional
+	HardwareConfigs []string `json:"hardwareConfigs,omitempty"`
+}
+
 // PtpConfigStatus defines the observed state of PtpConfig
 type PtpConfigStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// MatchList contains the nodes matched by this PtpConfig's recommend rules.
 	MatchList []NodeMatchList `json:"matchList,omitempty"`
-	// Conditions contains the conditions for the PtpConfig
+
+	// ObservedGeneration is the most recent generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// ProfileStatuses reports the relationship and apply state of each profile in this PtpConfig.
+	// +optional
+	ProfileStatuses []ProfileStatus `json:"profileStatuses,omitempty"`
+
+	// Warnings contains any detected misconfigurations (e.g., multiple profiles with phc2sys on same node).
+	// +optional
+	Warnings []string `json:"warnings,omitempty"`
+
+	// Conditions represent the latest available observations of the PtpConfig's state.
+	// Known condition types are: "ProfileReferenceValid".
+	// +optional
+	// +listType=map
+	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Refs Valid",type="string",JSONPath=`.status.conditions[?(@.type=="ProfileReferenceValid")].status`,priority=0
+//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // PtpConfig is the Schema for the ptpconfigs API
 type PtpConfig struct {
@@ -153,7 +210,8 @@ type MatchRule struct {
 
 type NodeMatchList struct {
 	NodeName *string `json:"nodeName"`
-	Profile  *string `json:"profile"`
+	// Profile is the fully qualified profile name: <ptpconfigName>_<profileName>.
+	Profile *string `json:"profile"`
 }
 
 func init() {
