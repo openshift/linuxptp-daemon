@@ -12,7 +12,9 @@ behaviorProfiles:
         boardLabel: GNSS_1PPS_IN
         gnssConfig:
           match:
-            ttyDevice: "/dev/ttyACM0"
+            usbDevice:
+              vendor: "1546"
+              product: "01a9"
 
     conditions:
       - name: "Initialize T-GM"

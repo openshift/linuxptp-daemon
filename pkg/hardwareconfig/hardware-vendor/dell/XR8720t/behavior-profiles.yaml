@@ -32,7 +32,9 @@ behaviorProfiles:
         boardLabel: REF4P
         gnssConfig:
           match:
-            ttyDevice: "/dev/ttyACM0"
+            usbDevice:
+              vendor: "1546"
+              product: "01a9"
 
     conditions:
       - name: "Initialize T-GM"

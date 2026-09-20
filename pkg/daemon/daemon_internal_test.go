@@ -1190,10 +1190,6 @@ func TestTBCTransitionCheck_PathSelection(t *testing.T) {
 
 			// Create ptpProcess with test conditions
 			process := &ptpProcess{
-				ExecProcess: ExecProcess{
-					eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
-					configName: "test-config",             //nolint:govet // needed for test setup
-				},
 				tBCAttributes: tBCProcessAttributes{
 					trIfaceNames: []string{"ens4f0"},
 					perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},

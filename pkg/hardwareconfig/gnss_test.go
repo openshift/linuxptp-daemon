@@ -103,6 +103,14 @@ func TestFindGNSSDevice(t *testing.T) {
 		assert.Contains(t, err.Error(), "no GNSS device found")
 	})
 
+	t.Run("USB matcher delegates to USB device detection", func(t *testing.T) {
+		_, err := FindGNSSDevice(&ptpv2alpha1.GNSSMatcher{
+			USBDevice: &ptpv2alpha1.USBDevice{Vendor: "invalid", Product: "01a9"},
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid USB vendor ID")
+	})
+
 	t.Run("empty matcher returns error", func(t *testing.T) {
 		_, err := FindGNSSDevice(&ptpv2alpha1.GNSSMatcher{})
 		assert.Error(t, err)

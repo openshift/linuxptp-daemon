@@ -14,6 +14,11 @@ When monitoring u-blox GNSS receivers, the daemon also evaluates the receiver's
 state marks the GNSS source as lost, preventing a plausible but forged fix from
 being used to keep the clock synchronized.
 
+For HardwareConfig v2 GNSS matcher behavior and selector examples, see
+[`doc/hardwareconfig-v2-device-selection.md`](doc/hardwareconfig-v2-device-selection.md).
+When USB matching is ambiguous, daemon logs include the matching topology paths
+that can be used to narrow the selector.
+
 ## Quick Start
 
 ### Create namespace and ServiceAccount
