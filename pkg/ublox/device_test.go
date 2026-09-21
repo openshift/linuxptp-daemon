@@ -120,6 +120,67 @@ func TestNormalizeUSBID(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func makeACPITTYFixture(t *testing.T, ttyNames ...string) string {
+	t.Helper()
+
+	root := t.TempDir()
+	ttyClassPath := filepath.Join(root, "sys", "class", "tty")
+	acpiTTYPath := filepath.Join(root, "sys", "devices", "platform", "INTC10EE:00", "serial8250", "tty")
+	if err := os.MkdirAll(acpiTTYPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ttyName := range ttyNames {
+		ttyPath := filepath.Join(ttyClassPath, ttyName)
+		if err := os.MkdirAll(ttyPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		devicePath := filepath.Join(acpiTTYPath, ttyName)
+		if err := os.MkdirAll(devicePath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(devicePath, filepath.Join(ttyPath, "device")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return ttyClassPath
+}
+
+func TestGNSSDeviceFromACPIDevice(t *testing.T) {
+	t.Run("finds tty by ACPI HID and UID", func(t *testing.T) {
+		ttyClassPath := makeACPITTYFixture(t, "ttyS2")
+
+		device, err := findTTYFromACPIDevice(ttyClassPath, "intc10ee", "00")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/ttyS2", device)
+	})
+
+	t.Run("matches any ACPI UID when UID is omitted", func(t *testing.T) {
+		ttyClassPath := makeACPITTYFixture(t, "ttyS2")
+
+		device, err := findTTYFromACPIDevice(ttyClassPath, "INTC10EE", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/ttyS2", device)
+	})
+
+	t.Run("returns an error when no tty matches", func(t *testing.T) {
+		ttyClassPath := makeACPITTYFixture(t, "ttyS2")
+
+		_, err := findTTYFromACPIDevice(ttyClassPath, "INTC10EE", "01")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no tty device found")
+	})
+
+	t.Run("returns an error when multiple ttys match", func(t *testing.T) {
+		ttyClassPath := makeACPITTYFixture(t, "ttyS2", "ttyS3")
+
+		_, err := findTTYFromACPIDevice(ttyClassPath, "INTC10EE", "00")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "/dev/ttyS2")
+		assert.Contains(t, err.Error(), "/dev/ttyS3")
+	})
+}
+
 func TestGNSSDeviceFromUSB(t *testing.T) {
 	t.Run("finds tty by vendor and product", func(t *testing.T) {
 		ttyClassPath := makeUSBTTYFixture(t, "ttyACM0")

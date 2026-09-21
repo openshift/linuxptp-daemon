@@ -29,7 +29,9 @@ behaviorProfiles:
         boardLabel: REF4P
         gnssConfig:
           match:
-            ttyDevice: "/dev/ttyACM0"
+            serialDevice:
+              acpi:
+                hid: INTC10EE
 
     conditions:
       - name: "Initialize T-GM"

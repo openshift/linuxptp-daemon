@@ -49,6 +49,74 @@ func GNSSDeviceFromInterface(iface string) (string, error) {
 	return result, nil
 }
 
+// GNSSDeviceFromACPIDevice resolves the tty exposed by an ACPI-enumerated
+// serial controller. It walks each tty's sysfs ancestry and matches an ACPI
+// device name such as INTC10EE:00, rather than relying on the dynamically
+// assigned tty name (for example, ttyS2).
+func GNSSDeviceFromACPIDevice(hid, uid string) (string, error) {
+	hid = strings.TrimSpace(hid)
+	uid = strings.TrimSpace(uid)
+	if hid == "" {
+		return "", fmt.Errorf("invalid ACPI hardware ID: must not be empty")
+	}
+	return findTTYFromACPIDevice(ttyClassSysfsPath, hid, uid)
+}
+
+func findTTYFromACPIDevice(ttyClassPath, hid, uid string) (string, error) {
+	selector := hid
+	if uid != "" {
+		selector += ":" + uid
+	}
+	glog.Infof("Looking for GNSS tty exposed by ACPI serial device %s", selector)
+	entries, err := ReadDir(ttyClassPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot enumerate tty devices: %w", err)
+	}
+
+	var candidates []string
+	for _, entry := range entries {
+		devicePath := filepath.Join(ttyClassPath, entry.Name(), "device")
+		resolvedDevicePath, symlinkErr := filepath.EvalSymlinks(devicePath)
+		if symlinkErr != nil {
+			// Virtual tty devices and stale class entries may not have a
+			// resolvable device path.
+			continue
+		}
+		if acpiDeviceMatches(resolvedDevicePath, hid, uid) {
+			candidates = append(candidates, filepath.Join("/dev", entry.Name()))
+		}
+	}
+
+	sort.Strings(candidates)
+	switch len(candidates) {
+	case 0:
+		return "", fmt.Errorf("no tty device found for ACPI serial device %s", selector)
+	case 1:
+		glog.Infof("Detected GNSS device %s", candidates[0])
+		return candidates[0], nil
+	default:
+		return "", fmt.Errorf("multiple tty devices found for ACPI serial device %s: %s",
+			selector, strings.Join(candidates, ", "))
+	}
+}
+
+// acpiDeviceMatches walks from a tty's sysfs device to its parents, looking
+// for an ACPI device directory named <HID>:<UID>. If uid is empty, any
+// instance of the requested HID matches.
+func acpiDeviceMatches(devicePath, hid, uid string) bool {
+	for path := devicePath; path != "." && path != string(filepath.Separator); path = filepath.Dir(path) {
+		name := filepath.Base(path)
+		parts := strings.SplitN(name, ":", 2)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], hid) {
+			continue
+		}
+		if uid == "" || strings.EqualFold(parts[1], uid) {
+			return true
+		}
+	}
+	return false
+}
+
 // GNSSDeviceFromUSB resolves the tty device exposed by a USB device with the
 // given hexadecimal vendor and product IDs, optionally constrained by its USB
 // bus-port topology path. It enumerates tty class devices and walks their sysfs

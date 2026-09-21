@@ -103,6 +103,16 @@ func TestFindGNSSDevice(t *testing.T) {
 		assert.Contains(t, err.Error(), "no GNSS device found")
 	})
 
+	t.Run("serialDevice matcher delegates to ACPI device detection", func(t *testing.T) {
+		_, err := FindGNSSDevice(&ptpv2alpha1.GNSSMatcher{
+			SerialDevice: &ptpv2alpha1.SerialDevice{
+				ACPI: &ptpv2alpha1.ACPIDevice{HID: "INTC10EE", UID: "00"},
+			},
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no tty device found for ACPI serial device")
+	})
+
 	t.Run("USB matcher delegates to USB device detection", func(t *testing.T) {
 		_, err := FindGNSSDevice(&ptpv2alpha1.GNSSMatcher{
 			USBDevice: &ptpv2alpha1.USBDevice{Vendor: "invalid", Product: "01a9"},
