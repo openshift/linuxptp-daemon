@@ -387,8 +387,10 @@ func commandOutputUntil(ctx context.Context, onLine func(string) bool, name stri
 	wg.Add(2)
 	go scan(bufio.NewScanner(stdout))
 	go scan(bufio.NewScanner(stderr))
-	err = cmd.Wait()
+	// Drain the pipes before reaping the process: cmd.Wait closes the pipe read
+	// ends, so calling it first would truncate any output still buffered.
 	wg.Wait()
+	err = cmd.Wait()
 	return output.String(), err
 }
 

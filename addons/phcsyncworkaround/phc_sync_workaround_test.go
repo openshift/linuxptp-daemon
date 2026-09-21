@@ -1,6 +1,8 @@
 package phcsyncworkaround
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +10,23 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
+
+func TestCommandOutputUntilDrainsAllOutput(t *testing.T) {
+	// Emit enough output to exceed the OS pipe buffer so a premature Wait()
+	// (which closes the read ends) would truncate trailing lines.
+	const lines = 20000
+	script := fmt.Sprintf("i=1; while [ $i -le %d ]; do echo line$i; i=$((i+1)); done", lines)
+	out, err := commandOutputUntil(context.Background(), nil, "sh", "-c", script)
+	if err != nil {
+		t.Fatalf("commandOutputUntil() error: %v", err)
+	}
+	if got := strings.Count(out, "\n"); got != lines {
+		t.Fatalf("captured %d lines, want %d", got, lines)
+	}
+	if !strings.Contains(out, fmt.Sprintf("line%d\n", lines)) {
+		t.Fatalf("trailing output was dropped; last line %d missing", lines)
+	}
+}
 
 func TestMeasurementTimeout(t *testing.T) {
 	tests := []struct {
