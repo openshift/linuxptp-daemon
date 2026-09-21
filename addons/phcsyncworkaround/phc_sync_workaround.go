@@ -3,6 +3,7 @@ package phcsyncworkaround
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,22 +23,89 @@ import (
 const pluginName = "phc-sync-workaround"
 
 const (
-	measurementTimeout = 15 * time.Second
-	commandTimeout     = 30 * time.Second
+	// measurementSamples is the number of valid offset samples (non-zero path
+	// delay) to average before correcting the PHC.
 	measurementSamples = 16
 )
 
+// pluginOptions is the per-profile configuration for the plugin, for example:
+//
+//	plugins:
+//	  phc-sync-workaround:
+//	    timeout: 15s
+//
+// timeout bounds the free-running ptp4l measurement phase. When unset (or zero)
+// the measurement runs without a deadline.
+type pluginOptions struct {
+	Timeout string `json:"timeout,omitempty"`
+}
+
+// measurementTimeout returns the configured measurement timeout, or 0 for no
+// deadline when the option is absent.
+func measurementTimeout(profile *ptpv1.PtpProfile) (time.Duration, error) {
+	if profile == nil || profile.Plugins == nil {
+		return 0, nil
+	}
+	raw, ok := profile.Plugins[pluginName]
+	if !ok || raw == nil {
+		return 0, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return 0, fmt.Errorf("marshal %s options: %w", pluginName, err)
+	}
+	var opts pluginOptions
+	if err := json.Unmarshal(data, &opts); err != nil {
+		return 0, fmt.Errorf("unmarshal %s options: %w", pluginName, err)
+	}
+	if opts.Timeout == "" {
+		return 0, nil
+	}
+	timeout, err := time.ParseDuration(opts.Timeout)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s timeout %q: %w", pluginName, opts.Timeout, err)
+	}
+	if timeout < 0 {
+		return 0, fmt.Errorf("invalid %s timeout %q: must not be negative", pluginName, opts.Timeout)
+	}
+	return timeout, nil
+}
+
 var (
-	clockTimePattern  = regexp.MustCompile(`clock time is\s+([0-9]+(?:\.[0-9]+)?)`)
-	masterOffsetRegex = regexp.MustCompile(`master offset\s+([+-]?\d+)\s+s\d+\s+freq\s+[+-]?\d+\s+path delay\s+([+-]?\d+)`)
+	clockTimePattern = regexp.MustCompile(`clock time is\s+([0-9]+(?:\.[0-9]+)?)`)
+	// masterOffsetRegex matches ptp4l free-running summary lines that carry a
+	// usable measurement. The path delay is required to be non-zero: before
+	// delay measurement completes ptp4l emits bogus zero-delay rows, which must
+	// not be counted as samples. RE2 has no lookahead, so a non-zero delay is
+	// expressed as "at least one non-zero digit" ([+-]?0*[1-9]\d*).
+	masterOffsetRegex = regexp.MustCompile(`master offset\s+([+-]?\d+)\s+s\d+\s+freq\s+[+-]?\d+\s+path delay\s+[+-]?0*[1-9]\d*`)
 )
+
+// parseSample extracts the master offset from a ptp4l summary line. It returns
+// ok=false for lines that are not a usable measurement, i.e. anything without a
+// non-zero path delay (the offset itself may legitimately be zero).
+func parseSample(line string) (offset int64, ok bool) {
+	match := masterOffsetRegex.FindStringSubmatch(line)
+	if match == nil {
+		return 0, false
+	}
+	offset, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return offset, true
+}
 
 func onPTPConfigChange(_ *interface{}, profile *ptpv1.PtpProfile) error {
 	ifaces := timeReceiverInterfaces(profile)
 	if len(ifaces) == 0 {
 		return nil
 	}
-	return updatePHC(profileName(profile), profile, ifaces)
+	timeout, err := measurementTimeout(profile)
+	if err != nil {
+		return err
+	}
+	return updatePHC(profileName(profile), profile, ifaces, timeout)
 }
 
 func profileName(profile *ptpv1.PtpProfile) string {
@@ -54,9 +122,8 @@ func timeReceiverInterfaces(profile *ptpv1.PtpProfile) []string {
 	return hardwareconfig.UpstreamPortsFromPtpProfile(profile)
 }
 
-func updatePHC(profileName string, profile *ptpv1.PtpProfile, ifaces []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
-	defer cancel()
+func updatePHC(profileName string, profile *ptpv1.PtpProfile, ifaces []string, timeout time.Duration) error {
+	ctx := context.Background()
 
 	glog.Infof("PHC sync workaround started: profile=%s interfaces=%v", profileName, ifaces)
 	devs, err := phcDevices(ifaces)
@@ -65,7 +132,7 @@ func updatePHC(profileName string, profile *ptpv1.PtpProfile, ifaces []string) e
 	}
 	glog.Infof("PHC sync workaround resolved: profile=%s interfaces=%v phc=%v", profileName, ifaces, devs)
 
-	offset, err := measureOffset(ctx, profile, ifaces)
+	offset, err := measureOffset(ctx, profile, ifaces, timeout)
 	if err != nil {
 		return fmt.Errorf("measure PHC offset for %v: %w", ifaces, err)
 	}
@@ -104,9 +171,13 @@ func phcDevices(ifaces []string) ([]string, error) {
 	return devs, nil
 }
 
-func measureOffset(ctx context.Context, profile *ptpv1.PtpProfile, ifaces []string) (int64, error) {
-	measureCtx, cancel := context.WithTimeout(ctx, measurementTimeout)
-	defer cancel()
+func measureOffset(ctx context.Context, profile *ptpv1.PtpProfile, ifaces []string, timeout time.Duration) (int64, error) {
+	measureCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		measureCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	config, err := os.CreateTemp("", "phc-sync-*.conf")
 	if err != nil {
 		return 0, err
@@ -133,12 +204,7 @@ func measureOffset(ctx context.Context, profile *ptpv1.PtpProfile, ifaces []stri
 	args = append(args, "-m", "--free_running=1", "--freq_est_interval=-4", "--summary_interval=-4")
 	var samples []int64
 	_, err = commandOutputUntil(measureCtx, func(line string) bool {
-		match := masterOffsetRegex.FindStringSubmatch(line)
-		if match == nil || match[2] == "0" {
-			return false
-		}
-		value, parseErr := strconv.ParseInt(match[1], 10, 64)
-		if parseErr == nil {
+		if value, ok := parseSample(line); ok {
 			samples = append(samples, value)
 		}
 		return len(samples) >= measurementSamples

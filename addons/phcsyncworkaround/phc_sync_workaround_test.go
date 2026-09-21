@@ -6,7 +6,50 @@ import (
 	"time"
 
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
+	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
+
+func TestMeasurementTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile *ptpv1.PtpProfile
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "nil profile", profile: nil, want: 0},
+		{name: "no plugins", profile: &ptpv1.PtpProfile{}, want: 0},
+		{name: "plugin not configured", profile: profileWithPlugin(`{}`), want: 0},
+		{name: "configured", profile: profileWithPlugin(`{"timeout":"15s"}`), want: 15 * time.Second},
+		{name: "empty string", profile: profileWithPlugin(`{"timeout":""}`), want: 0},
+		{name: "invalid duration", profile: profileWithPlugin(`{"timeout":"nope"}`), wantErr: true},
+		{name: "negative duration", profile: profileWithPlugin(`{"timeout":"-1s"}`), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := measurementTimeout(test.profile)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("measurementTimeout() expected error, got %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("measurementTimeout() error: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("measurementTimeout() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func profileWithPlugin(options string) *ptpv1.PtpProfile {
+	return &ptpv1.PtpProfile{
+		Plugins: map[string]*apiextensions.JSON{
+			pluginName: {Raw: []byte(options)},
+		},
+	}
+}
 
 func TestNewRegistersPlugin(t *testing.T) {
 	plugin, data := New(pluginName)
@@ -104,6 +147,57 @@ func TestRenderMeasurementConfigMultipleInterfaces(t *testing.T) {
 	}
 	if strings.Count(got, "masterOnly 0") != 2 {
 		t.Errorf("expected both TR interface sections:\n%s", got)
+	}
+}
+
+func TestParseSample(t *testing.T) {
+	tests := []struct {
+		name   string
+		line   string
+		offset int64
+		ok     bool
+	}{
+		{
+			name:   "zero offset with non-zero path delay is valid",
+			line:   "ptp4l[544.425]: master offset          0 s0 freq     +48 path delay        80",
+			offset: 0,
+			ok:     true,
+		},
+		{
+			name: "zero path delay is invalid",
+			line: "ptp4l[544.487]: master offset          0 s0 freq     -16 path delay         0",
+		},
+		{
+			name: "signed zero path delay is invalid",
+			line: "ptp4l[544.487]: master offset          0 s0 freq     -16 path delay        +0",
+		},
+		{
+			name:   "negative offset is valid",
+			line:   "ptp4l[1.0]: master offset -37000472295 s2 freq      +0 path delay       137",
+			offset: -37000472295,
+			ok:     true,
+		},
+		{
+			name:   "multi-port line with interface prefix",
+			line:   "ptp4l[6480.421]: [ptp4l.1.config:6] eno8303 master offset -19 s0 freq +1 path delay 83",
+			offset: -19,
+			ok:     true,
+		},
+		{
+			name: "no path delay is invalid",
+			line: "ptp4l[17062.940]: port 1 (eno8303): LISTENING to UNCALIBRATED on RS_SLAVE",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			offset, ok := parseSample(test.line)
+			if ok != test.ok {
+				t.Fatalf("parseSample() ok = %v, want %v", ok, test.ok)
+			}
+			if ok && offset != test.offset {
+				t.Fatalf("parseSample() offset = %d, want %d", offset, test.offset)
+			}
+		})
 	}
 }
 
