@@ -8,24 +8,6 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
-func TestWaitForPoCBlocksAndLogsProgress(t *testing.T) {
-	start := time.Now()
-	var logs []string
-	waitForPoC(40*time.Millisecond, 10*time.Millisecond, func(format string, args ...interface{}) {
-		logs = append(logs, format)
-	}, "test-profile")
-
-	if elapsed := time.Since(start); elapsed < 35*time.Millisecond {
-		t.Fatalf("PoC returned too early after %s", elapsed)
-	}
-	if len(logs) != 6 {
-		t.Fatalf("expected start, four progress, and completion logs; got %d", len(logs))
-	}
-	if !strings.Contains(logs[1], "blocking") || !strings.Contains(logs[4], "blocking") {
-		t.Fatalf("progress logs missing: %v", logs)
-	}
-}
-
 func TestNewRegistersPlugin(t *testing.T) {
 	plugin, data := New(pluginName)
 	if plugin == nil || data == nil {
@@ -53,38 +35,42 @@ func TestOnPTPConfigChangeIgnoresProfileWithoutTimeReceiverPort(t *testing.T) {
 	}
 }
 
-func TestHasTimeReceiverPort(t *testing.T) {
+func TestTimeReceiverInterface(t *testing.T) {
 	tests := []struct {
-		name    string
-		config  string
-		expects bool
+		name      string
+		config    string
+		wantIface string
+		wantErr   bool
 	}{
-		{name: "interface masterOnly zero", config: "[global]\nmasterOnly 1\n[ens4f0]\nmasterOnly 0\n", expects: true},
-		{name: "only global masterOnly zero", config: "[global]\nmasterOnly 0\n", expects: false},
-		{name: "interface master only one", config: "[ens4f0]\nmasterOnly 1\n", expects: false},
+		{name: "interface masterOnly zero", config: "[global]\nmasterOnly 1\n[ens4f0]\nmasterOnly 0\n", wantIface: "ens4f0"},
+		{name: "only global masterOnly zero", config: "[global]\nmasterOnly 0\n"},
+		{name: "interface master only one", config: "[ens4f0]\nmasterOnly 1\n"},
+		{name: "multiple time receiver ports", config: "[ens4f0]\nmasterOnly 0\n[ens5f0]\nmasterOnly 0\n", wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			profile := &ptpv1.PtpProfile{Ptp4lConf: &test.config}
-			if got := hasTimeReceiverPort(profile); got != test.expects {
-				t.Fatalf("hasTimeReceiverPort() = %v, want %v", got, test.expects)
+			got, err := timeReceiverInterface(profile)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("timeReceiverInterface() expected error, got %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("timeReceiverInterface() error: %v", err)
+			}
+			if got != test.wantIface {
+				t.Fatalf("timeReceiverInterface() = %q, want %q", got, test.wantIface)
 			}
 		})
-	}
-}
-
-func TestProfileDomainNumber(t *testing.T) {
-	domain := "[global]\ndomainNumber 24\n[eno8303]\nmasterOnly 0\n"
-	profile := &ptpv1.PtpProfile{Ptp4lConf: &domain}
-	if got := profileDomainNumber(profile); got != "24" {
-		t.Fatalf("profileDomainNumber() = %q, want %q", got, "24")
 	}
 }
 
 func TestRenderMeasurementConfigPreservesProfileOptions(t *testing.T) {
 	config := "[eno8303]\nmasterOnly 0\n[global]\nslaveOnly 0\nfree_running 0\ndomainNumber 24\ndataset_comparison G.8275.x\nG.8275.defaultDS.localPriority 128\nG.8275.portDS.localPriority 128\nptp_dst_mac 01:1B:19:00:00:00\np2p_dst_mac 01:80:C2:00:00:0E\nnetwork_transport L2\nuds_address /old/socket\n"
 	profile := &ptpv1.PtpProfile{Ptp4lConf: &config}
-	got, err := renderMeasurementConfig(profile, "eno8303", "24")
+	got, err := renderMeasurementConfig(profile, "eno8303")
 	if err != nil {
 		t.Fatalf("renderMeasurementConfig() error: %v", err)
 	}
@@ -140,11 +126,6 @@ func TestPHCSecondsToNS(t *testing.T) {
 	if got != 1_788_982_998_578_115_938 {
 		t.Fatalf("phcSecondsToNS() = %d", got)
 	}
-}
-
-func profileWithTRPort() *ptpv1.PtpProfile {
-	config := "[ens4f0]\nmasterOnly 0\n"
-	return &ptpv1.PtpProfile{Ptp4lConf: &config}
 }
 
 func profileWithoutTRPort() *ptpv1.PtpProfile {

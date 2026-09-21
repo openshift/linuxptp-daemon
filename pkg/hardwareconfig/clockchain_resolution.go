@@ -52,9 +52,9 @@ func ResetLeadingInterfaceResolver() {
 	leadingInterfaceResolver = &realLeadingInterfaceResolver{}
 }
 
-// extractUpstreamPortsFromPtpProfile extracts upstream ports (interfaces with masterOnly=0) from a PTP profile.
+// UpstreamPortsFromPtpProfile extracts upstream ports (interfaces with masterOnly=0) from a PTP profile.
 // These are the PTP time receiver interfaces used for event detection.
-func extractUpstreamPortsFromPtpProfile(ptpProfile *ptpv1.PtpProfile) []string {
+func UpstreamPortsFromPtpProfile(ptpProfile *ptpv1.PtpProfile) []string {
 	if ptpProfile == nil || ptpProfile.Ptp4lConf == nil {
 		return nil
 	}
@@ -326,7 +326,7 @@ func (hcm *HardwareConfigManager) deriveSubsystemStructure(subsystem *ptpv2alpha
 	}
 
 	// Extract upstream ports from ptpconfig (PTP time receivers for event detection)
-	upstreamPorts := extractUpstreamPortsFromPtpProfile(ptpProfile)
+	upstreamPorts := UpstreamPortsFromPtpProfile(ptpProfile)
 	if clockType != ClockTypeTGM {
 		if len(upstreamPorts) == 0 {
 			return fmt.Errorf("no upstream ports found in ptpconfig")

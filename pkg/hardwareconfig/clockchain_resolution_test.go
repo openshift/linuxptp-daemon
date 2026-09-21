@@ -164,7 +164,7 @@ func TestClockChainResolution(t *testing.T) {
 			}
 
 			// Extract upstream ports from ptpconfig
-			upstreamPorts := extractUpstreamPortsFromPtpProfile(ptpProfile)
+			upstreamPorts := UpstreamPortsFromPtpProfile(ptpProfile)
 			assert.NotEmpty(t, upstreamPorts, "Should find at least one upstream port")
 			if len(upstreamPorts) == 0 {
 				t.Fatal("Should find at least one upstream port")
@@ -323,7 +323,7 @@ func TestClockChainResolution_TGM(t *testing.T) {
 		}
 	}
 	require.NotNil(t, ptpProfile)
-	upstreamPorts := extractUpstreamPortsFromPtpProfile(ptpProfile)
+	upstreamPorts := UpstreamPortsFromPtpProfile(ptpProfile)
 	assert.Empty(t, upstreamPorts, "T-GM should have no upstream ports")
 
 	fakeClient := fake.NewClientset()
@@ -465,7 +465,7 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 		t.Fatal()
 	}
 
-	upstreamPorts := extractUpstreamPortsFromPtpProfile(ptpProfile)
+	upstreamPorts := UpstreamPortsFromPtpProfile(ptpProfile)
 	assert.Len(t, upstreamPorts, 2, "Should find exactly two upstream ports")
 	assert.Contains(t, upstreamPorts, "eno8703")
 	assert.Contains(t, upstreamPorts, "eno8903")
