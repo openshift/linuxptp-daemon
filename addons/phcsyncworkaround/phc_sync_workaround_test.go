@@ -35,33 +35,28 @@ func TestOnPTPConfigChangeIgnoresProfileWithoutTimeReceiverPort(t *testing.T) {
 	}
 }
 
-func TestTimeReceiverInterface(t *testing.T) {
+func TestTimeReceiverInterfaces(t *testing.T) {
 	tests := []struct {
-		name      string
-		config    string
-		wantIface string
-		wantErr   bool
+		name       string
+		config     string
+		wantIfaces []string
 	}{
-		{name: "interface masterOnly zero", config: "[global]\nmasterOnly 1\n[ens4f0]\nmasterOnly 0\n", wantIface: "ens4f0"},
+		{name: "interface masterOnly zero", config: "[global]\nmasterOnly 1\n[ens4f0]\nmasterOnly 0\n", wantIfaces: []string{"ens4f0"}},
 		{name: "only global masterOnly zero", config: "[global]\nmasterOnly 0\n"},
 		{name: "interface master only one", config: "[ens4f0]\nmasterOnly 1\n"},
-		{name: "multiple time receiver ports", config: "[ens4f0]\nmasterOnly 0\n[ens5f0]\nmasterOnly 0\n", wantErr: true},
+		{name: "multiple time receiver ports", config: "[ens4f0]\nmasterOnly 0\n[ens5f0]\nmasterOnly 0\n", wantIfaces: []string{"ens4f0", "ens5f0"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			profile := &ptpv1.PtpProfile{Ptp4lConf: &test.config}
-			got, err := timeReceiverInterface(profile)
-			if test.wantErr {
-				if err == nil {
-					t.Fatalf("timeReceiverInterface() expected error, got %q", got)
+			got := timeReceiverInterfaces(profile)
+			if len(got) != len(test.wantIfaces) {
+				t.Fatalf("timeReceiverInterfaces() = %v, want %v", got, test.wantIfaces)
+			}
+			for i := range got {
+				if got[i] != test.wantIfaces[i] {
+					t.Fatalf("timeReceiverInterfaces() = %v, want %v", got, test.wantIfaces)
 				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("timeReceiverInterface() error: %v", err)
-			}
-			if got != test.wantIface {
-				t.Fatalf("timeReceiverInterface() = %q, want %q", got, test.wantIface)
 			}
 		})
 	}
@@ -70,7 +65,7 @@ func TestTimeReceiverInterface(t *testing.T) {
 func TestRenderMeasurementConfigPreservesProfileOptions(t *testing.T) {
 	config := "[eno8303]\nmasterOnly 0\n[global]\nslaveOnly 0\nfree_running 0\ndomainNumber 24\ndataset_comparison G.8275.x\nG.8275.defaultDS.localPriority 128\nG.8275.portDS.localPriority 128\nptp_dst_mac 01:1B:19:00:00:00\np2p_dst_mac 01:80:C2:00:00:0E\nnetwork_transport L2\nuds_address /old/socket\n"
 	profile := &ptpv1.PtpProfile{Ptp4lConf: &config}
-	got, err := renderMeasurementConfig(profile, "eno8303")
+	got, err := renderMeasurementConfig(profile, []string{"eno8303"})
 	if err != nil {
 		t.Fatalf("renderMeasurementConfig() error: %v", err)
 	}
@@ -92,6 +87,23 @@ func TestRenderMeasurementConfigPreservesProfileOptions(t *testing.T) {
 	}
 	if strings.Contains(got, "uds_address /old/socket") {
 		t.Errorf("rendered config retained the old UDS address:\n%s", got)
+	}
+}
+
+func TestRenderMeasurementConfigMultipleInterfaces(t *testing.T) {
+	config := "[eno8303]\nmasterOnly 0\n[eno8403]\nmasterOnly 0\n[global]\ndomainNumber 24\nnetwork_transport L2\n"
+	profile := &ptpv1.PtpProfile{Ptp4lConf: &config}
+	got, err := renderMeasurementConfig(profile, []string{"eno8403", "eno8303"})
+	if err != nil {
+		t.Fatalf("renderMeasurementConfig() error: %v", err)
+	}
+	for _, want := range []string{"[eno8403]", "[eno8303]", "masterOnly 0"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered config missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "masterOnly 0") != 2 {
+		t.Errorf("expected both TR interface sections:\n%s", got)
 	}
 }
 

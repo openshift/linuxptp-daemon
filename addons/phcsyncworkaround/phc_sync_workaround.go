@@ -33,14 +33,11 @@ var (
 )
 
 func onPTPConfigChange(_ *interface{}, profile *ptpv1.PtpProfile) error {
-	iface, err := timeReceiverInterface(profile)
-	if err != nil {
-		return err
-	}
-	if iface == "" {
+	ifaces := timeReceiverInterfaces(profile)
+	if len(ifaces) == 0 {
 		return nil
 	}
-	return updatePHC(profileName(profile), profile, iface)
+	return updatePHC(profileName(profile), profile, ifaces)
 }
 
 func profileName(profile *ptpv1.PtpProfile) string {
@@ -50,53 +47,64 @@ func profileName(profile *ptpv1.PtpProfile) string {
 	return "unknown"
 }
 
-// timeReceiverInterface returns the profile's PTP time receiver interface, i.e.
-// the single interface section configured with masterOnly=0. It returns an empty
-// string when the profile is not a time receiver, and an error when more than
-// one time receiver port is configured.
-func timeReceiverInterface(profile *ptpv1.PtpProfile) (string, error) {
-	ports := hardwareconfig.UpstreamPortsFromPtpProfile(profile)
-	switch len(ports) {
-	case 0:
-		return "", nil
-	case 1:
-		return ports[0], nil
-	default:
-		return "", fmt.Errorf("profile %s has multiple time receiver ports: %v", profileName(profile), ports)
-	}
+// timeReceiverInterfaces returns the profile's PTP time receiver interfaces,
+// i.e. every interface section configured with masterOnly=0, in profile order.
+// An empty result means the profile is not a time receiver.
+func timeReceiverInterfaces(profile *ptpv1.PtpProfile) []string {
+	return hardwareconfig.UpstreamPortsFromPtpProfile(profile)
 }
 
-func updatePHC(profileName string, profile *ptpv1.PtpProfile, iface string) error {
+func updatePHC(profileName string, profile *ptpv1.PtpProfile, ifaces []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 
-	glog.Infof("PHC sync workaround started: profile=%s interface=%s", profileName, iface)
-	dev := network.GetPhcId(iface)
-	if dev == "" {
-		return fmt.Errorf("could not determine PHC device for interface %q", iface)
+	glog.Infof("PHC sync workaround started: profile=%s interfaces=%v", profileName, ifaces)
+	devs, err := phcDevices(ifaces)
+	if err != nil {
+		return err
 	}
-	glog.Infof("PHC sync workaround resolved: profile=%s interface=%s phc=%s", profileName, iface, dev)
+	glog.Infof("PHC sync workaround resolved: profile=%s interfaces=%v phc=%v", profileName, ifaces, devs)
 
-	offset, err := measureOffset(ctx, profile, iface)
+	offset, err := measureOffset(ctx, profile, ifaces)
 	if err != nil {
-		return fmt.Errorf("measure PHC offset for %s: %w", iface, err)
+		return fmt.Errorf("measure PHC offset for %v: %w", ifaces, err)
 	}
-	phcTime, err := readPHCTime(ctx, dev)
-	if err != nil {
-		return fmt.Errorf("read PHC %s: %w", dev, err)
+	for _, dev := range devs {
+		phcTime, err := readPHCTime(ctx, dev)
+		if err != nil {
+			return fmt.Errorf("read PHC %s: %w", dev, err)
+		}
+		corrected, err := correctedTime(phcTime, offset)
+		if err != nil {
+			return fmt.Errorf("calculate corrected PHC time: %w", err)
+		}
+		if err := setPHCTime(ctx, dev, corrected); err != nil {
+			return fmt.Errorf("set PHC %s: %w", dev, err)
+		}
 	}
-	corrected, err := correctedTime(phcTime, offset)
-	if err != nil {
-		return fmt.Errorf("calculate corrected PHC time: %w", err)
-	}
-	if err := setPHCTime(ctx, dev, corrected); err != nil {
-		return fmt.Errorf("set PHC %s: %w", dev, err)
-	}
-	glog.Infof("PHC sync workaround completed: profile=%s interface=%s phc=%s", profileName, iface, dev)
+	glog.Infof("PHC sync workaround completed: profile=%s interfaces=%v phc=%v", profileName, ifaces, devs)
 	return nil
 }
 
-func measureOffset(ctx context.Context, profile *ptpv1.PtpProfile, iface string) (int64, error) {
+// phcDevices maps the time receiver interfaces to their PHC devices, keeping
+// profile order and collapsing interfaces that share the same PHC.
+func phcDevices(ifaces []string) ([]string, error) {
+	seen := make(map[string]bool)
+	var devs []string
+	for _, iface := range ifaces {
+		dev := network.GetPhcId(iface)
+		if dev == "" {
+			return nil, fmt.Errorf("could not determine PHC device for interface %q", iface)
+		}
+		if !seen[dev] {
+			seen[dev] = true
+			devs = append(devs, dev)
+		}
+	}
+	return devs, nil
+}
+
+func measureOffset(ctx context.Context, profile *ptpv1.PtpProfile, ifaces []string) (int64, error) {
 	measureCtx, cancel := context.WithTimeout(ctx, measurementTimeout)
 	defer cancel()
 	config, err := os.CreateTemp("", "phc-sync-*.conf")
@@ -105,7 +113,7 @@ func measureOffset(ctx context.Context, profile *ptpv1.PtpProfile, iface string)
 	}
 	path := config.Name()
 	defer os.Remove(path)
-	content, err := renderMeasurementConfig(profile, iface)
+	content, err := renderMeasurementConfig(profile, ifaces)
 	if err != nil {
 		config.Close()
 		return 0, err
@@ -118,6 +126,11 @@ func measureOffset(ctx context.Context, profile *ptpv1.PtpProfile, iface string)
 		return 0, err
 	}
 	glog.Infof("PHC sync workaround ptp4l config: path=%s\n%s", path, content)
+	args := []string{"-f", path}
+	for _, iface := range ifaces {
+		args = append(args, "-i", iface)
+	}
+	args = append(args, "-m", "--free_running=1", "--freq_est_interval=-4", "--summary_interval=-4")
 	var samples []int64
 	_, err = commandOutputUntil(measureCtx, func(line string) bool {
 		match := masterOffsetRegex.FindStringSubmatch(line)
@@ -129,7 +142,7 @@ func measureOffset(ctx context.Context, profile *ptpv1.PtpProfile, iface string)
 			samples = append(samples, value)
 		}
 		return len(samples) >= measurementSamples
-	}, "ptp4l", "-f", path, "-i", iface, "-m", "--free_running=1", "--freq_est_interval=-4", "--summary_interval=-4")
+	}, "ptp4l", args...)
 	if err != nil && len(samples) < measurementSamples && measureCtx.Err() == nil {
 		return 0, err
 	}
@@ -148,29 +161,32 @@ func measureOffset(ctx context.Context, profile *ptpv1.PtpProfile, iface string)
 
 // renderMeasurementConfig builds the free-running ptp4l configuration for the
 // measurement phase. It copies the profile's [global] options (including
-// domainNumber and the telecom dataset/transport settings) and the selected TR
-// interface section, then overrides the options that define the measurement
-// session (free-running, slave-only, fast summaries, unique UDS address).
-func renderMeasurementConfig(profile *ptpv1.PtpProfile, iface string) (string, error) {
+// domainNumber and the telecom dataset/transport settings) and every time
+// receiver interface section, then overrides the options that define the
+// measurement session (free-running, slave-only, fast summaries, unique UDS
+// address).
+func renderMeasurementConfig(profile *ptpv1.PtpProfile, ifaces []string) (string, error) {
 	if profile == nil || profile.Ptp4lConf == nil {
 		return "", fmt.Errorf("profile has no ptp4l configuration")
 	}
 
+	wanted := make(map[string]bool, len(ifaces))
+	for _, iface := range ifaces {
+		wanted[iface] = true
+	}
+	found := make(map[string]bool, len(ifaces))
+	interfaceOptions := make(map[string][]string, len(ifaces))
+
 	var globalOptions []string
-	var interfaceOptions []string
 	domain := "0"
 	section := ""
-	foundInterface := false
 	for _, rawLine := range strings.Split(*profile.Ptp4lConf, "\n") {
 		line := strings.TrimSpace(rawLine)
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			section = strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
-			if section == iface {
-				foundInterface = true
-			}
 			continue
 		}
-		if section != "global" && section != iface {
+		if section != "global" && !wanted[section] {
 			continue
 		}
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -191,14 +207,17 @@ func renderMeasurementConfig(profile *ptpv1.PtpProfile, iface string) (string, e
 		if section == "global" {
 			globalOptions = append(globalOptions, line)
 		} else {
-			interfaceOptions = append(interfaceOptions, line)
+			found[section] = true
+			interfaceOptions[section] = append(interfaceOptions[section], line)
 		}
 	}
-	if !foundInterface {
-		return "", fmt.Errorf("profile has no configuration section for TR interface %q", iface)
+	for _, iface := range ifaces {
+		if !found[iface] {
+			return "", fmt.Errorf("profile has no configuration section for TR interface %q", iface)
+		}
 	}
 
-	global := []string{
+	lines := []string{
 		"[global]",
 		"slaveOnly 1",
 		"free_running 1",
@@ -206,10 +225,12 @@ func renderMeasurementConfig(profile *ptpv1.PtpProfile, iface string) (string, e
 		"summary_interval -4",
 		fmt.Sprintf("uds_address /tmp/phc-sync-%d.socket", os.Getpid()),
 	}
-	global = append(global, globalOptions...)
-	global = append(global, "["+iface+"]")
-	global = append(global, interfaceOptions...)
-	return strings.Join(global, "\n") + "\n", nil
+	lines = append(lines, globalOptions...)
+	for _, iface := range ifaces {
+		lines = append(lines, "["+iface+"]")
+		lines = append(lines, interfaceOptions[iface]...)
+	}
+	return strings.Join(lines, "\n") + "\n", nil
 }
 
 func readPHCTime(ctx context.Context, dev string) (int64, error) {
