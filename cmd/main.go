@@ -132,7 +132,7 @@ func main() {
 	plugins := make([]string, 0)
 
 	if val, ok := os.LookupEnv("PLUGINS"); ok && val != "" {
-		plugins = strings.Split(val, ",")
+		plugins = splitPluginNames(val)
 	}
 
 	stopCh := make(chan struct{})
@@ -225,6 +225,17 @@ func main() {
 	} else {
 		runLegacyMode(cp, nodeName, ptpConfUpdate, ptpClient, nodeName, &hwconfigs, &refreshNodePtpDevice, tickerPull, sigCh, closeProcessManager)
 	}
+}
+
+func splitPluginNames(value string) []string {
+	plugins := make([]string, 0)
+	for _, name := range strings.Split(value, ",") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			plugins = append(plugins, name)
+		}
+	}
+	return plugins
 }
 
 // controllerManagerSetup holds the controller manager and its context
