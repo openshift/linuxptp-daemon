@@ -17,30 +17,30 @@ components:
   - id: "DPLL phase in 1kHz"
     description: "DPLL phase reference input from NAC0, REF0P, Frequency - 1kHz"
     compensationPoint:
-      name: "ETH01_SDP_TIMESYNC_2"
+      name: "REF0P"
       type: dpll
   - id: "DPLL phase in 1Hz"
     description: "DPLL phase reference input from NAC0, REF0N, Frequency - 1Hz"
     compensationPoint:
-      name: "ETH01_SDP_TIMESYNC_0"
+      name: "REF0N"
       type: dpll
 
   - id: "DPLL phase out 1Hz"
     description: "DPLL phase signal output to NAC0, Frequency - 1Hz, OUT8N"
     compensationPoint:
-      name: "ETH01_SDP_TIMESYNC_1"
+      name: "OUT8N"
       type: dpll  
   - id: "DPLL phase out 1kHz"
     description: "DPLL phase signal output to NAC0, Frequency - 1kHz, OUT8P"
     compensationPoint:
-      name: "ETH01_SDP_TIMESYNC_3"
+      name: "OUT8P"
       type: dpll
 
 # DPLL to CF - ESync transfer nodes
   - id: "DPLL ESync out"
     description: "DPLL ESync output pin to CF, OUT2N"
     compensationPoint:
-      name: "EPPS_10M_ADD_IN_CARD_SYNC"
+      name: "OUT2N"
       type: dpll
 
   - id: "CF ESync in"

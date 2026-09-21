@@ -2,6 +2,23 @@
 # These templates define default behavior configurations for different clock types
 # Template variables: {subsystem}, {ptpInputPin}, {interface}
 # Hardware-specific pins (SDP2, SDP0) are hardcoded in the template
+#
+# HPE EL140 Gen12 DPLL pin labels (package  board):
+# REF0P   ETH01_SDP_TIMESYNC_2
+# REF0N   ETH01_SDP_TIMESYNC_0
+# REF1P   CLK_78M125_NAC0_SYNCE0 
+# REF1N   CLK_78M125_NAC0_SYNCE1
+# REF2N   GNSS_10M_IN
+# REF3P   SMA3_1PPS_IN
+# REF3N   SMA1_10MHZ_IN
+# REF4P   GNSS_1PPS_IN
+# REF4N   OCXO
+# OUT0P   SMA4_1PPS_OUT
+# OUT2P   EPPS_AIC_CLK
+# OUT2N   SMA2_10MHZ_OUT
+# OUT8P   ETH01_SDP_TIMESYNC_3
+# OUT8N   ETH01_SDP_TIMESYNC_1
+
 
 behaviorProfiles:
   t-gm:
@@ -9,7 +26,7 @@ behaviorProfiles:
       - name: GNSS
         sourceType: gnss
         subsystem: "{subsystem}"
-        boardLabel: GNSS_1PPS_IN
+        boardLabel: REF4P
         gnssConfig:
           match:
             ttyDevice: "/dev/ttyACM0"
@@ -22,14 +39,14 @@ behaviorProfiles:
         desiredStates:
           - dpll:
               subsystem: "{subsystem}"
-              boardLabel: GNSS_1PPS_IN
+              boardLabel: REF4P
               eec:
                 state: selectable
               pps:
                 state: selectable
           - dpll:
               subsystem: "{subsystem}"
-              boardLabel: GNSS_10M_IN
+              boardLabel: REF2N
               eec:
                 state: selectable
               pps:
@@ -48,8 +65,8 @@ behaviorProfiles:
   t-bc:
     # Pin role mappings - defines which pins serve which roles
     pinRoles:
-      gnssInputPin: GNSS_1PPS_IN # DPLL pin used for GNSS input (that should be disabled for T-BC)
-      ptpInputPin: 1PPS_IN0 # DPLL pin used for PTP input
+      gnssInputPin: REF4P # DPLL pin used for GNSS input (that should be disabled for T-BC)
+      ptpInputPin: REF0N # DPLL pin used for PTP input
 
     # Source template - will be instantiated with resolved variables
     sources:
@@ -82,14 +99,14 @@ behaviorProfiles:
                 state: selectable
           - dpll:
               subsystem: "{subsystem}"
-              boardLabel: GNSS_10M_IN
+              boardLabel: REF2N
               eec:
                 state: disconnected
               pps:
                 state: disconnected
           - dpll:
               subsystem: "{subsystem}"
-              boardLabel: 1PPS_IN1
+              boardLabel: REF0P
               eec:
                 state: disconnected
               pps:
