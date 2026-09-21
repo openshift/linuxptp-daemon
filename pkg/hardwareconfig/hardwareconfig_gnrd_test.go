@@ -147,7 +147,7 @@ func setupGNRDTestEnvironment(t *testing.T) uint64 {
 
 	// Get the actual clock ID from the loaded pins
 	var actualClockID uint64
-	for clockID := range cache.Pins {
+	for clockID := range cache.BoardLabelPins {
 		actualClockID = clockID
 		t.Logf("✓ Using clock ID from pin cache: %#x", actualClockID)
 		break
@@ -452,7 +452,7 @@ func validateGNRDBehaviorTransitions(t *testing.T, hcm *HardwareConfigManager, h
 			for j, cmd := range conditionDpllCommands {
 				cache, _ := GetDpllPins()
 				pinLabel := ""
-				for clkID, pins := range cache.Pins {
+				for clkID, pins := range cache.BoardLabelPins {
 					for label, pin := range pins {
 						if pin.ID == cmd.ID {
 							pinLabel = label
@@ -640,7 +640,7 @@ func TestDellXR8720tBehaviorTransitions(t *testing.T) {
 
 	// Get the clock ID from the loaded pins
 	var actualClockID uint64
-	for clockID := range cache.Pins {
+	for clockID := range cache.BoardLabelPins {
 		actualClockID = clockID
 		t.Logf("✓ Using clock ID from pin cache: %#x", actualClockID)
 		break
@@ -674,6 +674,94 @@ func TestDellXR8720tBehaviorTransitions(t *testing.T) {
 		hwConfig.Spec.Profile.ClockChain.Structure[0].HardwareSpecificDefinitions)
 }
 
+func TestDellXR8720tTBCAppliesPackageLabeledPTPPin(t *testing.T) {
+	mockGetter, err := CreateMockDpllPinsGetterFromFile("testdata/pins-perla4.json")
+	if !assert.NoError(t, err) {
+		t.FailNow()
+	}
+	SetDpllPinsGetter(mockGetter)
+	defer TeardownMockDpllPinsForTests()
+
+	cache, err := GetDpllPins()
+	if !assert.NoError(t, err) {
+		t.FailNow()
+	}
+	var clockID uint64
+	for id := range cache.BoardLabelPins {
+		clockID = id
+		break
+	}
+	if !assert.NotZero(t, clockID) {
+		t.FailNow()
+	}
+
+	hwConfig, err := loadHardwareConfigFromFile("testdata/gnrd-hwconfig-minimal-perla4.yaml")
+	if !assert.NoError(t, err) || !assert.NotNil(t, hwConfig) {
+		t.FailNow()
+	}
+	ptpConfig, err := loadPtpConfigFromFile("testdata/tbc-gnrd.yaml")
+	if !assert.NoError(t, err) || !assert.NotNil(t, ptpConfig) {
+		t.FailNow()
+	}
+
+	mockResolver := newMockLeadingInterfaceResolver()
+	mockResolver.phcIDs["eno2"] = testDevPtp0
+	mockResolver.symlinks["/sys/class/ptp/ptp0/device"] = "../../../0000:13:00.0"
+	mockResolver.dirEntries["/sys/bus/pci/devices/0000:13:00.0/net"] = []os.DirEntry{
+		&mockDirEntry{name: "eno5", isDir: false},
+	}
+	SetLeadingInterfaceResolver(mockResolver)
+	defer ResetLeadingInterfaceResolver()
+	SetupMockPtpDeviceResolverWithDevices(map[string][]string{
+		"/sys/class/net/eno5/device/ptp/ptp*/pins/SDP0": {
+			"/sys/class/net/eno5/device/ptp/ptp0/pins/SDP0",
+		},
+	})
+	defer TeardownMockPtpDeviceResolver()
+
+	hcm := newHardwareConfigManagerForTests()
+	hcm.overrideExecutors(func([]dpll.PinParentDeviceCtl) error { return nil }, func(string, string) error { return nil })
+	defer hcm.resetExecutors()
+	hcm.pinCache = cache
+	hcm.clockIDCache = map[string]uint64{"eno5:dell/XR8720t": clockID}
+	resolved, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
+	if !assert.NoError(t, err) || !assert.NotNil(t, resolved) {
+		t.FailNow()
+	}
+
+	var ptpLabel string
+	for _, condition := range resolved.Spec.Profile.ClockChain.Behavior.Conditions {
+		if condition.Name != testConditionInitializeTBC {
+			continue
+		}
+		for _, desiredState := range condition.DesiredStates {
+			if desiredState.DPLL != nil && desiredState.DPLL.BoardLabel == testPackageLabelREF0N {
+				ptpLabel = desiredState.DPLL.BoardLabel
+			}
+		}
+	}
+	assert.Equal(t, testPackageLabelREF0N, ptpLabel)
+	pin, found := cache.GetPin(clockID, ptpLabel)
+	if !assert.True(t, found) {
+		t.FailNow()
+	}
+	assert.Equal(t, testPackageLabelREF0N, pin.PackageLabel)
+	assert.Equal(t, "ETH01_SDP_TIMESYNC_0", pin.BoardLabel)
+
+	dpllCommands, sysfsCommands, err := hcm.resolveClockChainBehavior(*resolved)
+	if !assert.NoError(t, err) {
+		t.FailNow()
+	}
+	hcm.hardwareConfigs = []enrichedHardwareConfig{{
+		HardwareConfig:  *resolved,
+		dpllPinCommands: dpllCommands,
+		sysFSCommands:   sysfsCommands,
+	}}
+
+	profile := &ptpv1.PtpProfile{Name: stringPtr("t-bc_01-tbc-tr")}
+	assert.NoError(t, hcm.ApplyHardwareConfigsForProfile(profile))
+}
+
 // TestLoadBehaviorProfile_DellXR8720t tests that dell/XR8720t behavior profiles load correctly
 func TestLoadBehaviorProfile_DellXR8720t(t *testing.T) {
 	fakeClient := fake.NewClientset()
@@ -688,10 +776,10 @@ func TestLoadBehaviorProfile_DellXR8720t(t *testing.T) {
 
 	// Verify pin roles
 	assert.NotEmpty(t, template.PinRoles, "PinRoles should not be empty")
-	assert.Equal(t, "ETH01_SDP_TIMESYNC_0", template.PinRoles["ptpInputPin"],
-		"ptpInputPin should be ETH01_SDP_TIMESYNC_0 for Dell XR8720t")
-	assert.Equal(t, "GNSS_1PPS_IN", template.PinRoles["gnssInputPin"],
-		"gnssInputPin should be GNSS_1PPS_IN for Dell XR8720t")
+	assert.Equal(t, testPackageLabelREF0N, template.PinRoles["ptpInputPin"],
+		"ptpInputPin should be REF0N for Dell XR8720t")
+	assert.Equal(t, testPackageLabelREF4P, template.PinRoles["gnssInputPin"],
+		"gnssInputPin should be REF4P for Dell XR8720t")
 
 	// Verify sources template
 	assert.NotEmpty(t, template.Sources, "Sources should not be empty")
@@ -701,7 +789,7 @@ func TestLoadBehaviorProfile_DellXR8720t(t *testing.T) {
 	// Verify conditions template
 	assert.NotEmpty(t, template.Conditions, "Conditions should not be empty")
 
-	expectedConditions := []string{"Initialize T-BC", "PTP Source Locked", "PTP Source Lost - Leader Holdover"}
+	expectedConditions := []string{testConditionInitializeTBC, "PTP Source Locked", "PTP Source Lost - Leader Holdover"}
 	for _, expectedName := range expectedConditions {
 		found := false
 		for _, condition := range template.Conditions {
@@ -740,8 +828,8 @@ func TestLoadBehaviorProfile_MultiVendor(t *testing.T) {
 		{
 			hwDefPath:         "dell/XR8720t",
 			clockType:         ClockTypeTBC,
-			expectedPtpInput:  "ETH01_SDP_TIMESYNC_0",
-			expectedGnssInput: "GNSS_1PPS_IN",
+			expectedPtpInput:  testPackageLabelREF0N,
+			expectedGnssInput: testPackageLabelREF4P,
 		},
 	}
 
@@ -759,7 +847,7 @@ func TestLoadBehaviorProfile_MultiVendor(t *testing.T) {
 				"gnssInputPin mismatch for %s", v.hwDefPath)
 
 			// Both vendors should have the same condition names
-			expectedConditions := []string{"Initialize T-BC", "PTP Source Locked", "PTP Source Lost - Leader Holdover"}
+			expectedConditions := []string{testConditionInitializeTBC, "PTP Source Locked", "PTP Source Lost - Leader Holdover"}
 			for _, name := range expectedConditions {
 				found := false
 				for _, c := range template.Conditions {
@@ -847,7 +935,7 @@ func TestClockIDResolution(t *testing.T) {
 	}
 
 	var expectedClockID uint64
-	for clockID := range cache.Pins {
+	for clockID := range cache.BoardLabelPins {
 		expectedClockID = clockID
 		t.Logf("Expected clock ID from pin cache: %#x", expectedClockID)
 		break
@@ -892,8 +980,8 @@ func TestLoadBehaviorProfile_TGM(t *testing.T) {
 	}{
 		{HwDefIntelE810, HwDefIntelE810, "GNSS-1PPS"},
 		{HwDefIntelE825, HwDefIntelE825, "GNSS_1PPS_IN"},
-		{HwDefDellXR8720t, HwDefDellXR8720t, "GNSS_1PPS_IN"},
-		{HwDefHPEEL140Gen12, HwDefHPEEL140Gen12, "GNSS_1PPS_IN"},
+		{HwDefDellXR8720t, HwDefDellXR8720t, testPackageLabelREF4P},
+		{HwDefHPEEL140Gen12, HwDefHPEEL140Gen12, testPackageLabelREF4P},
 	}
 
 	for _, tt := range tests {
@@ -918,6 +1006,39 @@ func TestLoadBehaviorProfile_TGM(t *testing.T) {
 				tt.name, len(template.Sources), len(template.Conditions))
 		})
 	}
+}
+
+func TestHPEEL140UsesPackageLabelsInBehaviorProfiles(t *testing.T) {
+	fakeClient := fake.NewClientset()
+	loader := NewBoardLabelMapLoader(fakeClient, "default")
+
+	tgm, err := LoadBehaviorProfile(HwDefHPEEL140Gen12, testClockTypeTGM, loader)
+	if !assert.NoError(t, err) || !assert.NotNil(t, tgm) {
+		t.FailNow()
+	}
+	assert.Equal(t, testPackageLabelREF4P, tgm.Sources[0].BoardLabel)
+	assert.Equal(t, testPackageLabelREF4P, tgm.Conditions[0].DesiredStates[0].DPLL.BoardLabel)
+	assert.Equal(t, "REF2N", tgm.Conditions[0].DesiredStates[1].DPLL.BoardLabel)
+
+	tbc, err := LoadBehaviorProfile(HwDefHPEEL140Gen12, ClockTypeTBC, loader)
+	if !assert.NoError(t, err) || !assert.NotNil(t, tbc) {
+		t.FailNow()
+	}
+	assert.Equal(t, testPackageLabelREF4P, tbc.PinRoles["gnssInputPin"])
+	assert.Equal(t, testPackageLabelREF0N, tbc.PinRoles["ptpInputPin"])
+
+	labels := make(map[string]bool)
+	for _, condition := range tbc.Conditions {
+		for _, desiredState := range condition.DesiredStates {
+			if desiredState.DPLL != nil {
+				labels[desiredState.DPLL.BoardLabel] = true
+			}
+		}
+	}
+	assert.True(t, labels["{gnssInputPin}"])
+	assert.True(t, labels["{ptpInputPin}"])
+	assert.True(t, labels["REF2N"])
+	assert.True(t, labels["REF0P"])
 }
 
 func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
@@ -961,7 +1082,7 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 					},
 				},
 			},
-			expectedBoardLabel: "GNSS_1PPS_IN",
+			expectedBoardLabel: testPackageLabelREF4P,
 			expectedGnssConfig: &ptpv2alpha1.GNSSConfig{
 				Init: ptpv2alpha1.GNSSInit{},
 				Match: &ptpv2alpha1.GNSSMatcher{
@@ -1012,7 +1133,7 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 					},
 				},
 			},
-			expectedBoardLabel: "GNSS_1PPS_IN",
+			expectedBoardLabel: testPackageLabelREF4P,
 			expectedGnssConfig: &ptpv2alpha1.GNSSConfig{
 				Init: ptpv2alpha1.GNSSInit{
 					AntennaVoltage: true,
@@ -1073,7 +1194,7 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 					},
 				},
 			},
-			expectedBoardLabel: "GNSS_1PPS_IN",
+			expectedBoardLabel: testPackageLabelREF4P,
 			expectedGnssConfig: &ptpv2alpha1.GNSSConfig{
 				Init: ptpv2alpha1.GNSSInit{
 					AntennaVoltage: true,
