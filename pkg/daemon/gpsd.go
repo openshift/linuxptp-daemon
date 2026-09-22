@@ -75,7 +75,7 @@ type GPSD struct {
 func NewGpsdProcess(serialPort string, gmInterface string, messageTag string, gnssInitCmds ublox.CommandList, gnssResultsFn func(results []string), nodeProfile *ptpv1.PtpProfile, eventCh chan event.Event, processCfg config.ProcessConfig) process.Process {
 	monitorCtx, monitorCancel := context.WithCancel(context.Background())
 
-	cmdLine := fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -G -N %s", GPSD_PROCESSNAME, serialPort)
+	cmdLine := fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -N %s", GPSD_PROCESSNAME, serialPort)
 	cmdLine = addScheduling(nodeProfile, cmdLine)
 	args := strings.Split(cmdLine, " ")
 
