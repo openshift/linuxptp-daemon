@@ -377,10 +377,6 @@ func validateAckCommandBatch(args []string, commands []ackCommandGroup) error {
 	return nil
 }
 
-// ackBatchQuietPeriod leaves room within the two-second command context while
-// allowing the slower command-response batches to arrive after the first ACK.
-const ackBatchQuietPeriod = 500 * time.Millisecond
-
 // ackBatchExpectation returns the minimum number of expected responses (where
 // indeterminate commands count as one), and whether any command in the batch
 // has an indeterminate response count.
@@ -400,13 +396,12 @@ func ackBatchExpectation(commands []ackCommandGroup) (expected int, indeterminat
 // collectAckResponses treats the first ACK/NAK and all subsequent ACK/NAK
 // messages as one batch. Determinate batches end when their expected number
 // of responses arrives; indeterminate batches end at the first non-ACK/NAK
-// message after their minimum response count, or after ackBatchQuietPeriod.
+// message after their minimum response count, or when the command context
+// expires.
 func collectAckResponses(ctx context.Context, messages <-chan Message, processDone <-chan error, expectedResponses int, indeterminate bool) ([]Message, error) {
 	var responses []Message
 	var processErr error
-	var quietTimer *time.Timer
-	var quietTimerC <-chan time.Time
-
+	seenNonAckNak := false
 	for {
 		select {
 		case message, ok := <-messages:
@@ -416,31 +411,19 @@ func collectAckResponses(ctx context.Context, messages <-chan Message, processDo
 				}
 				return responses, nil
 			}
-			if message.Type != AckAckType && message.Type != AckNakType {
-				// A non-ACK/NAK message terminates an indeterminate batch only
-				// after its minimum response count has been received.
-				if indeterminate && len(responses) >= expectedResponses {
-					return responses, nil
-				}
-				continue
+			switch message.Type {
+			case AckAckType, AckNakType:
+				responses = append(responses, message)
+			default:
+				seenNonAckNak = true
 			}
-			responses = append(responses, message)
-			if !indeterminate && len(responses) >= expectedResponses {
-				// All response lengths are known and enough ACK/NAK messages have
-				// arrived; exit now.
+			if len(responses) >= expectedResponses {
+				if indeterminate && !seenNonAckNak {
+					// For indeterminate batches, wait for more ACKs unless we've seen at
+					// least one non ACK/NAK message
+					continue
+				}
 				return responses, nil
-			}
-			if quietTimer == nil {
-				quietTimer = time.NewTimer(ackBatchQuietPeriod)
-				quietTimerC = quietTimer.C
-			} else {
-				if !quietTimer.Stop() {
-					select {
-					case <-quietTimer.C:
-					default:
-					}
-				}
-				quietTimer.Reset(ackBatchQuietPeriod)
 			}
 		case processErrValue, ok := <-processDone:
 			processDone = nil
@@ -450,11 +433,6 @@ func collectAckResponses(ctx context.Context, messages <-chan Message, processDo
 					return nil, fmt.Errorf("ubxtool command failed: %w", processErr)
 				}
 			}
-		case <-quietTimerC:
-			if processErr != nil {
-				return responses, fmt.Errorf("ubxtool command failed: %w", processErr)
-			}
-			return responses, nil
 		case <-ctx.Done():
 			if len(responses) > 0 {
 				if processErr != nil {

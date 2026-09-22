@@ -236,6 +236,7 @@ func TestCommandRunnerRunCollectsUnknownAckBatch(t *testing.T) {
 		issueFn: func(_ context.Context, _ Command) (<-chan error, error) {
 			receiver.broker.Publish(Message{Type: AckAckType, Payload: AckAck{}})
 			receiver.broker.Publish(Message{Type: AckAckType, Payload: AckAck{}})
+			receiver.broker.Publish(Message{Type: NavClockType})
 			done := make(chan error, 1)
 			done <- nil
 			close(done)
@@ -257,6 +258,7 @@ func TestCommandRunnerRunWithBrokerReportOutput(t *testing.T) {
 				Payload: AckAck{},
 				Raw:     []string{"UBX-ACK-ACK:", "  clsID 0x06 msgID 0x01"},
 			})
+			receiver.broker.Publish(Message{Type: NavClockType})
 			done := make(chan error, 1)
 			done <- nil
 			close(done)
