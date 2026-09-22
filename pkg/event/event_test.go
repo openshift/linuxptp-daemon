@@ -319,7 +319,9 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go eventManager.ProcessEvents(ctx)
-	_, addErr := eventManager.AddClock("ts2phc.0.config", event.GM, pmcMock)
+	gmClk, err := clock.NewGM("ts2phc.0.config", leap.GetUtcOffset, pmcMock)
+	require.NoError(t, err)
+	addErr := eventManager.AddClock(gmClk)
 	assert.NoError(t, addErr)
 	assert.NoError(t, leap.MockLeapFile())
 	defer func() {
@@ -456,7 +458,9 @@ func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 	defer cancel()
 	go eventManager.ProcessEvents(ctx)
 
-	_, addErr := eventManager.AddClock(testBCCfgPTP4l, event.TBC, pmcMock)
+	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock)
+	require.NoError(t, err)
+	addErr := eventManager.AddClock(tbcClk)
 	assert.NoError(t, addErr)
 	eChannel <- event.Event{
 		Source:    event.PMC,
@@ -563,8 +567,6 @@ func waitForClockClass(clk clock.Clock, expected fbprotocol.ClockClass, timeout 
 }
 
 func TestTBCClockClassMetric(t *testing.T) {
-	// TODO: Dont skip this
-	t.Skip("Skipping metrics test")
 	pmcMock := &pmc.MockClient{
 		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
 			ParentDataSet: protocol.ParentDataSet{
@@ -614,7 +616,9 @@ func TestTBCClockClassMetric(t *testing.T) {
 	defer cancel()
 	go eventManager.ProcessEvents(ctx)
 
-	_, addErr := eventManager.AddClock(testBCCfgPTP4l, event.TBC, pmcMock)
+	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock)
+	require.NoError(t, err)
+	addErr := eventManager.AddClock(tbcClk)
 	assert.NoError(t, addErr)
 	eChannel <- event.Event{
 		Source:    event.PMC,
@@ -820,11 +824,15 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 	)
 
 	// Register GM clock
-	_, addErr := eventManager.AddClock(gmCfg, event.GM, pmcMock)
+	gmClk, err := clock.NewGM(gmCfg, leap.GetUtcOffset, pmcMock)
+	require.NoError(t, err)
+	addErr := eventManager.AddClock(gmClk)
 	require.NoError(t, addErr)
 
 	// Register T-BC clock
-	_, addErr = eventManager.AddClock(tbcPTP4l, event.TBC, pmcMock)
+	tbcClk, err := clock.NewTBC(tbcPTP4l, leap.GetUtcOffset, pmcMock)
+	require.NoError(t, err)
+	addErr = eventManager.AddClock(tbcClk)
 	require.NoError(t, addErr)
 	eChannel <- event.Event{
 		Source:    event.PMC,
@@ -1152,7 +1160,9 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	defer cleanup()
 
 	// Register two TBCClocks
-	_, err := eventManager.AddClock(testBCCfgPTP4l, event.TBC, pmcMock)
+	tbcClk1, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock)
+	require.NoError(t, err)
+	err = eventManager.AddClock(tbcClk1)
 	require.NoError(t, err)
 	eChannel <- event.Event{
 		Source: event.PMC, CfgName: testBCCfgPTP4l, ClockType: event.TBC,
@@ -1162,10 +1172,13 @@ func TestOverallClockStateIntegration(t *testing.T) {
 		}},
 	}
 
-	_, err = eventManager.AddClock("ptp4l.1.config", event.TBC, pmcMock)
+	secondTBCCfgName := "ptp4l.1.config"
+	tbcClk2, err := clock.NewTBC(secondTBCCfgName, leap.GetUtcOffset, pmcMock)
+	require.NoError(t, err)
+	err = eventManager.AddClock(tbcClk2)
 	require.NoError(t, err)
 	eChannel <- event.Event{
-		Source: event.PMC, CfgName: "ptp4l.1.config", ClockType: event.TBC,
+		Source: event.PMC, CfgName: secondTBCCfgName, ClockType: event.TBC,
 		Time: time.Now().UnixMilli(),
 		Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{
 			GrandmasterClockClass: 6, GrandmasterClockAccuracy: 0x21,
@@ -1210,7 +1223,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	}
 
 	lockTBCClock(testBCCfgTS2PHC, testBCCfgPTP4l)
-	lockTBCClock("ts2phc.1.config", "ptp4l.1.config")
+	lockTBCClock("ts2phc.1.config", secondTBCCfgName)
 
 	// Drain all messages from PTP locking phase via the CEPv2 socket
 	msgs := drainIPCMessages(socketCh, 2*time.Second)
@@ -1272,7 +1285,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	assert.Equal(t, 1, osClockCount, "os_clock_state should be emitted exactly once")
 	assert.Equal(t, 2, syncStateLocked, "sync_state LOCKED should be emitted for both profiles")
 	assert.True(t, syncStateProfiles[testBCCfgPTP4l], "sync_state should include profile 0")
-	assert.True(t, syncStateProfiles["ptp4l.1.config"], "sync_state should include profile 1")
+	assert.True(t, syncStateProfiles[secondTBCCfgName], "sync_state should include profile 1")
 
 	// --- Phase 3: Send PHC2SYS FREERUN → overall drops to FREERUN ---
 
@@ -1379,7 +1392,9 @@ func TestSyncEIPCIntegration(t *testing.T) {
 	socketCh, cleanup := startIPCSocketListener(t, cache)
 	defer cleanup()
 
-	_, err := eventManager.AddClock(testBCCfgPTP4l, event.TBC, pmcMock)
+	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock)
+	require.NoError(t, err)
+	err = eventManager.AddClock(tbcClk)
 	require.NoError(t, err)
 
 	time.Sleep(200 * time.Millisecond)
@@ -1486,7 +1501,9 @@ func TestApplyingSkipsTBCEvents(t *testing.T) {
 	em := clockmgr.Init("node", eChannel, nil, nil, nil, nil)
 
 	pmcMock := &pmc.MockClient{}
-	_, err := em.AddClock(cfg, event.TBC, pmcMock)
+	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock)
+	require.NoError(t, err)
+	err = em.AddClock(tbcClk)
 	require.NoError(t, err)
 
 	clk := em.GetClock(cfg)

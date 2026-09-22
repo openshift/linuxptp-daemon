@@ -1,13 +1,9 @@
 package clock
 
 import (
-	"fmt"
-
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 )
 
 // Clock represents a PTP clock instance tied to a specific config profile.
@@ -19,6 +15,8 @@ type Clock interface {
 	ConfigName() string
 	ClockType() event.ClockType
 	ClockClass() fbprotocol.ClockClass
+	SetIPC(func(message ipc.Message))
+	SetEventLoopbackFunc(f func(event.Event))
 }
 
 // SyncState holds the composite synchronization state of a clock.
@@ -31,65 +29,6 @@ type SyncState struct {
 	LeadingIFace   string
 	ClockAccuracy  fbprotocol.ClockAccuracy
 	ClockOffset    int64
-}
-
-// NewClock creates the appropriate Clock implementation for the given clock type.
-func NewClock(cfgName string, clockType event.ClockType, sendIPC func(ipc.Message), sendEvent func(event.Event), getUtcOffset func() int, pmcClient pmc.Client) (Clock, error) {
-	switch clockType {
-	case event.GM:
-		if pmcClient == nil {
-			return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", clockType, cfgName)
-		}
-		return &GM{
-			cfgName:      cfgName,
-			sendIPC:      sendIPC,
-			getUtcOffset: getUtcOffset,
-			pmcClient:    pmcClient,
-			syncState: SyncState{
-				State:         event.PTP_NOTSET,
-				ClockClass:    protocol.ClockClassUninitialized,
-				ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
-			},
-			overallSyncState:       event.PTP_NOTSET,
-			osClockState:           event.PTP_NOTSET,
-			gnssState:              event.PTP_NOTSET,
-			announcedClockClass:    protocol.ClockClassUninitialized,
-			announcedClockAccuracy: fbprotocol.ClockAccuracyUnknown,
-		}, nil
-	case event.TBC:
-		if pmcClient == nil {
-			return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", clockType, cfgName)
-		}
-		return &TBC{
-			cfgName:      cfgName,
-			sendIPC:      sendIPC,
-			sendEvent:    sendEvent,
-			getUtcOffset: getUtcOffset,
-			pmcClient:    pmcClient,
-			syncState: SyncState{
-				State:         event.PTP_NOTSET,
-				ClockClass:    protocol.ClockClassUninitialized,
-				ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
-			},
-			overallSyncState: event.PTP_NOTSET,
-			osClockState:     event.PTP_NOTSET,
-			leadingClockData: newLeadingClockParams(),
-			announceToken:    nextAnnounceToken(),
-		}, nil
-	case event.BC, event.OC:
-		// OC (single slave port) and BC share the same state machine; the
-		// clockType is preserved so metrics and events report the correct role.
-		return &BCClock{
-			cfgName:          cfgName,
-			clockType:        clockType,
-			sendIPC:          sendIPC,
-			syncState:        event.PTP_NOTSET,
-			overallSyncState: event.PTP_NOTSET,
-			osClockState:     event.PTP_NOTSET,
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported clock type %q for config %s", clockType, cfgName)
-	}
 }
 
 func emitOverallSyncStateIfChanged(sendIPC func(ipc.Message), overallSyncState *event.PTPState, clockState, osClockState event.PTPState, profile string) {

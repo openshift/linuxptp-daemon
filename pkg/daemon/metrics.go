@@ -13,6 +13,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -38,6 +39,7 @@ const (
 	clockRealTime      = "CLOCK_REALTIME"
 	master             = "master"
 	pmcSocketName      = "pmc"
+	thresholdMetric    = "threshold"
 
 	faultyOffset = 999999
 
@@ -198,6 +200,18 @@ var (
 			Help: "network_option1: ePRTC: {0, 0x2, 0x21}, PRTC:  {1, 0x2, 0x20}, PRC:   {2, 0x2, 0xFF}, SSUA:  {3, 0x4, 0xFF}, SSUB:  {4, 0x8, 0xFF}, EEC1:  {5, 0xB, 0xFF},QL-DNU: {6,0xF,0xFF}\n " +
 				"   network_option2 ePRTC: {0, 0x1, 0x21}, PRTC:  {1, 0x1, 0x20}, PRS:   {2, 0x1, 0xFF}, STU:   {3, 0x0, 0xFF}, ST2:   {4, 0x7, 0xFF}, TNC:   {5, 0x4, 0xFF}, ST3E:  {6, 0xD, 0xFF}, EEC2:  {7, 0xA, 0xFF}, PROV:  {8, 0xE, 0xFF}, QL-DUS: {9,0xF,0xFF}",
 		}, []string{"process", "node", "profile", "network_option", "iface", "device", "ql_type"})
+
+	// Threshold exposes the configured ptp clock thresholds for each profile
+	// (offset bounds in ns, holdover timeout in seconds). It is a read-back of
+	// the profile's PtpClockThreshold, not a live measurement, so it only
+	// changes when the profile configuration is (re)applied.
+	Threshold = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: PTPNamespace,
+			Subsystem: PTPSubsystem,
+			Name:      thresholdMetric,
+			Help:      "Configured PTP clock thresholds per profile (offset bounds in ns, holdover timeout in secs)",
+		}, []string{thresholdMetric, "node", "profile"})
 )
 
 var registerMetrics sync.Once
@@ -216,6 +230,7 @@ func RegisterMetrics(nodeName string) {
 		prometheus.MustRegister(PTPHAMetrics)
 		prometheus.MustRegister(SynceQLInfo)
 		prometheus.MustRegister(SynceClockQL)
+		prometheus.MustRegister(Threshold)
 
 		// Including these stats kills performance when Prometheus polls with multiple targets
 		prometheus.Unregister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
@@ -224,6 +239,20 @@ func RegisterMetrics(nodeName string) {
 		NodeName = nodeName
 	})
 
+}
+
+// updatePTPThresholdMetrics resolves the profile's clock thresholds (max/min
+// offset in ns, holdover timeout in secs) applying the same defaulting as
+// cloud-event-proxy's UpdatePTPThreshold, then publishes them as the read-back
+// openshift_ptp_threshold gauge.
+func updatePTPThresholdMetrics(nodeProfile *ptpv1.PtpProfile, th event.PtpClockThreshold) {
+	profile := *nodeProfile.Name
+	Threshold.With(prometheus.Labels{
+		thresholdMetric: "MaxOffsetThreshold", "node": NodeName, "profile": profile}).Set(float64(th.MaxOffsetThreshold))
+	Threshold.With(prometheus.Labels{
+		thresholdMetric: "MinOffsetThreshold", "node": NodeName, "profile": profile}).Set(float64(th.MinOffsetThreshold))
+	Threshold.With(prometheus.Labels{
+		thresholdMetric: "HoldOverTimeout", "node": NodeName, "profile": profile}).Set(float64(th.HoldOverTimeout))
 }
 
 // InitializeOffsetMaps ... initialize maps
@@ -819,6 +848,12 @@ func (s *slaveInterface) set(configName string, value string) {
 	s.Lock()
 	defer s.Unlock()
 	s.name[configName] = value
+}
+
+func (s *slaveInterface) get(configName string) string {
+	s.RLock()
+	defer s.RUnlock()
+	return s.name[configName]
 }
 
 func (s *slaveInterface) isFaulty(configName string, iface string) bool {

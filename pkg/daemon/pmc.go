@@ -18,11 +18,13 @@ import (
 const (
 	// PMCProcessName is the name identifier for PMC processes
 	PMCProcessName = "pmc"
-	pollTimeout    = 5 * time.Minute
+	// defaultMonitorWaitInterval bounds how long the monitor loop will block waiting for a NOTIFY_PARENT_DATA_SET push
+	// before it re-polls the parent data set on its own.
+	defaultMonitorWaitInterval = 30 * time.Second
 )
 
 // NewPMCProcess creates a new PMC process instance for monitoring PTP events.
-func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType string) *PMCProcess {
+func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType string, waitInterval time.Duration) *PMCProcess {
 	return &PMCProcess{
 		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
 		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
@@ -30,6 +32,7 @@ func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType string) *PMC
 		parentDSCh:        make(chan protocol.ParentDataSet, 10),
 		eventCh:           eventCh,
 		clockType:         clockType,
+		waitInterval:      waitInterval,
 		getMonitorFn:      pmcPkg.GetPMCMontior,
 	}
 }
@@ -47,8 +50,12 @@ type PMCProcess struct {
 	parentDSCh        chan protocol.ParentDataSet
 	exitCh            chan struct{}
 	clockType         string
-	messageTag        string
-	eventCh           chan<- event.Event
+	// waitInterval bounds how long expectWorker blocks on Expect before it re-polls the parent data set. This
+	// guarantees the clock class metric recovers within one interval even if a NOTIFY_PARENT_DATA_SET push is never
+	// delivered (observed on netdevsim after a link outage recovers).
+	waitInterval time.Duration
+	messageTag   string
+	eventCh      chan<- event.Event
 
 	getMonitorFn func(string) (*expect.GExpect, <-chan error, error)
 }
@@ -200,6 +207,11 @@ func (pmc *PMCProcess) monitor() error {
 }
 
 func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- protocol.ParentDataSet, signalCh chan<- workerSignal, doneCh <-chan struct{}) {
+	expectTimeout := pmc.waitInterval
+	if expectTimeout <= 0 {
+		expectTimeout = defaultMonitorWaitInterval
+	}
+
 	for {
 		select {
 		case <-pmc.exitCh:
@@ -210,7 +222,7 @@ func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- proto
 		}
 
 		go pmc.Poll() // Check if anything changed while handling the last message
-		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), -1)
+		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), expectTimeout)
 
 		if expectErr != nil {
 			if _, ok := expectErr.(expect.TimeoutError); ok {

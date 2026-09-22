@@ -23,10 +23,12 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -41,10 +43,8 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
-
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 
 	"github.com/golang/glog"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -714,6 +714,10 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// any event processing restarts.
 	alias.ClearAliases()
 
+	// Drop stale openshift_ptp_threshold series; each profile re-sets its own
+	// in applyNodePtpProfile below, so removed profiles do not linger.
+	Threshold.Reset()
+
 	// All configs will be rebuild, and sockets recreated, so they can all be deleted
 	_ = dn.cleanupTempFiles()
 
@@ -950,6 +954,12 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	}
 
 	dn.reportPluginStatus(*nodeProfile.Name, pluginErrors)
+
+	// Publish the profile's configured clock thresholds as the read-back
+	// openshift_ptp_threshold gauge (config value, not a live measurement).
+	th := resolvePTPThreshold(nodeProfile)
+	updatePTPThresholdMetrics(nodeProfile, th)
+
 	var err error
 	var cmdLine string
 	var configPath string
@@ -999,7 +1009,30 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	}
 
 	clockCfgName := fmt.Sprintf("ptp4l.%d.config", runID)
-	if _, err = dn.processManager.clockMgr.AddClock(clockCfgName, clockType, pmc.ActiveClient()); err != nil {
+	var c clock.Clock
+	switch clockType {
+	case event.GM:
+		if c, err = clock.NewGM(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
+			return err
+		}
+	case event.TBC:
+		if c, err = clock.NewTBC(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
+			return err
+		}
+	case event.BC:
+		if c, err = clock.NewBC(clockCfgName, false, th); err != nil {
+			return err
+		}
+	case event.OC:
+		if c, err = clock.NewBC(clockCfgName, true, th); err != nil {
+			return err
+		}
+
+	default:
+		return fmt.Errorf("unsupported clock type %q for config %s", clockType, clockCfgName)
+	}
+
+	if err = dn.processManager.clockMgr.AddClock(c); err != nil {
 		return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
 	}
 
@@ -1207,7 +1240,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				if !clockTypeFound {
 					pmcClockType = string(clockType)
 				}
-				pmcProcess := NewPMCProcess(runID, dn.processManager.eventChannel, pmcClockType)
+				pmcProcess := NewPMCProcess(runID, dn.processManager.eventChannel, pmcClockType, time.Duration(dn.pmcPollInterval)*time.Second)
 				pmcProcess.CmdInit()
 				// TODO addScheduling
 				dprocess.depProcess = append(dprocess.depProcess, pmcProcess)
@@ -1905,6 +1938,34 @@ func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
 	return &ptpv1.PtpClockThreshold{
 		HoldOverTimeout:    5,
 		MaxOffsetThreshold: 100,
+	}
+}
+
+// resolvePTPThreshold resolves a profile's clock thresholds (max/min offset in
+// ns, holdover timeout in secs), applying the same defaulting as
+// cloud-event-proxy's UpdatePTPThreshold. It is the single source of truth for
+// both the openshift_ptp_threshold gauge and the BC/OC clock state machine.
+func resolvePTPThreshold(nodeProfile *ptpv1.PtpProfile) event.PtpClockThreshold {
+	maxOffset, minOffset, holdoverTimeout := int64(100), int64(-100), int64(5)
+	if th := nodeProfile.PtpClockThreshold; th != nil {
+		if th.MaxOffsetThreshold > 0 {
+			maxOffset = th.MaxOffsetThreshold
+		}
+		if th.MinOffsetThreshold > maxOffset {
+			minOffset = maxOffset - 1 // keep min one ns below max
+		} else {
+			minOffset = th.MinOffsetThreshold
+		}
+		if th.HoldOverTimeout > 0 {
+			holdoverTimeout = th.HoldOverTimeout
+		}
+	} else if isNtpFailoverEnabled(nodeProfile) {
+		maxOffset, minOffset = 1000, -1000
+	}
+	return event.PtpClockThreshold{
+		MaxOffsetThreshold: maxOffset,
+		MinOffsetThreshold: minOffset,
+		HoldOverTimeout:    holdoverTimeout,
 	}
 }
 

@@ -138,6 +138,30 @@ type PTPData struct {
 
 func (*PTPData) eventData() {}
 
+// PtpClockThreshold carries the resolved clock thresholds used by BC/OC state
+// decisions: the offset bounds (ns) that gate LOCKED/FREERUN and the holdover
+// timeout (secs) used when the ptp4l source is lost.
+type PtpClockThreshold struct {
+	MaxOffsetThreshold int64
+	MinOffsetThreshold int64
+	HoldOverTimeout    int64
+}
+
+// HoldoverExpired signals that a BC/OC holdover timer has elapsed. The clock's
+// own timer posts it back onto the event loop so the transition to FREERUN is
+// decided on the loop (and only if the clock is still in HOLDOVER), never from
+// the timer goroutine.
+//
+// Generation identifies which armed timer produced this event. The clock arms a
+// new generation each time it (re)enters holdover, so an expiry queued by a
+// timer that was since canceled or superseded (e.g. a re-lock followed by a
+// fresh holdover) can be ignored instead of cutting the current holdover short.
+type HoldoverExpired struct {
+	Generation uint64
+}
+
+func (*HoldoverExpired) eventData() {}
+
 // ParentTimeCurrentDS carries the upstream parent/time/current datasets fetched
 // via PMC, tagged with the announce token that requested the fetch.
 type ParentTimeCurrentDS struct {

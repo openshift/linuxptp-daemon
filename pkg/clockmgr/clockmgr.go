@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
@@ -15,7 +16,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -100,28 +101,25 @@ func Init(nodeName string, processChannel chan event.Event, offsetMetric *promet
 	}
 }
 
-// AddClock creates a Clock for the given config and registers it.
-// If a clock is already registered for cfgName it is replaced.
+// AddClock takes ownership of a given Clock
 // pmcClient may be nil for clock types that do not use PMC (e.g. BC, OC).
-func (m *ClockManager) AddClock(cfgName string, clockType event.ClockType, pmcClient pmc.Client) (clock.Clock, error) {
-	clk, err := clock.NewClock(cfgName, clockType, m.sendIPC, m.sendEvent, m.GetUtcOffset, pmcClient)
-	if err != nil {
-		return nil, err
-	}
+func (m *ClockManager) AddClock(clk clock.Clock) error {
+	clk.SetIPC(m.sendIPC)
+	clk.SetEventLoopbackFunc(m.sendEvent)
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
-	if prev, exists := m.clocks[cfgName]; exists {
-		glog.Warningf("AddClock: replacing existing %s clock for config %s", prev.ClockType(), cfgName)
+	if prev, exists := m.clocks[clk.ConfigName()]; exists {
+		glog.Warningf("AddClock: replacing existing %s clock for config %s", prev.ClockType(), clk.ConfigName())
 	}
-	m.clocks[cfgName] = clk
+	m.clocks[clk.ConfigName()] = clk
 	// BC/OC events may arrive with ts2phc.{runID}.config as cfgName,
 	// so register under that key too.
-	if clockType == event.BC || clockType == event.TBC || clockType == event.OC || clockType == event.GM {
-		ts2phcName := strings.Replace(cfgName, "ptp4l.", "ts2phc.", 1)
+	if clk.ClockType() == event.BC || clk.ClockType() == event.TBC || clk.ClockType() == event.OC || clk.ClockType() == event.GM {
+		ts2phcName := strings.Replace(clk.ConfigName(), "ptp4l.", "ts2phc.", 1)
 		m.clocks[ts2phcName] = clk
 	}
-	glog.Infof("AddClock: registered %s clock for config %s", clockType, cfgName)
-	return clk, nil
+	glog.Infof("AddClock: registered %s clock for config %s", clk.ClockType(), clk.ConfigName())
+	return nil
 }
 
 // RemoveAllClocks tears down all registered clocks and cleans up associated state.
@@ -254,8 +252,15 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 				m.signalSyncStatus()
 			}
 			if clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
-				m.updateClockStateMetrics(clockState.State, string(ev.ClockType), alias.GetAlias(clockState.LeadingIFace))
+				// BC/OC clock_state is scraped as process="ptp4l" (ptp4l is the
+				// servo), whereas GM/T-BC report under their clock-type label.
+				process := string(ev.ClockType)
+				if clk.ClockType() == event.BC || clk.ClockType() == event.OC {
+					process = string(event.PTP4l)
+				}
+				m.updateClockStateMetrics(clockState.State, process, alias.GetAlias(clockState.LeadingIFace))
 			}
+			m.updateClockClassMetrics(lookupName, clk.ClockClass())
 			m.updateMetrics(ev)
 			m.clockManagementMu.Unlock()
 
@@ -290,7 +295,7 @@ func (m *ClockManager) updateClockStateMetrics(state event.PTPState, process, iF
 		return
 	}
 	labels := prometheus.Labels{
-		"process": process, nodeLabel: m.nodeName, "iface": iFace}
+		processLabel: process, nodeLabel: m.nodeName, "iface": iFace}
 	switch state {
 	case event.PTP_LOCKED:
 		m.clockMetric.With(labels).Set(event.ClockStateLocked)
@@ -299,6 +304,22 @@ func (m *ClockManager) updateClockStateMetrics(state event.PTPState, process, iF
 	default:
 		m.clockMetric.With(labels).Set(event.ClockStateFreerun)
 	}
+}
+
+// updateClockClassMetrics updates the clock class gauge for a config. The class
+// is emitted under the ptp4l config name and process (matching downstream
+// consumers regardless of the source event); an uninitialized (0) class is
+// skipped since it means the clock has not yet determined its class.
+func (m *ClockManager) updateClockClassMetrics(cfgName string, clockClass fbprotocol.ClockClass) {
+	if m.clockClassMetric == nil {
+		return
+	}
+	if clockClass == protocol.ClockClassUninitialized {
+		return
+	}
+	profile := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
+	m.clockClassMetric.With(prometheus.Labels{
+		processLabel: "ptp4l", nodeLabel: m.nodeName, "config": profile}).Set(float64(clockClass))
 }
 
 // updateMetrics extracts numeric values from PTP events and updates Prometheus metrics.
@@ -346,7 +367,7 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 		}
 
 		labels := prometheus.Labels{"from": pName, nodeLabel: m.nodeName,
-			"process": string(ev.Source), "iface": iface}
+			processLabel: string(ev.Source), "iface": iface}
 
 		if entry, found := m.metricCache[key]; found {
 			entry.labels = labels
@@ -367,7 +388,7 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 						Subsystem: event.PTPSubsystem,
 						Name:      metricName,
 						Help:      event.ValueTypeHelpTxt[dataType],
-					}, []string{"from", "node", "process", "iface"})
+					}, []string{"from", "node", processLabel, "iface"})
 				glog.Infof("trying to register metrics %s for %s", metricName, dataType)
 				registerMetrics(gauge)
 				m.registeredGauges[metricName] = gauge

@@ -65,33 +65,6 @@ func TestAddEvent_StoresSpecFlags(t *testing.T) {
 	})
 }
 
-func TestNewClock(t *testing.T) {
-	noopIPC := func(ipc.Message) {}
-	noopEvent := func(event.Event) {}
-	noopUtc := func() int { return 0 }
-
-	t.Run("OC creates a BCClock reporting OC", func(t *testing.T) {
-		clk, err := NewClock(testPTP4lCfg, event.OC, noopIPC, noopEvent, noopUtc, nil)
-		require.NoError(t, err)
-		require.NotNil(t, clk)
-		assert.Equal(t, event.OC, clk.ClockType())
-		assert.IsType(t, &BCClock{}, clk)
-	})
-
-	t.Run("BC creates a BCClock reporting BC", func(t *testing.T) {
-		clk, err := NewClock(testPTP4lCfg, event.BC, noopIPC, noopEvent, noopUtc, nil)
-		require.NoError(t, err)
-		require.NotNil(t, clk)
-		assert.Equal(t, event.BC, clk.ClockType())
-		assert.IsType(t, &BCClock{}, clk)
-	})
-
-	t.Run("unsupported clock type errors", func(t *testing.T) {
-		_, err := NewClock(testPTP4lCfg, event.ClockType("bogus"), noopIPC, noopEvent, noopUtc, nil)
-		assert.Error(t, err)
-	})
-}
-
 func TestWorstOfState(t *testing.T) {
 	tests := []struct {
 		a, b     event.PTPState

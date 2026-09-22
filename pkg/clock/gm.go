@@ -32,6 +32,38 @@ type GM struct {
 	lastLoggedState        event.PTPState
 }
 
+// NewGM creates a new grandmaster clock
+func NewGM(cfgName string, getUTCOffset func() int, pmcClient pmc.Client) (*GM, error) {
+	if pmcClient == nil {
+		return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", event.GM, cfgName)
+	}
+	return &GM{
+		cfgName:   cfgName,
+		pmcClient: pmcClient,
+		syncState: SyncState{
+			State:         event.PTP_NOTSET,
+			ClockClass:    protocol.ClockClassUninitialized,
+			ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
+		},
+		getUtcOffset:           getUTCOffset,
+		overallSyncState:       event.PTP_NOTSET,
+		osClockState:           event.PTP_NOTSET,
+		gnssState:              event.PTP_NOTSET,
+		announcedClockClass:    protocol.ClockClassUninitialized,
+		announcedClockAccuracy: fbprotocol.ClockAccuracyUnknown,
+	}, nil
+}
+
+// SetIPC sets the IPC sender function
+func (c *GM) SetIPC(f func(message ipc.Message)) {
+	c.sendIPC = f
+}
+
+// SetEventLoopbackFunc is a requirement of the Clock interface
+func (c *GM) SetEventLoopbackFunc(_ func(event.Event)) {
+	// noop for GM. No need to send events back to the pipeline
+}
+
 // ClockType returns the clock type for this GM clock.
 func (c *GM) ClockType() event.ClockType { return event.GM }
 

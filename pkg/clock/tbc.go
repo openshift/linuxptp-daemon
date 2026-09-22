@@ -68,7 +68,7 @@ var announceSeq atomic.Uint64
 
 func nextAnnounceToken() uint64 { return announceSeq.Add(1) }
 
-// TBC is a Telco Boundary Clock instance.
+// TBC is a Telecom Boundary Clock instance
 type TBC struct {
 	cfgName          string
 	sendIPC          func(ipc.Message)
@@ -86,6 +86,37 @@ type TBC struct {
 	// request, a Reset, or a replaced clock) is recognized as stale and dropped.
 	// It is only read and written on the serialized state loop.
 	announceToken uint64
+}
+
+// NewTBC creates a new Telecom Boundary clock
+func NewTBC(cfgName string, getUtcOffset func() int, pmcClient pmc.Client) (*TBC, error) {
+	if pmcClient == nil {
+		return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", event.TBC, cfgName)
+	}
+	return &TBC{
+		cfgName:      cfgName,
+		getUtcOffset: getUtcOffset,
+		pmcClient:    pmcClient,
+		syncState: SyncState{
+			State:         event.PTP_NOTSET,
+			ClockClass:    protocol.ClockClassUninitialized,
+			ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
+		},
+		overallSyncState: event.PTP_NOTSET,
+		osClockState:     event.PTP_NOTSET,
+		leadingClockData: newLeadingClockParams(),
+		announceToken:    nextAnnounceToken(),
+	}, nil
+}
+
+// SetIPC sets the IPC sender function
+func (c *TBC) SetIPC(f func(message ipc.Message)) {
+	c.sendIPC = f
+}
+
+// SetEventLoopbackFunc provides a function for the TBC clock to send its own events into the event pipeline
+func (c *TBC) SetEventLoopbackFunc(f func(event.Event)) {
+	c.sendEvent = f
 }
 
 // ClockType returns the clock type for this TBC clock.
