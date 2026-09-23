@@ -1,9 +1,9 @@
-FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.25-openshift-5.1 AS builder
+FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.25-openshift-5.0 AS builder
 WORKDIR /go/src/github.com/k8snetworkplumbingwg/linuxptp-daemon
 COPY . .
 RUN make clean && make
 
-FROM registry.ci.openshift.org/ocp/5.1:base-rhel9
+FROM registry.ci.openshift.org/ocp/5.0:base-rhel9
 
 RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y \
   install \
@@ -15,9 +15,10 @@ RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_i
   iproute \
   procps-ng \
   chrony \
-  gpsd-minimal \
-  gpsd-minimal-clients \
   i2c-tools \
+  # gpsd-minimal and gpsd-minimal-clients were renamed to gpsd and gpsd-clients in RHEL 10
+  # try the old names first, fall back to new names if it fails
+  && (yum -y install gpsd-minimal gpsd-minimal-clients || yum -y install gpsd gpsd-clients) \
   && yum clean all
 
 # Create symlinks for executables to match references
