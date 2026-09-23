@@ -37,6 +37,9 @@ func (defaultClient) SetExternalGMPropertiesNP(cfgName string, egp protocol.Exte
 
 var activeClient Client = defaultClient{}
 
+// ActiveClient returns the current package-level Client.
+func ActiveClient() Client { return activeClient }
+
 // SetMock replaces the package-level client with a test double.
 // Call ResetMock (or defer it) when done.
 func SetMock(c Client) { activeClient = c }

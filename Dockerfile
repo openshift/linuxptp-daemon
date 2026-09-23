@@ -31,6 +31,7 @@ RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_i
   chrony \
   gpsd-minimal \
   gpsd-minimal-clients \
+  i2c-tools \
   && yum clean all
 
 # Create symlinks for executables to match references

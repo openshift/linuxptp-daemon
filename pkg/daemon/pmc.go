@@ -2,12 +2,10 @@ package daemon
 
 import (
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"time"
 
-	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
 	expect "github.com/google/goexpect"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
@@ -20,18 +18,21 @@ import (
 const (
 	// PMCProcessName is the name identifier for PMC processes
 	PMCProcessName = "pmc"
-	pollTimeout    = 5 * time.Minute
+	// defaultMonitorWaitInterval bounds how long the monitor loop will block waiting for a NOTIFY_PARENT_DATA_SET push
+	// before it re-polls the parent data set on its own.
+	defaultMonitorWaitInterval = 30 * time.Second
 )
 
 // NewPMCProcess creates a new PMC process instance for monitoring PTP events.
-func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string) *PMCProcess {
+func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType string, waitInterval time.Duration) *PMCProcess {
 	return &PMCProcess{
 		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
 		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
 		monitorParentData: true,
 		parentDSCh:        make(chan protocol.ParentDataSet, 10),
-		eventHandler:      eventHandler,
+		eventCh:           eventCh,
 		clockType:         clockType,
+		waitInterval:      waitInterval,
 		getMonitorFn:      pmcPkg.GetPMCMontior,
 	}
 }
@@ -49,31 +50,14 @@ type PMCProcess struct {
 	parentDSCh        chan protocol.ParentDataSet
 	exitCh            chan struct{}
 	clockType         string
-	c                 net.Conn // guarded by lock
-	messageTag        string
-	eventHandler      *event.EventHandler
+	// waitInterval bounds how long expectWorker blocks on Expect before it re-polls the parent data set. This
+	// guarantees the clock class metric recovers within one interval even if a NOTIFY_PARENT_DATA_SET push is never
+	// delivered (observed on netdevsim after a link outage recovers).
+	waitInterval time.Duration
+	messageTag   string
+	eventCh      chan<- event.Event
 
 	getMonitorFn func(string) (*expect.GExpect, <-chan error, error)
-}
-
-// getConn returns the current socket connection under lock.
-func (pmc *PMCProcess) getConn() net.Conn {
-	pmc.lock.Lock()
-	defer pmc.lock.Unlock()
-	return pmc.c
-}
-
-// setConn sets the socket connection under lock, closing the previous one if it exists.
-func (pmc *PMCProcess) setConn(c net.Conn) {
-	pmc.lock.Lock()
-	oldConn := pmc.c
-	pmc.c = c
-	pmc.lock.Unlock()
-	if oldConn != nil && oldConn != c {
-		if err := oldConn.Close(); err != nil {
-			glog.Warningf("failed to close old pmc connection: %v", err)
-		}
-	}
 }
 
 // Name returns the process name.
@@ -111,11 +95,8 @@ func (pmc *PMCProcess) CmdInit() {
 }
 
 // ProcessStatus processes status updates for the PMC process.
-func (pmc *PMCProcess) ProcessStatus(c net.Conn, status int64) {
-	if c != nil {
-		pmc.setConn(c)
-	}
-	processStatus(pmc.getConn(), PMCProcessName, pmc.messageTag, status)
+func (pmc *PMCProcess) ProcessStatus(status int64) {
+	processStatus(PMCProcessName, pmc.messageTag, status)
 }
 
 func btof(b bool) string {
@@ -139,13 +120,8 @@ func (pmc *PMCProcess) getMonitorSubcribeCommand() string {
 	)
 }
 
-// EmitClockClassLogs emits clock class change logs via the EventHandler's connection.
-func (pmc *PMCProcess) EmitClockClassLogs() {
-	go pmc.eventHandler.EmitClockClass(pmc.configFileName)
-}
-
 // CmdRun starts the PMC monitoring process.
-func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
+func (pmc *PMCProcess) CmdRun() {
 	isStopped := pmc.getAndSetStopped(false)
 	if isStopped {
 		return
@@ -158,15 +134,7 @@ func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
 				return
 			}
 
-			var c net.Conn
-			if stdToSocket {
-				cAttempt, dialErr := dialSocket()
-				for dialErr != nil {
-					cAttempt, dialErr = dialSocket()
-				}
-				c = cAttempt
-			}
-			monitorErr := pmc.Monitor(c)
+			monitorErr := pmc.Monitor()
 			if monitorErr == nil && pmc.Stopped() {
 				return
 			}
@@ -197,11 +165,7 @@ func (pmc *PMCProcess) Poll() {
 	pmc.parentDSCh <- parentDS
 }
 
-func (pmc *PMCProcess) monitor(conn net.Conn) error {
-	if conn != nil {
-		pmc.setConn(conn)
-	}
-
+func (pmc *PMCProcess) monitor() error {
 	exp, r, err := pmc.getMonitorFn(pmc.configFileName)
 	if err != nil {
 		if exp != nil {
@@ -243,6 +207,11 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 }
 
 func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- protocol.ParentDataSet, signalCh chan<- workerSignal, doneCh <-chan struct{}) {
+	expectTimeout := pmc.waitInterval
+	if expectTimeout <= 0 {
+		expectTimeout = defaultMonitorWaitInterval
+	}
+
 	for {
 		select {
 		case <-pmc.exitCh:
@@ -253,7 +222,7 @@ func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- proto
 		}
 
 		go pmc.Poll() // Check if anything changed while handling the last message
-		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), -1)
+		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), expectTimeout)
 
 		if expectErr != nil {
 			if _, ok := expectErr.(expect.TimeoutError); ok {
@@ -280,30 +249,29 @@ func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- proto
 
 func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 	if pmc.parentDS != nil && pmc.parentDS.Equal(&parentDS) {
-		glog.Infof("ParentDataSet unchanged, skipping processing for %s", pmc.configFileName)
+		glog.V(14).Infof("ParentDataSet unchanged, skipping processing for %s", pmc.configFileName)
 		return
 	}
-
 	glog.Info(parentDS.String())
-	oldParentDS := pmc.parentDS
 	pmc.parentDS = &parentDS
 
-	if pmc.clockType == TBC {
-		pmc.eventHandler.UpdateUpstreamParentDataSet(parentDS)
-	} else if oldParentDS == nil || oldParentDS.GrandmasterClockClass != parentDS.GrandmasterClockClass {
-		pmc.eventHandler.AnnounceClockClass(
-			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
-			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockAccuracy),
-			pmc.configFileName,
-			event.ClockType(pmc.clockType),
-		)
+	select {
+	case pmc.eventCh <- event.Event{
+		Source:    event.PMC,
+		CfgName:   pmc.configFileName,
+		ClockType: event.ClockType(pmc.clockType),
+		Time:      time.Now().UnixMilli(),
+		Data:      &event.ParentDSData{ParentDataSet: parentDS},
+	}:
+	default:
+		glog.Warning("event channel full, dropping ParentDS update")
 	}
 }
 
 // Monitor continuously monitors the PMC process and handles restarts.
-func (pmc *PMCProcess) Monitor(c net.Conn) error {
+func (pmc *PMCProcess) Monitor() error {
 	for {
-		err := pmc.monitor(c)
+		err := pmc.monitor()
 		if err != nil {
 			select {
 			case <-pmc.exitCh:

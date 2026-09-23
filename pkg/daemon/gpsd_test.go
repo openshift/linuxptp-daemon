@@ -20,6 +20,40 @@ const (
 	navClockHeader  = "UBX-NAV-CLOCK:\n"
 )
 
+// TestGPSDIsOffsetInRange covers isOffsetInRange's abs(offset) <
+// GMThreshold.Max comparison, including that a nonzero/negative
+// GMThreshold.Min (deprecated) has no effect on the result.
+func TestGPSDIsOffsetInRange(t *testing.T) {
+	tests := []struct {
+		name      string
+		offset    int64
+		threshold config.Threshold
+		expected  bool
+	}{
+		{name: "in-range positive offset -> true", offset: 50, threshold: config.Threshold{Max: 100}, expected: true},
+		{name: "in-range negative offset -> true", offset: -50, threshold: config.Threshold{Max: 100}, expected: true},
+		{name: "out-of-range positive offset -> false", offset: 150, threshold: config.Threshold{Max: 100}, expected: false},
+		{name: "out-of-range negative offset -> false", offset: -150, threshold: config.Threshold{Max: 100}, expected: false},
+		{name: "exact boundary offset (non-inclusive) -> false", offset: 100, threshold: config.Threshold{Max: 100}, expected: false},
+		{
+			name:      "backward-compat: nonzero Min is ignored, negative offset within Max -> true",
+			offset:    -80,
+			threshold: config.Threshold{Max: 100, Min: -50},
+			expected:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := &GPSD{
+				offset:        tt.offset,
+				processConfig: config.ProcessConfig{GMThreshold: tt.threshold},
+			}
+			assert.Equal(t, tt.expected, g.isOffsetInRange(), tt.name)
+		})
+	}
+}
+
 func TestResetSerialPort(t *testing.T) {
 	t.Parallel()
 

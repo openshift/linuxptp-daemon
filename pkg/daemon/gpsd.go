@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net"
+	"math"
 	"os"
 	"os/exec"
 	"strings"
@@ -57,7 +57,6 @@ type GPSD struct {
 	sourceLost           bool
 	monitorCtx           context.Context
 	monitorCancel        context.CancelFunc
-	c                    net.Conn
 	// cmdRunner executes an external command; defaults to exec.CommandContext and
 	// can be overridden in tests to inject a fake command.
 	cmdRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
@@ -107,7 +106,7 @@ func (g *GPSD) CmdStop() {
 		return
 	}
 	g.setStopped(true)
-	g.ProcessStatus(nil, PtpProcessDown)
+	g.ProcessStatus(PtpProcessDown)
 	if g.cmd.Process != nil {
 		glog.Infof("Sending TERM to PID: %d", g.cmd.Process.Pid)
 		err := g.cmd.Process.Signal(syscall.SIGTERM)
@@ -154,20 +153,16 @@ func (g *GPSD) resetSerialPort(ctx context.Context) error {
 }
 
 // ProcessStatus ...
-func (g *GPSD) ProcessStatus(c net.Conn, status int64) {
-	if c != nil {
-		g.c = c
-	}
-
-	processStatus(g.c, g.name, g.messageTag, status)
+func (g *GPSD) ProcessStatus(status int64) {
+	processStatus(g.name, g.messageTag, status)
 }
 
 // CmdRun ... run GPSD
-func (g *GPSD) CmdRun(stdoutToSocket bool) {
+func (g *GPSD) CmdRun() {
 	go g.MonitorGNSSEventsWithUblox()
 
 	for {
-		g.ProcessStatus(nil, PtpProcessUp)
+		g.ProcessStatus(PtpProcessUp)
 		glog.Infof("Starting %s...", g.Name())
 		glog.Infof("%s cmd: %+v", g.Name(), g.cmd)
 		g.cmd.Stderr = &filteringStderrWriter{}
@@ -332,10 +327,9 @@ func (g *GPSD) processGNSSLines(lines []string) {
 	}
 }
 
-// isOffsetInRange ... check if offset is in range
+// isOffsetInRange returns true when abs(offset) < GMThreshold.Max
+// (non-inclusive boundary). GMThreshold.Min is deprecated and intentionally
+// ignored here.
 func (g *GPSD) isOffsetInRange() bool {
-	if g.offset <= g.processConfig.GMThreshold.Max && g.offset >= g.processConfig.GMThreshold.Min {
-		return true
-	}
-	return false
+	return math.Abs(float64(g.offset)) < float64(g.processConfig.GMThreshold.Max)
 }

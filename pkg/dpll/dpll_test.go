@@ -1,6 +1,7 @@
 package dpll_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -8,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
 	nl "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 
@@ -181,21 +184,22 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
 	assert.True(t, dpll.MockDpllReplies != nil)
 	eChannel := make(chan event.Event, 10)
-	closeChn := make(chan bool)
 	// event has to be running before dpll is started
-	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
+	eventProcessor := clockmgr.Init("node", eChannel, nil, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 	d.CmdInit()
 	eventChannel := make(chan event.Event, 10)
-	go eventProcessor.ProcessEvents()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eventProcessor.ProcessEvents(ctx)
 
 	if d != nil {
 		d.MonitorProcess(config.ProcessConfig{
 			ClockType:       "GM",
 			ConfigName:      "test",
 			EventChannel:    eventChannel,
-			GMThreshold:     config.Threshold{},
+			GMThreshold:     config.Threshold{Max: 100}, // non-zero Max: isOffsetInRange now does abs(offset) < Max (strict)
 			InitialPTPState: event.PTP_FREERUN,
 		})
 	}
@@ -216,28 +220,28 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 		assert.Equal(t, tt.expectedState, d.State(), tt.desc)
 		assert.Equal(t, tt.expectedInSpecState, d.InSpec())
 	}
-	closeChn <- true
 }
 
 func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
 	assert.True(t, dpll.MockDpllReplies != nil)
 	eChannel := make(chan event.Event, 10)
-	closeChn := make(chan bool)
 	// event has to be running before dpll is started
-	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
+	eventProcessor := clockmgr.Init("node", eChannel, nil, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 	d.CmdInit()
 	eventChannel := make(chan event.Event, 10)
-	go eventProcessor.ProcessEvents()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eventProcessor.ProcessEvents(ctx)
 
 	if d != nil {
 		d.MonitorProcess(config.ProcessConfig{
 			ClockType:       "GM",
 			ConfigName:      "test",
 			EventChannel:    eventChannel,
-			GMThreshold:     config.Threshold{},
+			GMThreshold:     config.Threshold{Max: 100}, // non-zero Max: isOffsetInRange now does abs(offset) < Max (strict)
 			InitialPTPState: event.PTP_FREERUN,
 		})
 	}
@@ -256,21 +260,21 @@ func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 		assert.Equal(t, tt.expectedInSpecState, d.InSpec(), tt.desc)
 
 	}
-	closeChn <- true
 }
 
 func TestDpllConfig_MonitorProcessPartial(t *testing.T) {
 	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
 	assert.True(t, dpll.MockDpllReplies != nil)
 	eChannel := make(chan event.Event, 10)
-	closeChn := make(chan bool)
 	// event has to be running before dpll is started
-	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
+	eventProcessor := clockmgr.Init("node", eChannel, nil, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, dpll.FlagOnlyPhaseStatus)
 	d.CmdInit()
 	eventChannel := make(chan event.Event, 10)
-	go eventProcessor.ProcessEvents()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eventProcessor.ProcessEvents(ctx)
 
 	if d != nil {
 		d.MonitorProcess(config.ProcessConfig{
@@ -293,14 +297,13 @@ func TestDpllConfig_MonitorProcessPartial(t *testing.T) {
 		Type:          1, // pps
 	}
 	d.SetSourceLost(false)
-	d.SetPhaseOffset(event.FaultyPhaseOffset) // Ignored due to flag but set anyway
+	d.SetPhaseOffset(clock.FaultyPhaseOffset) // Ignored due to flag but set anyway
 	d.SetDependsOn([]event.EventSource{event.GNSS})
 	dpll.MockDpllReplies <- reply
 	d.MonitorDpllMock()
 
 	assert.Equal(t, int64(2), d.PhaseStatus(), "phase status should be locked")
 	assert.Equal(t, event.PTP_LOCKED, d.State(), "state should be locked based only on phase status")
-	closeChn <- true
 }
 
 func TestSysfs(t *testing.T) {

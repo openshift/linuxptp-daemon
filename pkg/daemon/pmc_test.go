@@ -9,6 +9,7 @@ import (
 
 	expect "github.com/google/goexpect"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/daemon"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 )
@@ -122,10 +123,10 @@ func TestMonitorExitsViaCmdStop(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
-	proc.CmdRun(false)
+	proc.CmdRun()
 
 	waitFor(t, 5*time.Second, "poll called at least once", func() bool {
 		return mock.pollCount.Load() > 0
@@ -142,10 +143,10 @@ func TestMonitorNoOrphanAfterProcessDeath(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
-	proc.CmdRun(false)
+	proc.CmdRun()
 
 	waitFor(t, 5*time.Second, "poll called at least once", func() bool {
 		return mock.pollCount.Load() > 0
@@ -180,10 +181,10 @@ func TestCmdStopIdempotent(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
-	proc.CmdRun(false)
+	proc.CmdRun()
 
 	waitFor(t, 5*time.Second, "poll called at least once", func() bool {
 		return mock.pollCount.Load() > 0
@@ -202,7 +203,7 @@ func TestCmdStopBeforeCmdRun(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
 	proc.CmdStop()
@@ -211,7 +212,7 @@ func TestCmdStopBeforeCmdRun(t *testing.T) {
 		t.Error("expected process to be stopped after CmdStop")
 	}
 
-	proc.CmdRun(false)
+	proc.CmdRun()
 
 	time.Sleep(500 * time.Millisecond)
 

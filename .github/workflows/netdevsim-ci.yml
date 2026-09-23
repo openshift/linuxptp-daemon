@@ -175,6 +175,17 @@ jobs:
           echo "=== Patched Dockerfile.lptpd ==="
           cat /tmp/ptp-operator/ptp-tools/Dockerfile.lptpd
 
+          # ptp-operator main still builds krp with golang:1.25.7 against unpinned
+          # openshift/kube-rbac-proxy HEAD. After the v0.22.1 merge that requires
+          # Go >= 1.26.3, GOTOOLCHAIN=local fails the ptp-images job.
+          KRP=/tmp/ptp-operator/ptp-tools/Dockerfile.krp
+          if grep -q 'golang:1.25.7' "$KRP"; then
+            sed -i 's|golang:1.25.7|golang:1.26.3|' "$KRP"
+            sed -i 's|RUN git clone https://github.com/openshift/kube-rbac-proxy.git /go/src/github.com/brancz/kube-rbac-proxy|RUN git clone https://github.com/openshift/kube-rbac-proxy.git /go/src/github.com/brancz/kube-rbac-proxy; git -C /go/src/github.com/brancz/kube-rbac-proxy checkout 6580efaf6d4f29e6c1d8c7fbe16a8627c7c75049|' "$KRP"
+          fi
+          echo "=== Dockerfile.krp ==="
+          cat "$KRP"
+
       - name: Copy to /root/ptp-operator
         run: sudo cp -a /tmp/ptp-operator /root/ptp-operator
 
@@ -290,6 +301,7 @@ jobs:
           set -x
           export PATH=/usr/local/go/bin:/root/go/bin:$PATH
           export KIND_EXPERIMENTAL_PROVIDER=podman
+          export ENABLE_CEPV2=true
 
           VM_IP=$(hostname -I | awk '{print $1}')
           cd /root/ptp-operator/scripts

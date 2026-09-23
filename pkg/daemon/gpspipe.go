@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,7 +35,6 @@ type gpspipe struct {
 	exitCh     chan struct{}
 	stopped    bool
 	messageTag string
-	c          net.Conn
 }
 
 // Name ... Process name
@@ -82,7 +80,7 @@ func (gp *gpspipe) CmdStop() {
 
 	// Always set the stopped flag first
 	gp.setStopped(true)
-	gp.ProcessStatus(nil, PtpProcessDown)
+	gp.ProcessStatus(PtpProcessDown)
 
 	if gp.cmd == nil {
 		return
@@ -135,15 +133,12 @@ func (gp *gpspipe) CmdInit() {
 	gp.cmdLine = fmt.Sprintf("/usr/local/bin/gpspipe -v -R -l -o %s", gp.SerialPort())
 }
 
-func (gp *gpspipe) ProcessStatus(c net.Conn, status int64) {
-	if c != nil {
-		gp.c = c
-	}
-	processStatus(gp.c, gp.name, gp.messageTag, status)
+func (gp *gpspipe) ProcessStatus(status int64) {
+	processStatus(gp.name, gp.messageTag, status)
 }
 
 // CmdRun ... run gpspipe
-func (gp *gpspipe) CmdRun(stdoutToSocket bool) {
+func (gp *gpspipe) CmdRun() {
 	defer func() {
 		select {
 		case gp.exitCh <- struct{}{}:
@@ -154,7 +149,7 @@ func (gp *gpspipe) CmdRun(stdoutToSocket bool) {
 	for {
 		// Check if we should stop before starting a new process
 		if gp.Stopped() {
-			gp.ProcessStatus(nil, PtpProcessDown)
+			gp.ProcessStatus(PtpProcessDown)
 			glog.Infof("Process %s terminated and will not be restarted. Exiting.", gp.name)
 			break
 		}
@@ -167,7 +162,7 @@ func (gp *gpspipe) CmdRun(stdoutToSocket bool) {
 			// and it panics if it fails
 		}
 
-		gp.ProcessStatus(nil, PtpProcessUp)
+		gp.ProcessStatus(PtpProcessUp)
 		glog.Infof("Starting %s...", gp.Name())
 		glog.Infof("%s cmd: %+v", gp.Name(), gp.cmd)
 		gp.cmd.Stderr = os.Stderr
@@ -189,7 +184,7 @@ func (gp *gpspipe) CmdRun(stdoutToSocket bool) {
 
 		// Check if we should stop after process completes
 		if gp.Stopped() {
-			gp.ProcessStatus(nil, PtpProcessDown)
+			gp.ProcessStatus(PtpProcessDown)
 			glog.Infof("Process %s terminated and will not be restarted. Exiting.", gp.name)
 			break
 		}

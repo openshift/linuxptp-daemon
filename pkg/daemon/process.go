@@ -1,8 +1,6 @@
 package daemon
 
 import (
-	"net"
-
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 )
 
@@ -11,8 +9,8 @@ type process interface {
 	Stopped() bool
 	CmdStop()
 	CmdInit()
-	ProcessStatus(c net.Conn, status int64)
-	CmdRun(stdToSocket bool)
+	ProcessStatus(status int64)
+	CmdRun()
 	MonitorProcess(p config.ProcessConfig)
 	ExitCh() chan struct{}
 }

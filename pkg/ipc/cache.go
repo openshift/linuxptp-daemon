@@ -3,6 +3,8 @@ package ipc
 import (
 	"sync"
 	"time"
+
+	"github.com/golang/glog"
 )
 
 type cacheKey struct {
@@ -45,6 +47,7 @@ func (c *Cache) Send(msg Message) bool {
 		return false
 	}
 	c.store[key] = msg
+	glog.V(14).Infof("Sending IPC message type=%s iface=%s value %v", msg.Type, msg.IFace, msg.Values)
 
 	// In case of a full buffer, drop the message. The state will be recorded within the cache, but not sent
 	// This should only realistically happen if cloud-event-proxy goes down for some reason. In that case, when it comes
@@ -52,6 +55,7 @@ func (c *Cache) Send(msg Message) bool {
 	select {
 	case c.outCh <- msg:
 	default:
+		glog.V(14).Info("channel full, dropping message")
 		// drop message
 	}
 	return true
@@ -68,11 +72,16 @@ func (c *Cache) Snapshot() []Message {
 	return msgs
 }
 
-// Clear removes all cached messages.
+// Clear removes all cached messages and sends a cache_clear message to notify
+// the peer that all prior state is invalidated.
 func (c *Cache) Clear() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.store = make(map[cacheKey]Message)
+	c.mu.Unlock()
+	select {
+	case c.outCh <- Message{Version: Version, Type: TypeCacheClear}:
+	default:
+	}
 }
 
 // Out returns the read-only outbound message channel.

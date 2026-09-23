@@ -271,6 +271,7 @@ func extractRegularPTP4l(parsed *ptp4lParsed) (*Metrics, error) {
 		FreqAdj:    *parsed.FreqAdj,
 		Delay:      delay,
 		ClockState: clockState,
+		ServoState: parsed.ServoState,
 		Source:     constants.Master,
 	}, nil
 }

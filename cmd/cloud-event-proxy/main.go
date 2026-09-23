@@ -25,7 +25,7 @@ var (
 )
 
 func main() {
-	flag.StringVar(&socket, "socket", "/var/run/ptp/events.sock", "Path to daemon IPC Unix socket.")
+	flag.StringVar(&socket, "socket", "/var/run/ptp/ipc.sock", "Path to daemon IPC Unix socket.")
 	flag.IntVar(&port, "api-port", 9043, "The port the REST API endpoint binds to.")
 	flag.StringVar(&storePath, "store-path", "/var/run/ptp", "Directory for persistent subscription storage.")
 	flag.Parse()
@@ -57,6 +57,9 @@ func main() {
 	}
 	proxy := cep.NewCloudEventProxy(cache, ps)
 
+	if err := os.MkdirAll(filepath.Dir(socket), 0755); err != nil {
+		glog.Fatalf("failed to create socket directory: %v", err)
+	}
 	os.Remove(socket)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {

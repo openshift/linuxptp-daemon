@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"math"
 	"strings"
 	"time"
 
@@ -51,6 +52,8 @@ func getParser(processName string) parser.MetricsExtractor {
 		return parser.NewPhc2SysExtractor()
 	case ts2phcProcessName:
 		return parser.NewTS2PHCExtractor()
+	case chronydProcessName:
+		return parser.NewChronydExtractor()
 	default:
 		glog.Errorf("No parser available for process: %s", processName)
 		return nil
@@ -80,6 +83,21 @@ func processWithParser(process *ptpProcess, output string) {
 }
 
 func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
+	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
+	if configName != "" {
+		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
+	}
+
+	// ptp4l logs a follower's offset as "master offset ..." with no interface
+	// token, so the parser reports iface="master". Resolve it to the real
+	// follower interface recorded on the SLAVE port transition (slaveIface) so
+	// the metrics and the event emitted below are labeled with the real name.
+	if ptpMetrics.Iface == master {
+		if follower := slaveIface.get(configName); follower != "" {
+			ptpMetrics.Iface = follower
+		}
+	}
+
 	// Convert interface from possible clock id
 	iface := process.ifaces.GetPhcID2IFace(ptpMetrics.Iface)
 	if iface != clockRealTime {
@@ -89,14 +107,11 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	// Update PTP metrics using the parsed data
 	updatePTPMetrics(ptpMetrics.Source, process.name, iface, ptpMetrics.Offset, ptpMetrics.MaxOffset, ptpMetrics.FreqAdj, ptpMetrics.Delay)
 
-	// Update clock state metrics if available
-	if ptpMetrics.ClockState != "" {
-		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState))
-	}
-
-	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
-	if configName != "" {
-		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
+	// Update clock state metrics if available. BC/OC clock_state is owned by the
+	// BCClock state machine (emitted from clockmgr as process="ptp4l"), so the
+	// log parser must not also emit it here.
+	if ptpMetrics.ClockState != "" && process.clockType != event.BC && process.clockType != event.OC {
+		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState), ptpMetrics.ServoState)
 	}
 
 	// Handle master offset source tracking
@@ -120,7 +135,31 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		if ptpMetrics.Source == "master" && process.dn != nil {
 			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
 		}
+		// sendPtp4lOffsetEvent handles T-BC: windowed offset averaging,
+		// rate-limited to 1/sec, using tBCAttributes. It no-ops for simple
+		// OC/BC (offsetEventWindow is nil), so we send the event directly below.
 		process.sendPtp4lOffsetEvent()
+		// Only forward the offset to the BC/OC state machine once the follower
+		// interface is known. ptp4l logs the follower's offset as "master
+		// offset ..."; until the SLAVE port transition populates slaveIface the
+		// resolution above leaves Iface=="master", which is not a real interface
+		// and must not become the clock's leading interface.
+		if (process.clockType == event.BC || process.clockType == event.OC) && ptpMetrics.Iface != master {
+			select {
+			case process.eventCh <- event.Event{
+				Source:    event.PTP4l,
+				CfgName:   configName,
+				IFace:     ptpMetrics.Iface,
+				ClockType: process.clockType,
+				Time:      time.Now().UnixMilli(),
+				Data: &event.PTPData{
+					State:  state,
+					Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+				},
+			}:
+			default:
+			}
+		}
 	case ts2phcProcessName:
 		if process.dn != nil {
 			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
@@ -149,6 +188,36 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		}:
 		default:
 		}
+	case phc2sysProcessName:
+		select {
+		case process.eventCh <- event.Event{
+			Source:    event.PHC2SYS,
+			CfgName:   configName,
+			IFace:     ptpMetrics.Iface,
+			ClockType: process.clockType,
+			Time:      time.Now().UnixMilli(),
+			Data: &event.PTPData{
+				State:  state,
+				Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+			},
+		}:
+		default:
+		}
+	case chronydProcessName:
+		select {
+		case process.eventCh <- event.Event{
+			Source:    event.CHRONYD,
+			CfgName:   configName,
+			IFace:     ptpMetrics.Iface,
+			ClockType: process.clockType,
+			Time:      time.Now().UnixMilli(),
+			Data: &event.PTPData{
+				State:  state,
+				Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+			},
+		}:
+		default:
+		}
 	}
 }
 
@@ -166,8 +235,6 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 		interfaceName := process.ifaces[ptpEvent.PortID-1].Name
 		role := convertParserRoleToMetricsRole(ptpEvent.Role)
 		UpdateInterfaceRoleMetrics(process.name, interfaceName, role)
-		process.handler.SetPortRole(configName, interfaceName, ptpEvent)
-
 		if configName == "" {
 			return
 		}
@@ -184,7 +251,24 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 				// Set fault metrics and clear slave & master offset interfaces
 				updatePTPMetrics(master, process.name, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
 				updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
-				updateClockStateMetrics(process.name, masterOffsetIface.get(configName).alias, FREERUN)
+				if process.clockType == event.BC || process.clockType == event.OC {
+					// Forward the raw fact (source lost) to the BCClock; it owns the
+					// LOCKED→HOLDOVER decision and the holdover timer. Do not emit
+					// clock_state here — clockmgr emits it from the BCClock verdict.
+					select {
+					case process.eventCh <- event.Event{
+						Source:    event.PTP4l,
+						CfgName:   configName,
+						IFace:     interfaceName,
+						ClockType: process.clockType,
+						Time:      time.Now().UnixMilli(),
+						Data:      &event.PTPData{SourceLost: true},
+					}:
+					default:
+					}
+				} else {
+					updateClockStateMetrics(process.name, masterOffsetIface.get(configName).alias, FREERUN, "")
+				}
 				masterOffsetIface.set(configName, "")
 				slaveIface.set(configName, "")
 			}
@@ -193,7 +277,7 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 }
 
 // shouldFreeRun returns true if we’re not already in HOLDOVER or FREERUN
-// and the current offset breaches either threshold.
+// and the current offset breaches maxOffsetThreshold: abs(offset) >= maxOffsetThreshold.
 func shouldFreeRun(
 	currentState event.PTPState,
 	rawOffset float64,
@@ -203,6 +287,5 @@ func shouldFreeRun(
 		return false
 	}
 
-	ofs := int64(rawOffset)
-	return ofs >= th.MaxOffsetThreshold || ofs <= th.MinOffsetThreshold
+	return math.Abs(rawOffset) >= float64(th.MaxOffsetThreshold)
 }

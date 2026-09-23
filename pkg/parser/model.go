@@ -28,6 +28,7 @@ type Metrics struct {
 	FreqAdj    float64              `json:"freqadj"`
 	Delay      float64              `json:"delay"`
 	ClockState constants.ClockState `json:"clockstate"` // e.g. LOCKED, FREERUN, HOLDOVER
+	ServoState string               `json:"servostate"` // raw ptp4l servo state: "s0","s1","s2","s3"; unset on non-servo lines
 	Source     string               `json:"source"`     // e.g. "phc", "sys", or "master"
 	Status     []StatusMetric       `json:"status"`     // List of status metrics with their subtypes
 }

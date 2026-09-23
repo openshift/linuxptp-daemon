@@ -50,9 +50,10 @@ func GetDpllPins() (*PinCache, error) {
 	return dpllPinsGetter()
 }
 
-// PinCache is a cache of DPLL pins with O1 access, hashed by clock ID and board label
+// PinCache is a cache of DPLL pins with O(1) access by clock ID and label.
 type PinCache struct {
-	Pins map[uint64]map[string]dpll.PinInfo
+	BoardLabelPins   map[uint64]map[string]dpll.PinInfo
+	PackageLabelPins map[uint64]map[string]dpll.PinInfo
 }
 
 // ClockIDResolver resolves clock ID from network interface
@@ -365,11 +366,16 @@ func getPERLAClockIDFromPinCache(cache *PinCache) (uint64, error) {
 
 	if cache != nil {
 		// Look for first pin with moduleName == "zl3073x"
-		for clockID, pins := range cache.Pins {
-			for _, pin := range pins {
-				if pin.ModuleName == "zl3073x" {
-					glog.Infof("PERLA workaround: Found zl3073x DPLL with clock ID %#x", clockID)
-					return clockID, nil
+		for _, pinIndex := range []map[uint64]map[string]dpll.PinInfo{
+			cache.BoardLabelPins,
+			cache.PackageLabelPins,
+		} {
+			for clockID, pins := range pinIndex {
+				for _, pin := range pins {
+					if pin.ModuleName == "zl3073x" {
+						glog.Infof("PERLA workaround: Found zl3073x DPLL with clock ID %#x", clockID)
+						return clockID, nil
+					}
 				}
 			}
 		}
@@ -549,20 +555,25 @@ func parseSerialNumberToClockIDEUI64(serialNumber string) (uint64, error) {
 // Count returns the total number of pins in the cache
 func (pc *PinCache) Count() int {
 	count := 0
-	for _, clockPins := range pc.Pins {
+	for _, clockPins := range pc.BoardLabelPins {
 		count += len(clockPins)
 	}
 	return count
 }
 
-// GetPin returns the pin info for a specific clock ID and board label
-func (pc *PinCache) GetPin(clockID uint64, boardLabel string) (*dpll.PinInfo, bool) {
-	if clockPins, exists := pc.Pins[clockID]; exists {
-		if pinInfo, found := clockPins[boardLabel]; found {
+// GetPin returns the pin info for a specific clock ID and board or package label.
+func (pc *PinCache) GetPin(clockID uint64, label string) (*dpll.PinInfo, bool) {
+	if clockPins, exists := pc.BoardLabelPins[clockID]; exists {
+		if pinInfo, found := clockPins[label]; found {
 			return &pinInfo, true
 		}
 	}
-	glog.Infof("Pin cache miss: clockID=%#x boardLabel=%s", clockID, boardLabel)
+	if packagePins, exists := pc.PackageLabelPins[clockID]; exists {
+		if pinInfo, found := packagePins[label]; found {
+			return &pinInfo, true
+		}
+	}
+	glog.Infof("Pin cache miss: clockID=%#x label=%s", clockID, label)
 	return nil, false
 }
 
@@ -593,20 +604,26 @@ func CreateMockDpllPinsGetter(pins []*dpll.PinInfo, returnError error) DpllPinsG
 
 func buildPinCacheFromPins(pins []*dpll.PinInfo) *PinCache {
 	cache := &PinCache{
-		Pins: make(map[uint64]map[string]dpll.PinInfo),
+		BoardLabelPins:   make(map[uint64]map[string]dpll.PinInfo),
+		PackageLabelPins: make(map[uint64]map[string]dpll.PinInfo),
 	}
 	for _, pin := range pins {
 		if pin == nil {
 			continue
 		}
-		if pin.BoardLabel == "" {
-			continue
+		if pin.BoardLabel != "" {
+			if cache.BoardLabelPins[pin.ClockID] == nil {
+				cache.BoardLabelPins[pin.ClockID] = make(map[string]dpll.PinInfo)
+			}
+			cache.BoardLabelPins[pin.ClockID][pin.BoardLabel] = *pin
+			glog.Infof("Pin cache add: clock=%#x boardLabel=%s id=%d", pin.ClockID, pin.BoardLabel, pin.ID)
 		}
-		if cache.Pins[pin.ClockID] == nil {
-			cache.Pins[pin.ClockID] = make(map[string]dpll.PinInfo)
+		if pin.PackageLabel != "" {
+			if cache.PackageLabelPins[pin.ClockID] == nil {
+				cache.PackageLabelPins[pin.ClockID] = make(map[string]dpll.PinInfo)
+			}
+			cache.PackageLabelPins[pin.ClockID][pin.PackageLabel] = *pin
 		}
-		cache.Pins[pin.ClockID][pin.BoardLabel] = *pin
-		glog.Infof("Pin cache add: clock=%#x boardLabel=%s id=%d", pin.ClockID, pin.BoardLabel, pin.ID)
 	}
 	return cache
 }

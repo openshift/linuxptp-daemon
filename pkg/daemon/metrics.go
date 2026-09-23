@@ -13,6 +13,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -38,6 +39,7 @@ const (
 	clockRealTime      = "CLOCK_REALTIME"
 	master             = "master"
 	pmcSocketName      = "pmc"
+	thresholdMetric    = "threshold"
 
 	faultyOffset = 999999
 
@@ -198,6 +200,18 @@ var (
 			Help: "network_option1: ePRTC: {0, 0x2, 0x21}, PRTC:  {1, 0x2, 0x20}, PRC:   {2, 0x2, 0xFF}, SSUA:  {3, 0x4, 0xFF}, SSUB:  {4, 0x8, 0xFF}, EEC1:  {5, 0xB, 0xFF},QL-DNU: {6,0xF,0xFF}\n " +
 				"   network_option2 ePRTC: {0, 0x1, 0x21}, PRTC:  {1, 0x1, 0x20}, PRS:   {2, 0x1, 0xFF}, STU:   {3, 0x0, 0xFF}, ST2:   {4, 0x7, 0xFF}, TNC:   {5, 0x4, 0xFF}, ST3E:  {6, 0xD, 0xFF}, EEC2:  {7, 0xA, 0xFF}, PROV:  {8, 0xE, 0xFF}, QL-DUS: {9,0xF,0xFF}",
 		}, []string{"process", "node", "profile", "network_option", "iface", "device", "ql_type"})
+
+	// Threshold exposes the configured ptp clock thresholds for each profile
+	// (offset bounds in ns, holdover timeout in seconds). It is a read-back of
+	// the profile's PtpClockThreshold, not a live measurement, so it only
+	// changes when the profile configuration is (re)applied.
+	Threshold = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: PTPNamespace,
+			Subsystem: PTPSubsystem,
+			Name:      thresholdMetric,
+			Help:      "Configured PTP clock thresholds per profile (offset bounds in ns, holdover timeout in secs)",
+		}, []string{thresholdMetric, "node", "profile"})
 )
 
 var registerMetrics sync.Once
@@ -216,6 +230,7 @@ func RegisterMetrics(nodeName string) {
 		prometheus.MustRegister(PTPHAMetrics)
 		prometheus.MustRegister(SynceQLInfo)
 		prometheus.MustRegister(SynceClockQL)
+		prometheus.MustRegister(Threshold)
 
 		// Including these stats kills performance when Prometheus polls with multiple targets
 		prometheus.Unregister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
@@ -224,6 +239,20 @@ func RegisterMetrics(nodeName string) {
 		NodeName = nodeName
 	})
 
+}
+
+// updatePTPThresholdMetrics resolves the profile's clock thresholds (max/min
+// offset in ns, holdover timeout in secs) applying the same defaulting as
+// cloud-event-proxy's UpdatePTPThreshold, then publishes them as the read-back
+// openshift_ptp_threshold gauge.
+func updatePTPThresholdMetrics(nodeProfile *ptpv1.PtpProfile, th event.PtpClockThreshold) {
+	profile := *nodeProfile.Name
+	Threshold.With(prometheus.Labels{
+		thresholdMetric: "MaxOffsetThreshold", "node": NodeName, "profile": profile}).Set(float64(th.MaxOffsetThreshold))
+	Threshold.With(prometheus.Labels{
+		thresholdMetric: "MinOffsetThreshold", "node": NodeName, "profile": profile}).Set(float64(th.MinOffsetThreshold))
+	Threshold.With(prometheus.Labels{
+		thresholdMetric: "HoldOverTimeout", "node": NodeName, "profile": profile}).Set(float64(th.HoldOverTimeout))
 }
 
 // InitializeOffsetMaps ... initialize maps
@@ -260,13 +289,17 @@ func updatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, freq
 		"process": process, "node": NodeName, "iface": iface}).Set(delay)
 }
 
-// extractMetrics ...
-func extractMetrics(messageTag string, processName string, ifaces config.IFaces, output string, updateMetrics bool) (configName, source string, offset float64, state string, iface string) {
-	glog.V(14).Infof("DEBUG extractMetrics: process=%s updateMetrics=%v tag=%s", processName, updateMetrics, messageTag)
-	configName = strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
-	if configName != "" {
-		configName = strings.Split(configName, MessageTagSuffixSeperator)[0] // remove any suffix added to the configName
+func configNameFromMessageTag(messageTag string) string {
+	cfgName := strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
+	if cfgName != "" {
+		cfgName = strings.Split(cfgName, MessageTagSuffixSeperator)[0]
 	}
+	return cfgName
+}
+
+// extractMetrics ...
+func extractMetrics(messageTag string, processName string, ifaces config.IFaces, output string) (configName, source string, offset float64, state string, iface string) {
+	configName = configNameFromMessageTag(messageTag) // remove any suffix added to the configName
 	output = removeMessageSuffix(output)
 	if strings.Contains(output, " max ") {
 		ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay := extractSummaryMetrics(configName, processName, output)
@@ -293,10 +326,8 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 			if offsetSource == master {
 				masterOffsetSource.set(configName, processName)
 			}
-			if updateMetrics {
-				updatePTPMetrics(offsetSource, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
-				updateClockStateMetrics(processName, ifaceName, clockstate)
-			}
+			updatePTPMetrics(offsetSource, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
+			updateClockStateMetrics(processName, ifaceName, clockstate, "")
 		}
 		source = processName
 		offset = ptpOffset
@@ -313,11 +344,9 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 				} else if role == FAULTY {
 					if slaveIface.isFaulty(configName, ifaces[portId-1].Name) &&
 						masterOffsetSource.get(configName) == ptp4lProcessName {
-						if updateMetrics {
-							updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
-							updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
-							updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN)
-						}
+						updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
+						updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
+						updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN, "")
 						masterOffsetIface.set(configName, "")
 						slaveIface.set(configName, "")
 						state = HOLDOVER
@@ -523,11 +552,11 @@ func extractRegularMetrics(configName, processName, output string, ifaces config
 }
 
 // updateClockStateMetrics ...
-func updateClockStateMetrics(process, iface string, state string) {
+func updateClockStateMetrics(process, iface, state, servoState string) {
 	if !utils.CheckMetricSanity("ClockState", process, iface) {
 		return
 	}
-	glog.V(14).Infof("updateClockStateMetrics: process=%s iface=%s state=%s", process, iface, state)
+	glog.V(14).Infof("updateClockStateMetrics: process=%s iface=%s state=%s servo=%s", process, iface, state, servoState)
 	labels := prometheus.Labels{"process": process, "node": NodeName, "iface": iface}
 	switch state {
 	case LOCKED:
@@ -607,12 +636,20 @@ func deleteSyncEMetrics(process, configName string, relations *synce.Relations) 
 }
 
 // DeleteMetrics ... update ptp ha  metrics
-func deleteMetrics(ifaces config.IFaces, haProfiles map[string][]string, process, config string) {
+func deleteMetrics(ifaces config.IFaces, haProfiles map[string][]string, process, config, messageTag string) {
+	cfgNameFromTag := configNameFromMessageTag(messageTag)
+	if cfgNameFromTag != "" {
+		deleteProcessStatusMetrics(cfgNameFromTag, process)
+	}
+	if config != "" && config != cfgNameFromTag {
+		deleteProcessStatusMetrics(config, process)
+	}
+
 	if process == phc2sysProcessName {
 		deleteOsClockStateMetrics(haProfiles)
 		return
 	}
-	deleteProcessStatusMetrics(config, process)
+
 	for _, iface := range ifaces {
 		InterfaceRole.Delete(prometheus.Labels{
 			"process": ptp4lProcessName, "node": NodeName, "iface": iface.Name})
@@ -704,10 +741,9 @@ func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 	return
 }
 
-func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf, stdoutToSocket bool) {
+func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf) {
 	switch process {
 	case "ptp4l":
-		// If output doesn't exist we add it for the prometheus exporter
 		if configOpts != nil {
 			if !strings.Contains(*configOpts, "-m") {
 				glog.Info("adding -m to print messages to stdout for ptp4l to use prometheus exporter")
@@ -722,24 +758,24 @@ func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf, std
 			}
 		}
 	case "phc2sys":
-		// If output doesn't exist we add it for the prometheus exporter
 		if configOpts != nil && *configOpts != "" {
 			if !strings.Contains(*configOpts, "-m") {
 				glog.Info("adding -m to print messages to stdout for phc2sys to use prometheus exporter")
 				*configOpts = fmt.Sprintf("%s -m", *configOpts)
 			}
-			// stdoutToSocket is for sidecar to consume events, -u  will not generate logs with offset and clock state.
-			// disable -u for  events
-			if stdoutToSocket && strings.Contains(*configOpts, "-u") {
-				glog.Error("-u option will not generate clock state events,  remove -u option")
-			} else if !stdoutToSocket && !strings.Contains(*configOpts, "-u") {
-				glog.Info("adding -u 1 to print summary messages to stdout for phc2sys to use prometheus exporter")
-				*configOpts = fmt.Sprintf("%s -u 1", *configOpts)
+			if strings.Contains(*configOpts, "-u") {
+				glog.Error("-u option will not generate clock state events, remove -u option")
 			}
 		}
 	case "ts2phc":
 	}
+}
 
+func removeMessageSuffix(input string) (output string) {
+	replacer := strings.NewReplacer("{", "", "}", "")
+	output = replacer.Replace(input)
+	output = messageTagSuffixRegEx.ReplaceAllString(output, "$1")
+	return output
 }
 
 // StartMetricsServer runs the prometheus listner so that metrics can be collected
@@ -812,6 +848,12 @@ func (s *slaveInterface) set(configName string, value string) {
 	s.Lock()
 	defer s.Unlock()
 	s.name[configName] = value
+}
+
+func (s *slaveInterface) get(configName string) string {
+	s.RLock()
+	defer s.RUnlock()
+	return s.name[configName]
 }
 
 func (s *slaveInterface) isFaulty(configName string, iface string) bool {

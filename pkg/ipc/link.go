@@ -103,6 +103,7 @@ func (l *Link) scan(ctx context.Context, r io.Reader, ch chan<- Message) {
 }
 
 // serve writes data to the socket as required
+// TODO: Edge cases are blurry here, not sure what will happen on failure
 func (l *Link) serve(ctx context.Context, conn net.Conn, statusCh <-chan Message) {
 	for {
 		select {

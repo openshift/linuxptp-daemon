@@ -30,16 +30,16 @@ import (
 func TestReplayDualUpstreamLog(t *testing.T) {
 	InitializeOffsetMaps()
 
-	handler := event.Init("test-node", false, "", nil, nil, nil, nil, nil)
 	process := &ptpProcess{
 		name:       ptp4lProcessName,
+		configName: "ptp4l.1.config",
 		messageTag: "[ptp4l.1.config]",
 		ifaces: config.IFaces{
 			{Name: "eno8303"},
 			{Name: "eno8403"},
 		},
-		handler:   handler,
 		logParser: parser.NewPTP4LExtractor(),
+		eventCh:   make(chan event.Event, 10),
 	}
 
 	// --- Phase 1: Initial boot ---

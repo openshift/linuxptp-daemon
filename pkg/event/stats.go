@@ -16,13 +16,13 @@ type Data struct {
 	ProcessName EventSource // ts2phc  // dpll
 	Details     DDetails    // array of iface and  offset
 	State       PTPState    // have the worst state here
-	logData     string      // iface that is connected to GNSS
-	window      utils.Window
+	LogData     string      // iface that is connected to GNSS
+	Window      utils.Window
 }
 
 // DataMetrics ...
 type DataMetric struct {
-	isRegistered  bool
+	IsRegistered  bool
 	GaugeMetric   *prometheus.GaugeVec
 	CounterMetric *prometheus.Counter
 	Name          string
@@ -33,15 +33,17 @@ type DataMetric struct {
 
 // DataDetails .. details for data
 type DataDetails struct {
-	IFace        string
-	State        PTPState
-	ClockType    ClockType
-	Metrics      map[ValueType]DataMetric
-	time         int64
-	logData      string
-	signalSource EventSource // GNSS PPS
-	sourceLost   bool
-	Offset       int64
+	IFace              string
+	State              PTPState
+	ClockType          ClockType
+	Metrics            map[ValueType]DataMetric
+	Time               int64
+	LogData            string
+	SignalSource       EventSource // GNSS PPS
+	SourceLost         bool
+	Offset             int64
+	OutOfSpec          bool
+	FrequencyTraceable bool
 }
 
 // UpdateState .. update process state
@@ -88,6 +90,7 @@ func (d *Data) AddEvent(event Event) {
 	var sourceLost bool
 	var offset int64
 	var hasOffset bool
+	var outOfSpec, frequencyTraceable bool
 
 	switch data := event.Data.(type) {
 	case *GNSSData:
@@ -102,6 +105,8 @@ func (d *Data) AddEvent(event Event) {
 	case *PTPData:
 		state = data.State
 		sourceLost = data.SourceLost
+		outOfSpec = data.OutOfSpec
+		frequencyTraceable = data.FrequencyTraceable
 		if off, fnd := data.Values[OFFSET]; fnd {
 			offset = off.(int64)
 			hasOffset = true
@@ -110,40 +115,44 @@ func (d *Data) AddEvent(event Event) {
 
 	for _, dd := range d.Details {
 		if dd.IFace == event.IFace {
-			if dd.time <= event.Time {
+			if dd.Time <= event.Time {
 				dd.State = state
-				dd.sourceLost = sourceLost
+				dd.SourceLost = sourceLost
+				dd.OutOfSpec = outOfSpec
+				dd.FrequencyTraceable = frequencyTraceable
 				dd.ClockType = event.ClockType
-				dd.time = event.Time
-				dd.logData = event.GetLogData()
+				dd.Time = event.Time
+				dd.LogData = event.GetLogData()
 				if hasOffset {
 					dd.Offset = offset
-					d.window.Insert(float64(offset))
+					d.Window.Insert(float64(offset))
 				}
 			} else {
-				glog.Infof("discarding stale event for process %s, last event @ %d, current event @ %d", event.Source, dd.time, event.Time)
+				glog.Infof("discarding stale event for process %s, last event @ %d, current event @ %d", event.Source, dd.Time, event.Time)
 			}
 			return
 		}
 	}
 
 	details := &DataDetails{
-		ClockType:  event.ClockType,
-		Metrics:    map[ValueType]DataMetric{},
-		IFace:      event.IFace,
-		time:       event.Time,
-		logData:    event.GetLogData(),
-		State:      state,
-		sourceLost: sourceLost,
+		ClockType:          event.ClockType,
+		Metrics:            map[ValueType]DataMetric{},
+		IFace:              event.IFace,
+		Time:               event.Time,
+		LogData:            event.GetLogData(),
+		State:              state,
+		SourceLost:         sourceLost,
+		OutOfSpec:          outOfSpec,
+		FrequencyTraceable: frequencyTraceable,
 	}
 	if ptp, ok := event.Data.(*PTPData); ok {
 		leading, found := ptp.Values[LeadingSource]
 		if found && leading.(bool) {
 			glog.Info(details.IFace, " is set as the leading source ")
-			details.signalSource = PTP4l
+			details.SignalSource = PTP4l
 		}
 	}
-	d.logData = details.logData
+	d.LogData = details.LogData
 	d.Details = append(d.Details, details)
 }
 
@@ -154,8 +163,8 @@ func (dd DDetails) toString() string {
 		out.WriteString("  Iface name: " + d.IFace)
 		out.WriteString("  state: " + string(d.State))
 		out.WriteString("  clock type: " + string(d.ClockType))
-		out.WriteString(" signal source: " + string(d.signalSource))
-		out.WriteString(" source lost: " + strconv.FormatBool(d.sourceLost))
+		out.WriteString(" signal source: " + string(d.SignalSource))
+		out.WriteString(" source lost: " + strconv.FormatBool(d.SourceLost))
 		out.WriteString("-----\r\n")
 	}
 	return out.String()

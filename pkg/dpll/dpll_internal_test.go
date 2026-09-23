@@ -91,6 +91,44 @@ func TestDpllOffsetChecksWithFlags(t *testing.T) {
 	assert.False(t, d.isOffsetInRange())
 }
 
+// TestDpllIsOffsetInRange covers isOffsetInRange's abs(phaseOffset) <
+// GMThreshold.Max comparison, including that a legitimate negative
+// phaseOffset within tolerance is not misreported as out-of-range and that a
+// nonzero GMThreshold.Min (deprecated) has no effect.
+func TestDpllIsOffsetInRange(t *testing.T) {
+	tests := []struct {
+		name        string
+		phaseOffset int64
+		threshold   config.Threshold
+		expected    bool
+	}{
+		{name: "in-range positive offset -> true", phaseOffset: 50, threshold: config.Threshold{Max: 100}, expected: true},
+		{name: "in-range negative offset -> true", phaseOffset: -50, threshold: config.Threshold{Max: 100}, expected: true},
+		{name: "out-of-range positive offset -> false", phaseOffset: 150, threshold: config.Threshold{Max: 100}, expected: false},
+		{name: "out-of-range negative offset -> false", phaseOffset: -150, threshold: config.Threshold{Max: 100}, expected: false},
+		{name: "exact positive boundary offset (non-inclusive) -> false", phaseOffset: 100, threshold: config.Threshold{Max: 100}, expected: false},
+		{name: "exact negative boundary offset (non-inclusive) -> false", phaseOffset: -100, threshold: config.Threshold{Max: 100}, expected: false},
+		{
+			name:        "backward-compat: nonzero Min is ignored, negative offset within Max -> true",
+			phaseOffset: -80,
+			threshold:   config.Threshold{Max: 100, Min: -50},
+			expected:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &DpllConfig{
+				phaseOffset: tt.phaseOffset,
+				processConfig: config.ProcessConfig{
+					GMThreshold: tt.threshold,
+				},
+			}
+			assert.Equal(t, tt.expected, d.isOffsetInRange(), tt.name)
+		})
+	}
+}
+
 func TestDpllSendEventWithFlags(t *testing.T) {
 	eventChannel := make(chan event.Event, 10)
 	d := &DpllConfig{

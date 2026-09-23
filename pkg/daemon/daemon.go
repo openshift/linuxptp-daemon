@@ -3,11 +3,12 @@ package daemon
 import (
 	"bufio"
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+
 	"math"
-	"net"
+
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,9 +23,12 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -38,9 +42,9 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
-
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 
 	"github.com/golang/glog"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -62,7 +66,7 @@ const (
 	PTP4L_CONF_FILE_PATH            = "/etc/ptp4l.conf"
 	PTP4L_CONF_DIR                  = "/ptp4l-conf"
 	connectionRetryInterval         = 1 * time.Second
-	eventSocket                     = "/cloud-native/events.sock"
+	ipcSocket                       = "/var/run/ptp/ipc.sock"
 	ClockClassChangeIndicator       = "selected best master clock"
 	GPSDDefaultGNSSSerialPort       = "/dev/gnss0"
 	NMEASourceDisabledIndicator     = "nmea source timed out"
@@ -124,51 +128,15 @@ var ptpTmpFiles = []string{
 
 var vTbcHasHardwareConfig = false
 
-const (
-	socketDialTimeout = 5 * time.Second
-	// liveStartCommand is sent on each ptp4l process connection after the live
-	// gate opens. It tells CEP that all subsequent data is live (post-replay).
-	liveStartCommand = "CMD LIVE_START"
-)
-
-func dialSocket() (net.Conn, error) {
-	c, err := net.DialTimeout("unix", eventSocket, socketDialTimeout)
-	if err != nil {
-		glog.Errorf("error trying to connect to event socket")
-		time.Sleep(connectionRetryInterval)
-	}
-	return c, err
-}
-
-// sendSidecarRestart sends the CMD RESTART control command to the cloud-event-proxy sidecar
-// over a short-lived dedicated connection to the event socket. The sidecar will exec itself
-// for a clean restart, then re-read all configuration from disk (ConfigMap + ptp4l config files).
-//
-// The live gate is reset earlier in applyNodePTPProfiles (before processes start)
-// so that socket-writers block until the next /emit-logs (replay) completes.
-func (dn *Daemon) sendSidecarRestart() error {
-	c, err := net.Dial("unix", eventSocket)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-
-	if _, err = fmt.Fprintf(c, "CMD RESTART\n"); err != nil {
-		return err
-	}
-	glog.Infof("sendSidecarRestart: sent CMD RESTART to sidecar via %s", eventSocket)
-	return nil
-}
-
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
 // Processes in ProcessManager will be started
 // or stopped simultaneously.
 type ProcessManager struct {
-	process         []*ptpProcess
-	eventChannel    chan event.Event
-	ptpEventHandler *event.EventHandler
-	daemon          *Daemon
+	process      []*ptpProcess
+	eventChannel chan event.Event
+	clockMgr     *clockmgr.ClockManager
+	daemon       *Daemon
 }
 
 // findProcessesByName returns a list of processes with the given name
@@ -188,7 +156,8 @@ func NewProcessManager() *ProcessManager {
 	processPTP.ptpClockThreshold = &ptpv1.PtpClockThreshold{
 		HoldOverTimeout:    5,
 		MaxOffsetThreshold: 100,
-		MinOffsetThreshold: -100,
+		// MinOffsetThreshold is deprecated; offset evaluation only compares
+		// abs(offset) < MaxOffsetThreshold.
 	}
 	return &ProcessManager{
 		process: []*ptpProcess{processPTP},
@@ -216,12 +185,11 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 		return
 	}
 	eventChannel := make(chan event.Event)
-	closeManager := make(chan bool)
 	p.process[0].name = name
 	p.process[0].messageTag = msgTag
 	p.process[0].ifaces = ifaces
 	p.process[0].logParser = getParser(name)
-	p.process[0].handler = event.Init("test", false, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics)
+	p.process[0].handler = clockmgr.Init("test", eventChannel, Offset, ClockState, ClockClassMetrics, nil)
 	// Reset aliases for each test to avoid cross-case collisions.
 	alias.ClearAliases()
 	// Calculate aliases for the test interfaces to ensure proper aliasing
@@ -259,32 +227,6 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 		return
 	}
 	p.process[0].syncERelations = config
-}
-
-// EmitProcessStatusLogs emits process status logs using the EventHandler's
-// managed connection with reconnection support.
-func (p *ProcessManager) EmitProcessStatusLogs() {
-	for _, proc := range p.process {
-		status := PtpProcessUp
-		if proc.Stopped() {
-			status = PtpProcessDown
-		}
-		p.ptpEventHandler.EmitProcessStatusLog(proc.name, proc.configName, status)
-	}
-}
-
-// EmitClockClassLogs ...
-func (p *ProcessManager) EmitClockClassLogs() {
-	for _, proc := range p.process {
-		if proc.name == ptp4lProcessName {
-			for _, dp := range proc.depProcess {
-				if dp.Name() == PMCProcessName {
-					pmc := dp.(*PMCProcess)
-					pmc.EmitClockClassLogs()
-				}
-			}
-		}
-	}
 }
 
 type tBCProcessAttributes struct {
@@ -341,11 +283,10 @@ type ptpProcess struct {
 	ptpClockThreshold     *ptpv1.PtpClockThreshold
 	haProfile             map[string][]string // stores list of interface name for each profile
 	syncERelations        *synce.Relations
-	c                     net.Conn
 	hasCollectedMetrics   bool
 	tBCAttributes         tBCProcessAttributes
 	GrandmasterClockClass uint8
-	handler               *event.EventHandler
+	handler               *clockmgr.ClockManager
 	dn                    *Daemon
 	cmdSetEnabledMutex    sync.Mutex
 	tbcStateDetector      *hardwareconfig.PTPStateDetector // Cached PTP state detector instance
@@ -374,64 +315,12 @@ func (p *ptpProcess) setStopped(val bool) {
 	p.execMutex.Unlock()
 }
 
-type liveGate struct {
-	lock sync.RWMutex
-	c    chan struct{}
-	once func()
-}
-
-// Reset creates a new blocking gate. All ptp4l process connections
-// will block on this gate until openLiveGate is called (by the /emit-logs handler).
-func (l *liveGate) Reset() {
-	if !l.lock.TryLock() {
-		return
-	}
-	defer l.lock.Unlock()
-	l.c = make(chan struct{})
-	l.once = sync.OnceFunc(func() {
-		close(l.c)
-	})
-	glog.V(14).Info("liveGate: reset (blocked)")
-}
-
-// Open unblocks all ptp4l process connections waiting on the gate.
-// Safe to call multiple times (uses sync.Once).
-func (l *liveGate) Open() {
-	l.lock.RLock()
-	defer l.lock.RUnlock()
-	if l.once != nil {
-		l.once()
-	}
-}
-
-// liveGateTimeout is the safety timeout for waitForLiveGate. If the gate
-// is not opened within this duration, live data proceeds without the replay
-// guarantee. Exposed as a var so tests can shorten it.
-var liveGateTimeout = 60 * time.Second
-
-// Wait blocks until the gate opens or a safety timeout expires.
-func (l *liveGate) Wait(timeout time.Duration) {
-	l.lock.RLock()
-	defer l.lock.RUnlock()
-	if l.c == nil {
-		return
-	}
-	select {
-	case <-l.c:
-		glog.V(14).Info("waitForLiveGate: gate opened, proceeding")
-	case <-time.After(timeout):
-		glog.Warning("liveGate: timeout after 60s, proceeding without replay guarantee")
-	}
-}
-
 // Daemon is the main structure for linuxptp instance.
 // It contains all the necessary data to run linuxptp instance.
 type Daemon struct {
 	// node name where daemon is running
 	nodeName  string
 	namespace string
-	// write logs to socket, this will also send metrics to the socket
-	stdoutToSocket bool
 
 	// kubeClient allows interaction with Kubernetes, including the node we are running on.
 	kubeClient *kubernetes.Clientset
@@ -461,10 +350,9 @@ type Daemon struct {
 	ptpClient      *ptpclient.Clientset
 	unknownPlugins []string
 
-	// liveGate blocks ptp4l process connections from writing to the event
-	// socket until the replay (/emit-logs) completes. This ensures CEP
-	// processes replay state before any live data arrives.
-	liveGate *liveGate
+	// syncStatusMu serializes NodePtpDevice status.sync writes so only one
+	// update runs at a time and apply can wait for it before teardown.
+	syncStatusMu sync.Mutex
 
 	delayedPhc2sys        atomic.Bool
 	delayedTs2phc         atomic.Bool
@@ -550,14 +438,13 @@ func (dn *Daemon) getInterfacesFromHardwareConfig(nodeProfile *ptpv1.PtpProfile)
 			// Get PHC ID for the interface
 			phcID := ptpnetwork.GetPhcId(networkInterface)
 
-			// Register in the alias store so convergeConfig can match this
-			// interface against ptp4l interfaces that share the same PHC (e.g.
+			// Register in the alias store for PHC matching (e.g.
 			// eno1 vs eth3 on an 8-port NIC where naming prefixes differ).
 			if phcID != "" {
 				alias.AddInterface(phcID, networkInterface)
 				glog.Infof("getInterfacesFromHardwareConfig: registered iface %s phc %s in alias store", networkInterface, phcID)
 			} else {
-				glog.Warningf("getInterfacesFromHardwareConfig: could not get PHC ID for iface %s, convergeConfig PHC fallback will not work", networkInterface)
+				glog.Warningf("getInterfacesFromHardwareConfig: could not get PHC ID for iface %s", networkInterface)
 			}
 
 			// Subsystems that have PhaseInputs configured are driven by ptp4l (they
@@ -588,7 +475,6 @@ func (dn *Daemon) getInterfacesFromHardwareConfig(nodeProfile *ptpv1.PtpProfile)
 func New(
 	nodeName string,
 	namespace string,
-	stdoutToSocket bool,
 	kubeClient *kubernetes.Clientset,
 	ptpClient *ptpclient.Clientset,
 	ptpUpdate *LinuxPTPConfUpdate,
@@ -600,18 +486,18 @@ func New(
 	pmcPollInterval int,
 	tracker *ReadyTracker,
 ) *Daemon {
-	if !stdoutToSocket {
-		RegisterMetrics(nodeName)
-	}
+	RegisterMetrics(nodeName)
 	InitializeOffsetMaps()
 	pluginManager, unknownPlugins := registerPlugins(plugins)
 	eventChannel := make(chan event.Event, 100)
+	cache := ipc.NewCache(100)
 	pm := &ProcessManager{
-		process:         nil,
-		eventChannel:    eventChannel,
-		ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics),
+		process:      nil,
+		eventChannel: eventChannel,
+		clockMgr:     clockmgr.Init(nodeName, eventChannel, Offset, ClockState, ClockClassMetrics, cache),
 	}
 	tracker.processManager = pm
+	go ipc.NewLink(ipcSocket, cache).Run(context.TODO())
 
 	// Initialize fsnotify watcher for sa_file change detection
 	saFileWatch, err := fsnotify.NewWatcher()
@@ -635,7 +521,6 @@ func New(
 	dn := &Daemon{
 		nodeName:             nodeName,
 		namespace:            namespace,
-		stdoutToSocket:       stdoutToSocket,
 		kubeClient:           kubeClient,
 		ptpClient:            ptpClient,
 		ptpUpdate:            ptpUpdate,
@@ -649,7 +534,6 @@ func New(
 		readyTracker:         tracker,
 		stopCh:               stopCh,
 		saFileWatcher:        saFileWatch,
-		liveGate:             &liveGate{},
 	}
 	dn.hardwareConfigManager = hardwareconfig.NewHardwareConfigManager(kubeClient, namespace, dn.interfaceResolver)
 	pm.daemon = dn
@@ -661,9 +545,27 @@ func New(
 // 1. PtpConfig changes (via ConfigMap) - triggers UpdateCh
 // 2. Authentication file changes (via Secret) - triggers fsnotify events (instant detection)
 // Both trigger applyNodePTPProfiles() which restarts PTP processes WITHOUT restarting the pod
-func (dn *Daemon) Run() {
+func (dn *Daemon) Run(ctx context.Context) {
 	glog.Info("Daemon Run() started, waiting for configuration updates...")
-	go dn.processManager.ptpEventHandler.ProcessEvents()
+	go dn.processManager.clockMgr.ProcessEvents(ctx)
+
+	// Watch for clock-state transitions and write NodePtpDevice.status.sync.
+	// Status is otherwise updated after applyNodePTPProfiles. The goroutine
+	// exits when dn.stopCh is closed.
+	go func() {
+		syncStatusCh := dn.processManager.clockMgr.SyncStatusUpdateCh()
+		for {
+			select {
+			case _, ok := <-syncStatusCh:
+				if !ok {
+					return
+				}
+				dn.runSyncStatusUpdate()
+			case <-dn.stopCh:
+				return
+			}
+		}
+	}()
 
 	// Setup fsnotify channels (may be nil if watcher initialization failed)
 	var saFilesWatcherEventCh chan fsnotify.Event
@@ -788,12 +690,16 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 
 	// Suppress T-BC FSM updates during teardown/restart so in-flight DPLL
 	// events after ts2phc Reset cannot emit LOCKED→HOLDOVER / T-BC-STATUS s1.
-	if dn.processManager != nil && dn.processManager.ptpEventHandler != nil {
-		dn.processManager.ptpEventHandler.SetApplying(true)
-		defer dn.processManager.ptpEventHandler.SetApplying(false)
+	// Also skip NodePtpDevice status writes until apply finishes.
+	if dn.processManager != nil && dn.processManager.clockMgr != nil {
+		defer dn.processManager.clockMgr.SetApplying(false)
+		dn.syncStatusMu.Lock()
+		dn.processManager.clockMgr.SetApplying(true)
+		dn.syncStatusMu.Unlock()
 	}
 
 	dn.stopAllProcesses()
+	dn.processManager.clockMgr.RemoveAllClocks()
 	// All process should have been stopped,
 	// clear process in process manager.
 	// Assigning processManager.process to nil releases
@@ -807,6 +713,10 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// by RenderPtp4lConf (and getInterfacesFromHardwareConfig) below before
 	// any event processing restarts.
 	alias.ClearAliases()
+
+	// Drop stale openshift_ptp_threshold series; each profile re-sets its own
+	// in applyNodePtpProfile below, so removed profiles do not linger.
+	Threshold.Reset()
 
 	// All configs will be rebuild, and sockets recreated, so they can all be deleted
 	_ = dn.cleanupTempFiles()
@@ -895,9 +805,6 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	}
 
 	glog.Infof("All profiles applied, starting %d processes", len(dn.processManager.process))
-	// Reset the live gate BEFORE starting processes so that socket-writers
-	// block until /emit-logs completes replay after the sidecar restart.
-	dn.liveGate.Reset()
 	// Start all the process
 	for _, p := range dn.processManager.process {
 		if p != nil {
@@ -906,7 +813,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 				if d != nil {
 					time.Sleep(3 * time.Second)
 					glog.Infof("Starting %s", d.Name())
-					go d.CmdRun(false)
+					go d.CmdRun()
 					time.Sleep(3 * time.Second)
 					dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
 					d.MonitorProcess(config.ProcessConfig{
@@ -914,8 +821,11 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 						ConfigName:   p.configName,
 						EventChannel: dn.processManager.eventChannel,
 						GMThreshold: config.Threshold{
+							// Min is not populated: it is deprecated and no
+							// longer consumed by dependent-process offset
+							// evaluation (dpll/gpsd isOffsetInRange), which
+							// now compare abs(offset) < Max.
 							Max:             p.ptpClockThreshold.MaxOffsetThreshold,
-							Min:             p.ptpClockThreshold.MinOffsetThreshold,
 							HoldOverTimeout: p.ptpClockThreshold.HoldOverTimeout,
 						},
 						InitialPTPState: event.PTP_FREERUN,
@@ -927,14 +837,14 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 					if syncer, ok := d.(initialStateSyncer); ok {
 						syncer.SyncInitialState()
 					}
-					glog.Infof("enabling dep process %s with Max %d Min %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
+					glog.Infof("enabling dep process %s with Max %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
 				}
 			}
 			if p.skipInitialStartup != "" {
 				glog.Infof("Delaying %s startup: %s", p.name, p.skipInitialStartup)
 				continue
 			}
-			go p.cmdRun(dn.stdoutToSocket, &dn.pluginManager)
+			go p.cmdRun(&dn.pluginManager)
 			dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.name)
 		}
 	}
@@ -957,7 +867,8 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.hwconfigsMu.Unlock()
 	*dn.refreshNodePtpDevice = true
 	dn.readyTracker.setConfig(true)
-	return dn.sendSidecarRestart()
+	dn.doSyncStatusUpdate(true)
+	return nil
 }
 
 func reconcileRelatedProfiles(profiles []ptpv1.PtpProfile) map[string]int {
@@ -1043,6 +954,12 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	}
 
 	dn.reportPluginStatus(*nodeProfile.Name, pluginErrors)
+
+	// Publish the profile's configured clock thresholds as the read-back
+	// openshift_ptp_threshold gauge (config value, not a live measurement).
+	th := resolvePTPThreshold(nodeProfile)
+	updatePTPThresholdMetrics(nodeProfile, th)
+
 	var err error
 	var cmdLine string
 	var configPath string
@@ -1065,7 +982,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		case TGM:
 			clockType = event.GM
 		case TBC:
-			clockType = event.BC
+			clockType = event.TBC
 			leadingNic = (*nodeProfile).PtpSettings["leadingInterface"]
 			if portsStr, ok := (*nodeProfile).PtpSettings["upstreamPort"]; ok {
 				upstreamPorts = strings.Split(portsStr, ",")
@@ -1089,6 +1006,34 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			return err
 		}
 		clockType = ptp4lOutput.clock_type
+	}
+
+	clockCfgName := fmt.Sprintf("ptp4l.%d.config", runID)
+	var c clock.Clock
+	switch clockType {
+	case event.GM:
+		if c, err = clock.NewGM(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
+			return err
+		}
+	case event.TBC:
+		if c, err = clock.NewTBC(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
+			return err
+		}
+	case event.BC:
+		if c, err = clock.NewBC(clockCfgName, false, th); err != nil {
+			return err
+		}
+	case event.OC:
+		if c, err = clock.NewBC(clockCfgName, true, th); err != nil {
+			return err
+		}
+
+	default:
+		return fmt.Errorf("unsupported clock type %q for config %s", clockType, clockCfgName)
+	}
+
+	if err = dn.processManager.clockMgr.AddClock(c); err != nil {
+		return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
 	}
 
 	for _, pProcess := range ptpProcesses {
@@ -1200,7 +1145,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		// output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
 		// This adds the flags needed for monitor
-		addFlagsForMonitor(pProcess, configOpts, output, dn.stdoutToSocket)
+		addFlagsForMonitor(pProcess, configOpts, output)
 		var configOutput string
 		var relations *synce.Relations
 		var ifaces config.IFaces
@@ -1249,12 +1194,12 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				ttPortsConfigFile: controlledConfigFile, trPortsConfigFile: configFile,
 				lastReportedState: event.PTP_NOTSET, lastAppliedState: event.PTP_NOTSET, offsetFilter: nil,
 			},
-			handler: dn.processManager.ptpEventHandler,
+			handler: dn.processManager.clockMgr,
 			dn:      dn,
 		}
 
 		if pProcess == ptp4lProcessName {
-			if len(upstreamPorts) > 0 && clockType == event.BC {
+			if len(upstreamPorts) > 0 && clockType == event.TBC {
 				dprocess.tBCAttributes.trIfaceNames = upstreamPorts
 				dprocess.tBCAttributes.perPortState = make(map[string]event.PTPState, len(upstreamPorts))
 				for _, p := range upstreamPorts {
@@ -1295,7 +1240,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				if !clockTypeFound {
 					pmcClockType = string(clockType)
 				}
-				pmcProcess := NewPMCProcess(runID, dn.processManager.ptpEventHandler, pmcClockType)
+				pmcProcess := NewPMCProcess(runID, dn.processManager.eventChannel, pmcClockType, time.Duration(dn.pmcPollInterval)*time.Second)
 				pmcProcess.CmdInit()
 				// TODO addScheduling
 				dprocess.depProcess = append(dprocess.depProcess, pmcProcess)
@@ -1587,32 +1532,10 @@ func addScheduling(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
 	return cmdLine
 }
 
-func processStatus(c net.Conn, processName, messageTag string, status int64) {
-	cfgName := strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
-	if cfgName != "" {
-		cfgName = strings.Split(cfgName, MessageTagSuffixSeperator)[0]
-	}
-	// ptp4l[5196819.100]: [ptp4l.0.config] PTP_PROCESS_STOPPED:0/1
-
-	if c == nil {
-		glog.V(14).Infof("processStatus: process=%s config=%s status=%d via=prometheus", processName, cfgName, status)
-		UpdateProcessStatusMetrics(processName, cfgName, status)
-		return
-	}
-	glog.V(14).Infof("processStatus: process=%s config=%s status=%d via=socket", processName, cfgName, status)
-	logProcessStatus(processName, cfgName, status, c)
-}
-
-func logProcessStatus(processName string, cfgName string, status int64, c net.Conn) {
-	if c == nil {
-		return
-	}
-	message := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d", processName, time.Now().Unix(), cfgName, status)
-	glog.Info(message)
-	_, err := c.Write([]byte(message + "\n"))
-	if err != nil {
-		glog.Errorf("Write error sending ptp4l/phc2sys process healths status%s:", err)
-	}
+func processStatus(processName, messageTag string, status int64) {
+	cfgName := configNameFromMessageTag(messageTag)
+	glog.V(14).Infof("processStatus: process=%s config=%s status=%d", processName, cfgName, status)
+	UpdateProcessStatusMetrics(processName, cfgName, status)
 }
 
 // prepareTBCResources prepares cached resources for T-BC processing
@@ -1669,7 +1592,7 @@ func (p *ptpProcess) checkOffsetFilterAndTransition(transitionAction func()) {
 
 // sendPtp4lOffsetEvent inserts the current ptp4l offset into a sliding window and,
 // once per second, sends the window average to the T-BC state machine via the event
-// channel. This gives event_tbc.go visibility into ptp4l-level offsets for
+// channel. This gives tbc.go visibility into ptp4l-level offsets for
 // freeRunCondition and getLargestOffset calculations.
 func (p *ptpProcess) sendPtp4lOffsetEvent() {
 	if p.configName != p.tBCAttributes.trPortsConfigFile || p.tBCAttributes.offsetEventWindow == nil {
@@ -1815,97 +1738,12 @@ func (p *ptpProcess) processOutput(output string, pm *plugin.PluginManager, prof
 			p.tBCTransitionCheck(output, pm)
 		}
 	} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-		p.announceHAFailOver(nil, output)
+		p.announceHAFailOver(output)
 	}
 	return output
 }
 
-// runScanner reads process stdout without delay so the pipe never backs
-// up, processes each line, and pushes the result to lineCh for the
-// socket-writer. It closes lineCh when the scanner finishes.
-func (p *ptpProcess) runScanner(cmdReader io.Reader, lineCh chan<- string, pm *plugin.PluginManager, profileClockType string) {
-	scanner := bufio.NewScanner(cmdReader)
-	for scanner.Scan() {
-		output := p.processOutput(scanner.Text(), pm, profileClockType)
-		select {
-		case lineCh <- output:
-		default:
-			glog.Warning("liveGate: lineCh full, dropping line for socket forwarding")
-		}
-	}
-	close(lineCh)
-}
-
-// runSocketWriter connects to the event socket, waits for the live gate
-// (replay) to complete, drains stale lines, then forwards live lines to
-// CEP. On write failure it reconnects automatically.
-func (p *ptpProcess) runSocketWriter(lineCh <-chan string, doneCh chan<- struct{}) {
-	var err error
-connect:
-	glog.V(14).Infof("socket-writer[%s]: attempting dial to event socket", p.name)
-	select {
-	case <-p.exitCh:
-		glog.V(14).Infof("socket-writer[%s]: exitCh during dial, returning", p.name)
-		doneCh <- struct{}{}
-		return
-	default:
-		p.c, err = dialSocket()
-		if err != nil {
-			glog.V(14).Infof("socket-writer[%s]: dial failed: %v, retrying", p.name, err)
-			goto connect
-		}
-	}
-	glog.V(14).Infof("socket-writer[%s]: dial succeeded, waiting for liveGate", p.name)
-	p.dn.liveGate.Wait(liveGateTimeout)
-	glog.V(14).Infof("socket-writer[%s]: liveGate passed, sending LIVE_START", p.name)
-	if _, err2 := fmt.Fprintf(p.c, "%s\n", liveStartCommand); err2 != nil {
-		glog.Errorf("failed to write LIVE_START marker: %v", err2)
-		goto connect
-	}
-	glog.V(14).Infof("socket-writer[%s]: LIVE_START sent, draining stale buffer", p.name)
-	{
-		drained := 0
-	drainLoop:
-		for {
-			select {
-			case _, ok := <-lineCh:
-				if !ok {
-					glog.V(14).Infof("socket-writer[%s]: lineCh closed during drain", p.name)
-					doneCh <- struct{}{}
-					return
-				}
-				drained++
-			default:
-				break drainLoop
-			}
-		}
-		glog.V(14).Infof("socket-writer[%s]: drained %d stale lines, sending processStatus UP", p.name, drained)
-	}
-
-	processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
-	for _, d := range p.depProcess {
-		if d != nil {
-			d.ProcessStatus(p.c, PtpProcessUp)
-		}
-	}
-	glog.V(14).Infof("socket-writer[%s]: starting line forwarding loop", p.name)
-
-	for output := range lineCh {
-		if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-			p.announceHAFailOver(p.c, output)
-		}
-		line := removeMessageSuffix(output) + "\n"
-		_, err2 := p.c.Write([]byte(line))
-		if err2 != nil {
-			glog.Errorf("socket-writer[%s]: write error: %v, reconnecting. line=%s", p.name, err2, output)
-			goto connect
-		}
-	}
-	glog.V(14).Infof("socket-writer[%s]: lineCh closed, forwarding done", p.name)
-	doneCh <- struct{}{}
-}
-
-func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
+func (p *ptpProcess) cmdRun(pm *plugin.PluginManager) {
 	cmd := p.cmd
 	stopped := p.getAndSetStopped(false)
 	if !stopped {
@@ -1914,11 +1752,6 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 	}
 	doneCh := make(chan struct{})
 	defer func() {
-		if stdoutToSocket && p.c != nil {
-			if err := p.c.Close(); err != nil {
-				glog.Errorf("closing connection returned error %s", err)
-			}
-		}
 		p.exitCh <- true
 	}()
 
@@ -1938,20 +1771,14 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 
 		cmd.Stderr = cmd.Stdout
 
-		if !stdoutToSocket {
-			scanner := bufio.NewScanner(cmdReader)
-			processStatus(nil, p.name, p.messageTag, PtpProcessUp)
-			go func() {
-				for scanner.Scan() {
-					p.processOutput(scanner.Text(), pm, profileClockType)
-				}
-				doneCh <- struct{}{}
-			}()
-		} else {
-			lineCh := make(chan string, 256)
-			go p.runScanner(cmdReader, lineCh, pm, profileClockType)
-			go p.runSocketWriter(lineCh, doneCh)
-		}
+		scanner := bufio.NewScanner(cmdReader)
+		processStatus(p.name, p.messageTag, PtpProcessUp)
+		go func() {
+			for scanner.Scan() {
+				p.processOutput(scanner.Text(), pm, profileClockType)
+			}
+			doneCh <- struct{}{}
+		}()
 
 		if !p.Stopped() {
 			glog.Infof("starting %s...", p.name)
@@ -1968,13 +1795,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			if err != nil {
 				glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
 			}
-			if stdoutToSocket && p.c != nil {
-				glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via socket", p.name)
-				processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
-			} else {
-				glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via prometheus", p.name)
-				processStatus(nil, p.name, p.messageTag, PtpProcessDown)
-			}
+			processStatus(p.name, p.messageTag, PtpProcessDown)
 			p.updateGMStatusOnProcessDown(p.name)
 		}
 
@@ -1989,12 +1810,6 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			glog.Infof("Recreating %s...", p.name)
 			newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
 			cmd = newCmd
-		}
-		if stdoutToSocket && p.c != nil {
-			glog.V(14).Infof("cmdRun[%s]: closing old socket connection before restart", p.name)
-			if err2 := p.c.Close(); err2 != nil {
-				glog.Errorf("closing connection returned error %s", err2)
-			}
 		}
 	}
 }
@@ -2012,7 +1827,7 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 		logEntry := synce.ParseLog(output)
 		p.ProcessSynceEvents(logEntry)
 	} else {
-		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output, p.c == nil)
+		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
 		p.hasCollectedMetrics = true
 		p.offset = ptpOffset
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
@@ -2090,7 +1905,7 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 				cmd := p.cmd
 				newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
 				p.cmd = newCmd
-				go p.cmdRun(p.dn.stdoutToSocket, &p.dn.pluginManager)
+				go p.cmdRun(&p.dn.pluginManager)
 			}
 		} else {
 			// Never block the caller on exitCh. ProcessLog (and thus ntpfailover)
@@ -2103,25 +1918,54 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 	}
 }
 
+// getPTPThreshold resolves the effective PtpClockThreshold for a profile.
+// MinOffsetThreshold is deprecated and is never populated on the returned
+// value (regardless of what the profile explicitly configures): nothing in
+// np-linuxptp-daemon reads it anymore, since offset evaluation only compares
+// abs(offset) < MaxOffsetThreshold.
 func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
 	if nodeProfile.PtpClockThreshold != nil {
 		return &ptpv1.PtpClockThreshold{
 			HoldOverTimeout:    nodeProfile.PtpClockThreshold.HoldOverTimeout,
 			MaxOffsetThreshold: nodeProfile.PtpClockThreshold.MaxOffsetThreshold,
-			MinOffsetThreshold: nodeProfile.PtpClockThreshold.MinOffsetThreshold,
 		}
-	}
-	if isNtpFailoverEnabled(nodeProfile) {
+	} else if isNtpFailoverEnabled(nodeProfile) {
 		return &ptpv1.PtpClockThreshold{
 			HoldOverTimeout:    5,
 			MaxOffsetThreshold: 1000,
-			MinOffsetThreshold: -1000,
 		}
 	}
 	return &ptpv1.PtpClockThreshold{
 		HoldOverTimeout:    5,
 		MaxOffsetThreshold: 100,
-		MinOffsetThreshold: -100,
+	}
+}
+
+// resolvePTPThreshold resolves a profile's clock thresholds (max/min offset in
+// ns, holdover timeout in secs), applying the same defaulting as
+// cloud-event-proxy's UpdatePTPThreshold. It is the single source of truth for
+// both the openshift_ptp_threshold gauge and the BC/OC clock state machine.
+func resolvePTPThreshold(nodeProfile *ptpv1.PtpProfile) event.PtpClockThreshold {
+	maxOffset, minOffset, holdoverTimeout := int64(100), int64(-100), int64(5)
+	if th := nodeProfile.PtpClockThreshold; th != nil {
+		if th.MaxOffsetThreshold > 0 {
+			maxOffset = th.MaxOffsetThreshold
+		}
+		if th.MinOffsetThreshold > maxOffset {
+			minOffset = maxOffset - 1 // keep min one ns below max
+		} else {
+			minOffset = th.MinOffsetThreshold
+		}
+		if th.HoldOverTimeout > 0 {
+			holdoverTimeout = th.HoldOverTimeout
+		}
+	} else if isNtpFailoverEnabled(nodeProfile) {
+		maxOffset, minOffset = 1000, -1000
+	}
+	return event.PtpClockThreshold{
+		MaxOffsetThreshold: maxOffset,
+		MinOffsetThreshold: minOffset,
+		HoldOverTimeout:    holdoverTimeout,
 	}
 }
 
@@ -2301,16 +2145,13 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 		if iface != "" && iface != clockRealTime {
 			iface = alias.GetAlias(iface)
 		}
-		if p.c != nil {
-			return // no metrics when socket is used
-		}
 		switch ptpState {
 		case event.PTP_LOCKED:
-			updateClockStateMetrics(p.name, iface, LOCKED)
+			updateClockStateMetrics(p.name, iface, LOCKED, "")
 		case event.PTP_FREERUN:
-			updateClockStateMetrics(p.name, iface, FREERUN)
+			updateClockStateMetrics(p.name, iface, FREERUN, "")
 		case event.PTP_HOLDOVER:
-			updateClockStateMetrics(p.name, iface, HOLDOVER)
+			updateClockStateMetrics(p.name, iface, HOLDOVER, "")
 		}
 	}
 }
@@ -2349,7 +2190,7 @@ func listHaProfiles(nodeProfile *ptpv1.PtpProfile) (haProfiles []string) {
 	return
 }
 
-func (p *ptpProcess) announceHAFailOver(c net.Conn, output string) {
+func (p *ptpProcess) announceHAFailOver(output string) {
 	defer func() {
 		if r := recover(); r != nil {
 			glog.Errorf("Recovered in f %#v", r)
@@ -2395,19 +2236,10 @@ func (p *ptpProcess) announceHAFailOver(c net.Conn, output string) {
 	for _, inActive := range inActiveProfiles {
 		logString = append(logString, fmt.Sprintf("%s[%d]:[%s] ptp_ha_profile %s state %d\n", p.name, time.Now().Unix(), p.configName, inActive, 0))
 	}
-	if c == nil {
-		for _, logProfile := range logString {
-			fmt.Printf("%s", logProfile)
-		}
-		UpdatePTPHAMetrics(currentProfile, inActiveProfiles, activeState)
-	} else {
-		for _, logProfile := range logString {
-			_, err := c.Write([]byte(logProfile))
-			if err != nil {
-				glog.Errorf("failed to write class change event %s", err.Error())
-			}
-		}
+	for _, logProfile := range logString {
+		fmt.Printf("%s", logProfile)
 	}
+	UpdatePTPHAMetrics(currentProfile, inActiveProfiles, activeState)
 }
 
 // 1= In domain 0 out of domain
@@ -2425,18 +2257,6 @@ func failOverIndicator(output string, count int) (int64, int64) {
 		return 0, 1 //0=out; 1=active == 1
 	}
 	return 0, 0
-}
-
-func removeMessageSuffix(input string) (output string) {
-	// container log output  "ptp4l[2464681.628]: [phc2sys.1.config:7] master offset -4 s2 freq -26835 path delay 525"
-	// make sure non-supported version can handle suffix tags
-	// clear {} from unparsed template
-	//"ptp4l[2464681.628]: [phc2sys.1.config:{level}] master offset -4 s2 freq -26835 path delay 525"
-	replacer := strings.NewReplacer("{", "", "}", "")
-	output = replacer.Replace(input)
-	// Replace matching parts in the input string
-	output = messageTagSuffixRegEx.ReplaceAllString(output, "$1")
-	return output
 }
 
 // linuxptp 4.2 uses ptp device id ; this function will replace the ptp device id by the interface name
@@ -2560,11 +2380,9 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 					ExtendedSSM: 0,
 				})
 				state = sDeviceConfig.LastClockState
-				if p.c == nil { // only update metrics if no socket is used
-					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", logEntry.QL)
-					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.QL_DEFAULT_ENHSSM)
-					UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.QL_DEFAULT_ENHSSM))
-				}
+				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", logEntry.QL)
+				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.QL_DEFAULT_ENHSSM)
+				UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.QL_DEFAULT_ENHSSM))
 			} else if sDeviceConfig.ExtendedTlv == synce.ExtendedTLV_ENABLED {
 				var lastQLState *synce.QualityLevelInfo
 				var ok bool
@@ -2588,11 +2406,9 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 						ExtendedSSM: lastQLState.ExtendedSSM,
 						Priority:    0,
 					})
-					if p.c == nil {
-						UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", lastQLState.SSM)
-						UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", logEntry.ExtQl)
-						UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(lastQLState.SSM)+int(logEntry.ExtQl))
-					}
+					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", lastQLState.SSM)
+					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", logEntry.ExtQl)
+					UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(lastQLState.SSM)+int(logEntry.ExtQl))
 
 					state = sDeviceConfig.LastClockState
 				} else if logEntry.QL != synce.QL_DEFAULT_SSM { // else we have only QL
@@ -2677,7 +2493,7 @@ func (dn *Daemon) stopAllProcesses() {
 			p.hasCollectedMetrics = false
 
 			// Cleanup metrics
-			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName)
+			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName, p.messageTag)
 
 			if p.name == syncEProcessName && p.syncERelations != nil {
 				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)

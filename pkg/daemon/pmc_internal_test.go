@@ -2,12 +2,14 @@ package daemon
 
 import (
 	expect "github.com/google/goexpect"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 )
 
 // NewTestPMCProcess creates a PMCProcess with injectable dependencies for testing.
 func NewTestPMCProcess(
 	configFileName, clockType string,
+	eventCh chan<- event.Event,
 	getMonitorFn func(string) (*expect.GExpect, <-chan error, error),
 ) *PMCProcess {
 	return &PMCProcess{
@@ -15,6 +17,7 @@ func NewTestPMCProcess(
 		messageTag:        "[" + configFileName + ":{level}]",
 		monitorParentData: true,
 		parentDSCh:        make(chan protocol.ParentDataSet, 10),
+		eventCh:           eventCh,
 		clockType:         clockType,
 		exitCh:            make(chan struct{}, 1),
 		getMonitorFn:      getMonitorFn,

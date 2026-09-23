@@ -16,4 +16,6 @@ const (
 	SYNCE = "synce"
 	// DPLL ...
 	DPLL = "dpll"
+	// CHRONYD ...
+	CHRONYD = "chronyd"
 )

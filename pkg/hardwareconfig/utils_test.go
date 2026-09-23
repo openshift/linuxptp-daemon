@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"github.com/stretchr/testify/assert"
 )
 
 // vendor defaults are embedded; no filesystem setup needed
@@ -276,16 +277,16 @@ func GetDpllPinsMock(dialer MockDpllDialer) (*PinCache, error) {
 	}
 
 	cache := &PinCache{
-		Pins: make(map[uint64]map[string]dpll.PinInfo),
+		BoardLabelPins: make(map[uint64]map[string]dpll.PinInfo),
 	}
 	for _, pin := range dpllPins {
 		if pin.BoardLabel == "" {
 			continue
 		}
-		if cache.Pins[pin.ClockID] == nil {
-			cache.Pins[pin.ClockID] = make(map[string]dpll.PinInfo)
+		if cache.BoardLabelPins[pin.ClockID] == nil {
+			cache.BoardLabelPins[pin.ClockID] = make(map[string]dpll.PinInfo)
 		}
-		cache.Pins[pin.ClockID][pin.BoardLabel] = *pin
+		cache.BoardLabelPins[pin.ClockID][pin.BoardLabel] = *pin
 	}
 
 	return cache, nil
@@ -394,7 +395,7 @@ func TestGetDpllPins(t *testing.T) {
 						// Validate pin data for successful cases
 						if result.Count() > 0 {
 							pinCount := 0
-							for clockID, clockPins := range result.Pins {
+							for clockID, clockPins := range result.BoardLabelPins {
 								for boardLabel, pinInfo := range clockPins {
 									pinCount++
 									t.Logf("   Pin %d: ClockID=0x%x, BoardLabel=%s, Type=%d",
@@ -470,7 +471,7 @@ func TestGetDpllPins(t *testing.T) {
 			}
 
 			// Log cache structure
-			t.Logf("✅ Pin cache contains %d total pins across %d clock IDs", cache.Count(), len(cache.Pins))
+			t.Logf("✅ Pin cache contains %d total pins across %d clock IDs", cache.Count(), len(cache.BoardLabelPins))
 		}
 	})
 }
@@ -612,5 +613,36 @@ func TestDpllPinsGetterFromFile(t *testing.T) {
 		t.Errorf("Expected to find GNSS-1PPS pin in mock data")
 	} else {
 		t.Logf("✅ Found GNSS-1PPS pin: ParentDevices=%d", len(gnssPin.ParentDevice))
+	}
+}
+
+func TestPinCacheGetPinByPackageLabel(t *testing.T) {
+	const clockID = uint64(0x1234)
+
+	packagePin := &dpll.PinInfo{ID: 1, ClockID: clockID, PackageLabel: "1PPS_IN0"}
+	boardPin := &dpll.PinInfo{ID: 2, ClockID: clockID, BoardLabel: "BOARD_IN", PackageLabel: "PACKAGE_IN"}
+	collisionPin := &dpll.PinInfo{ID: 3, ClockID: clockID, BoardLabel: "COLLISION_BOARD", PackageLabel: "BOARD_IN"}
+
+	cache := buildPinCacheFromPins([]*dpll.PinInfo{packagePin, boardPin, collisionPin})
+	assert.NotNil(t, cache.BoardLabelPins[clockID])
+	assert.NotNil(t, cache.PackageLabelPins[clockID])
+	assert.Equal(t, boardPin.ID, cache.BoardLabelPins[clockID][boardPin.BoardLabel].ID)
+	assert.Equal(t, boardPin.ID, cache.PackageLabelPins[clockID][boardPin.PackageLabel].ID)
+
+	got, found := cache.GetPin(clockID, "1PPS_IN0")
+	if !found || got.ID != packagePin.ID {
+		t.Fatalf("expected package label to resolve pin %d, got %#v (found=%t)", packagePin.ID, got, found)
+	}
+
+	got, found = cache.GetPin(clockID, "BOARD_IN")
+	if !found || got.ID != boardPin.ID {
+		t.Fatalf("expected board label to take precedence, got %#v (found=%t)", got, found)
+	}
+
+	if _, found = cache.GetPin(clockID, ""); found {
+		t.Fatal("expected empty label lookup to miss")
+	}
+	if _, found = cache.GetPin(clockID, "UNKNOWN"); found {
+		t.Fatal("expected unknown label lookup to miss")
 	}
 }

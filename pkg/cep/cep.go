@@ -91,7 +91,7 @@ func buildDataValues(resourceAddr string, v ipc.Value) []event.DataValue {
 			ValueType: event.ENUMERATION,
 			Value:     val.State,
 		}
-		return []event.DataValue{dv, metricDV(resourceAddr, placeholderOffset)}
+		return []event.DataValue{dv, metricDV(resourceAddr, val.Offset)}
 	case ipc.GNSSStateValue:
 		dv := event.DataValue{
 			Resource:  resourceAddr,
@@ -189,6 +189,10 @@ func (l *CloudEventProxy) Listen(r io.Reader) {
 // Handler returns the HTTP handler for the CloudEvent REST API.
 func (l *CloudEventProxy) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc(apiBase+"health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
 	if l.pubSub != nil {
 		subPattern := apiBase + subscriptionsPath
 		mux.HandleFunc(subPattern, l.subscriptionHandler)
