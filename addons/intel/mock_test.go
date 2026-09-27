@@ -304,6 +304,13 @@ func mockClockIDsFromProfile(mfs *MockFileSystem, profile *ptpv1.PtpProfile) {
 }
 
 func setupGNSSMocks(data *E825PluginData) (*mockBatchPinSet, func()) {
+	originalGetAllDpllDevices := getAllDpllDevices
+	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
+		return []*dpll.DoDeviceGetReply{
+			{ID: 10, ModuleName: "zl3073x", ClockID: 42, Type: dpll.DpllTypeEEC},
+			{ID: 11, ModuleName: "zl3073x", ClockID: 42, Type: dpll.DpllTypePPS},
+		}, nil
+	}
 	// Setup Mock gnss dpll pin data
 	data.dpllPins = []*dpll.PinInfo{
 		{
@@ -328,9 +335,45 @@ func setupGNSSMocks(data *E825PluginData) (*mockBatchPinSet, func()) {
 				},
 			},
 		},
+		{
+			ID:           3,
+			ClockID:      42,
+			PackageLabel: "REF0P",
+			Type:         dpll.PinTypeEXT,
+			Capabilities: dpll.PinCapState,
+			ParentDevice: []dpll.PinParentDevice{
+				{ParentID: 11, Direction: dpll.PinDirectionInput},
+				{ParentID: 10, Direction: dpll.PinDirectionInput},
+			},
+		},
+		{
+			ID:           4,
+			ClockID:      42,
+			PackageLabel: "REF0N",
+			Type:         dpll.PinTypeEXT,
+			Capabilities: dpll.PinCapState,
+			ParentDevice: []dpll.PinParentDevice{
+				{ParentID: 11, Direction: dpll.PinDirectionInput},
+				{ParentID: 10, Direction: dpll.PinDirectionInput},
+			},
+		},
+		{
+			ID:           5,
+			ClockID:      99,
+			PackageLabel: "REF0P",
+			Type:         dpll.PinTypeEXT,
+			Capabilities: dpll.PinCapState,
+			ParentDevice: []dpll.PinParentDevice{
+				{ParentID: 2, Direction: dpll.PinDirectionInput},
+			},
+		},
 	}
 	// Mock pin-set logic
-	return setupBatchPinSetMock()
+	mock, restoreBatchPinSet := setupBatchPinSetMock()
+	return mock, func() {
+		restoreBatchPinSet()
+		getAllDpllDevices = originalGetAllDpllDevices
+	}
 }
 
 type mockedDPLLPins struct {

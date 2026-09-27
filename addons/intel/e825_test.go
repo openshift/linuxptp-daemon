@@ -25,6 +25,36 @@ func (m *mockPinConfig) applyPinFrq(_ string, frq frqSet) error {
 	return nil
 }
 
+func assertDpllParentState(t *testing.T, commands []dpll.PinParentDeviceCtl, pinID, parentID uint32, expected uint32) {
+	t.Helper()
+	var actual *uint32
+	for _, command := range commands {
+		if command.ID != pinID {
+			continue
+		}
+		for _, control := range command.PinParentCtl {
+			if control.PinParentID == parentID && control.State != nil {
+				actual = control.State
+			}
+		}
+	}
+	if assert.NotNil(t, actual, "no state command for pin %d parent %d", pinID, parentID) {
+		assert.Equal(t, expected, *actual)
+	}
+}
+
+func assertDpllParentNotConfigured(t *testing.T, commands []dpll.PinParentDeviceCtl, pinID, parentID uint32) {
+	t.Helper()
+	for _, command := range commands {
+		if command.ID != pinID {
+			continue
+		}
+		for _, control := range command.PinParentCtl {
+			assert.NotEqual(t, parentID, control.PinParentID)
+		}
+	}
+}
+
 func setupMockPinConfig() (*mockPinConfig, func()) {
 	mockPins := mockPinConfig{}
 	origPinConfig := pinConfig
@@ -281,21 +311,24 @@ func Test_setupGnss(t *testing.T) {
 
 func Test_OnPTPConfigChangeE825(t *testing.T) {
 	tcs := []struct {
-		name            string
-		profile         string
-		editProfile     func(*ptpv1.PtpProfile)
-		expectError     bool
-		expectedPinSets int
-		expectedPinFrqs int
+		name                 string
+		profile              string
+		editProfile          func(*ptpv1.PtpProfile)
+		expectError          bool
+		expectedPinSets      int
+		expectedPinFrqs      int
+		expectedDpllCommands int
 	}{
 		{
-			name:    "TGM Profile",
-			profile: "./testdata/e825-tgm.yaml",
+			name:                 "TGM Profile",
+			profile:              "./testdata/e825-tgm.yaml",
+			expectedDpllCommands: 1,
 		},
 		{
-			name:            "TBC Profile",
-			profile:         "./testdata/e825-tbc.yaml",
-			expectedPinSets: 2,
+			name:                 "TBC Profile",
+			profile:              "./testdata/e825-tbc.yaml",
+			expectedPinSets:      2,
+			expectedDpllCommands: 3,
 		},
 		{
 			name:    "TBC with no leadingInterface",
@@ -334,7 +367,14 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 				assert.NoError(tt, err)
 				assert.Equal(tt, tc.expectedPinSets, mockPins.actualPinSetCount)
 				assert.Equal(tt, tc.expectedPinFrqs, mockPins.actualPinFrqCount)
-				assert.Equal(tt, 1, len(mockDpllPinset.commands))
+				assert.Equal(tt, tc.expectedDpllCommands, len(mockDpllPinset.commands))
+				if tc.name == "TBC Profile" {
+					disconnected := uint32(dpll.PinStateDisconnected)
+					for _, pinID := range []uint32{3, 4} {
+						assertDpllParentState(tt, mockDpllPinset.commands, pinID, 10, disconnected)
+						assertDpllParentNotConfigured(tt, mockDpllPinset.commands, pinID, 11)
+					}
+				}
 			}
 		})
 	}

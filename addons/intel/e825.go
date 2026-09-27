@@ -84,6 +84,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				glog.Error("e825 failed to unmarshal opts: " + err.Error())
 			}
 			allDevices := e825Opts.allDevices()
+			clockIDs := make(map[string]uint64, len(allDevices))
 			glog.Infof("Initializing e825 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
 
 			// Setup clockID (prefer ZL3073x module clock ID for e825)
@@ -97,6 +98,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				if zlErr != nil {
 					clkID = getClockID(device)
 				}
+				clockIDs[device] = clkID
 				(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(clkID, 10)
 				glog.Infof("Detected %s=%d (%x)", dpllClockIDStr, clkID, clkID)
 			}
@@ -155,6 +157,14 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				if err != nil {
 					glog.Errorf("Could not apply BC pin reset to %s: %s", device, err)
 				}
+				clockID, ok := clockIDs[device]
+				if !ok {
+					return fmt.Errorf("could not get DPLL clock ID for leading interface %s", device)
+				}
+				if err := pluginData.disconnectTbcEecInputs(clockID); err != nil {
+					glog.Errorf("Could not disconnect T-BC EEC inputs for %s: %s", device, err)
+					return fmt.Errorf("could not disconnect T-BC EEC inputs for %s: %w", device, err)
+				}
 			}
 		}
 	}
@@ -175,20 +185,83 @@ func (d *E825PluginData) populateDpllPins() error {
 	return nil
 }
 
+func (d *E825PluginData) disconnectTbcEecInputs(clockID uint64) error {
+	if len(d.dpllPins) == 0 {
+		if err := d.populateDpllPins(); err != nil {
+			return fmt.Errorf("could not detect DPLL pins: %w", err)
+		}
+	}
+	dpllDevices, err := getAllDpllDevices()
+	if err != nil {
+		return fmt.Errorf("could not detect DPLL devices: %w", err)
+	}
+	eecParentIDs := make(map[uint32]struct{})
+	for _, device := range dpllDevices {
+		if device.ClockID == clockID && device.Type == dpll_netlink.DpllTypeEEC {
+			eecParentIDs[device.ID] = struct{}{}
+		}
+	}
+	if len(eecParentIDs) == 0 {
+		return fmt.Errorf("no EEC DPLL found for clock ID %d", clockID)
+	}
+
+	requiredPins := map[string]struct{}{"REF0P": {}, "REF0N": {}} // SDP0 and SDP2
+	commands := make([]dpll_netlink.PinParentDeviceCtl, 0, len(requiredPins))
+	for _, pin := range d.dpllPins {
+		if pin.ClockID != clockID {
+			continue
+		}
+		if _, required := requiredPins[pin.PackageLabel]; !required {
+			continue
+		}
+		if pin.Capabilities&dpll_netlink.PinCapState == 0 {
+			return fmt.Errorf("DPLL package pin %s does not support state changes", pin.PackageLabel)
+		}
+
+		var parentFound bool
+		for _, parent := range pin.ParentDevice {
+			if _, isEEC := eecParentIDs[parent.ParentID]; !isEEC {
+				continue
+			}
+			if parent.Direction != dpll_netlink.PinDirectionInput {
+				return fmt.Errorf("DPLL package pin %s EEC parent %d is not an input", pin.PackageLabel, parent.ParentID)
+			}
+			parentID := parent.ParentID
+			commands = append(commands, pinCmdSetParentState(pin, &parentID, uint32(dpll_netlink.PinStateDisconnected)))
+			parentFound = true
+		}
+		if !parentFound {
+			return fmt.Errorf("DPLL package pin %s has no EEC parent", pin.PackageLabel)
+		}
+		delete(requiredPins, pin.PackageLabel)
+	}
+	for label := range requiredPins {
+		return fmt.Errorf("DPLL package pin %s not found for clock ID %d", label, clockID)
+	}
+	return BatchPinSet(commands)
+}
+
 // pinCmdSetState sets the state of an individual DPLL pin
 func pinCmdSetState(pin *dpll_netlink.PinInfo, connectable bool) dpll_netlink.PinParentDeviceCtl {
 	newState := uint32(dpll_netlink.PinStateSelectable)
 	if !connectable {
 		newState = uint32(dpll_netlink.PinStateDisconnected)
 	}
+	return pinCmdSetParentState(pin, nil, newState)
+}
+
+func pinCmdSetParentState(pin *dpll_netlink.PinInfo, parentID *uint32, state uint32) dpll_netlink.PinParentDeviceCtl {
 	command := dpll_netlink.PinParentDeviceCtl{
 		ID:           pin.ID,
-		PinParentCtl: make([]dpll_netlink.PinControl, 0),
+		PinParentCtl: make([]dpll_netlink.PinControl, 0, len(pin.ParentDevice)),
 	}
 	for _, parent := range pin.ParentDevice {
+		if parentID != nil && parent.ParentID != *parentID {
+			continue
+		}
 		command.PinParentCtl = append(command.PinParentCtl, dpll_netlink.PinControl{
 			PinParentID: parent.ParentID,
-			State:       &newState,
+			State:       &state,
 		})
 	}
 	return command
