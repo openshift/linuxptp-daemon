@@ -88,7 +88,14 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			glog.Infof("Initializing e825 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
 
 			// Setup clockID (prefer ZL3073x module clock ID for e825)
-			zlClockID, zlErr := getClockIDByModule("zl3073x")
+			dpllDevices, dpllDevicesErr := getAllDpllDevices()
+			var zlClockID uint64
+			var zlErr error
+			if dpllDevicesErr == nil {
+				zlClockID, zlErr = getClockIDByModule("zl3073x", dpllDevices)
+			} else {
+				zlErr = dpllDevicesErr
+			}
 			if zlErr != nil {
 				glog.Errorf("e825: failed to resolve ZL3073x DPLL clock ID via netlink: %v", zlErr)
 			}
@@ -153,6 +160,9 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					return errors.New("GNR-D T-BC must set leadingInterface")
 				}
 				device := nodeProfile.PtpSettings["leadingInterface"]
+				if dpllDevicesErr != nil {
+					return fmt.Errorf("could not detect DPLL devices: %w", dpllDevicesErr)
+				}
 				err = pinConfig.applyPinSet(device, bcDpllPinReset)
 				if err != nil {
 					glog.Errorf("Could not apply BC pin reset to %s: %s", device, err)
@@ -161,7 +171,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				if !ok {
 					return fmt.Errorf("could not get DPLL clock ID for leading interface %s", device)
 				}
-				if err := pluginData.disconnectTbcEecInputs(clockID); err != nil {
+				if err := pluginData.disconnectTbcEecInputs(clockID, dpllDevices); err != nil {
 					glog.Errorf("Could not disconnect T-BC EEC inputs for %s: %s", device, err)
 					return fmt.Errorf("could not disconnect T-BC EEC inputs for %s: %w", device, err)
 				}
@@ -185,24 +195,9 @@ func (d *E825PluginData) populateDpllPins() error {
 	return nil
 }
 
-func (d *E825PluginData) disconnectTbcEecInputs(clockID uint64) error {
+func (d *E825PluginData) disconnectTbcEecInputs(clockID uint64, devices []*dpll_netlink.DoDeviceGetReply) error {
 	if len(d.dpllPins) == 0 {
-		if err := d.populateDpllPins(); err != nil {
-			return fmt.Errorf("could not detect DPLL pins: %w", err)
-		}
-	}
-	dpllDevices, err := getAllDpllDevices()
-	if err != nil {
-		return fmt.Errorf("could not detect DPLL devices: %w", err)
-	}
-	eecParentIDs := make(map[uint32]struct{})
-	for _, device := range dpllDevices {
-		if device.ClockID == clockID && device.Type == dpll_netlink.DpllTypeEEC {
-			eecParentIDs[device.ID] = struct{}{}
-		}
-	}
-	if len(eecParentIDs) == 0 {
-		return fmt.Errorf("no EEC DPLL found for clock ID %d", clockID)
+		return errors.New("DPLL pins have not been populated")
 	}
 
 	requiredPins := map[string]struct{}{"REF0P": {}, "REF0N": {}} // SDP0 and SDP2
@@ -220,20 +215,26 @@ func (d *E825PluginData) disconnectTbcEecInputs(clockID uint64) error {
 
 		var parentFound bool
 		for _, parent := range pin.ParentDevice {
-			if _, isEEC := eecParentIDs[parent.ParentID]; !isEEC {
-				continue
+			for _, device := range devices {
+				if device.ID != parent.ParentID || device.ClockID != clockID || device.Type != dpll_netlink.DpllTypeEEC {
+					continue
+				}
+				if parent.Direction != dpll_netlink.PinDirectionInput {
+					return fmt.Errorf("DPLL package pin %s EEC parent %d is not an input", pin.PackageLabel, parent.ParentID)
+				}
+				parentID := parent.ParentID
+				commands = append(commands, pinCmdSetParentState(pin, &parentID, uint32(dpll_netlink.PinStateDisconnected)))
+				parentFound = true
+				break
 			}
-			if parent.Direction != dpll_netlink.PinDirectionInput {
-				return fmt.Errorf("DPLL package pin %s EEC parent %d is not an input", pin.PackageLabel, parent.ParentID)
-			}
-			parentID := parent.ParentID
-			commands = append(commands, pinCmdSetParentState(pin, &parentID, uint32(dpll_netlink.PinStateDisconnected)))
-			parentFound = true
 		}
 		if !parentFound {
-			return fmt.Errorf("DPLL package pin %s has no EEC parent", pin.PackageLabel)
+			return fmt.Errorf("DPLL package pin %s has no EEC parent for clock ID %d", pin.PackageLabel, clockID)
 		}
 		delete(requiredPins, pin.PackageLabel)
+		if len(requiredPins) == 0 {
+			break
+		}
 	}
 	for label := range requiredPins {
 		return fmt.Errorf("DPLL package pin %s not found for clock ID %d", label, clockID)

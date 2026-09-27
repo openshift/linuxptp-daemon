@@ -93,63 +93,49 @@ func Test_getPCIClockID(t *testing.T) {
 func Test_getClockIDByModule(t *testing.T) {
 	notFound := uint64(0)
 
-	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
-		return nil, fmt.Errorf("Fake error")
-	}
-	clockID, err := getClockIDByModule("module")
+	clockID, err := getClockIDByModule("module", nil)
 	assert.Error(t, err)
 	assert.Equal(t, notFound, clockID)
 
-	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
-		return []*dpll.DoDeviceGetReply{}, nil
+	devices := []*dpll.DoDeviceGetReply{
+		{
+			ID:         0,
+			ModuleName: "other",
+			Type:       1,
+			ClockID:    1,
+		},
+		{
+			ID:         1,
+			ModuleName: "module",
+			Type:       2,
+			ClockID:    2,
+		},
+		{
+			ID:         2,
+			ModuleName: "module",
+			Type:       1,
+			ClockID:    42,
+		},
 	}
-	clockID, err = getClockIDByModule("module")
-	assert.Error(t, err)
-	assert.Equal(t, notFound, clockID)
-
-	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
-		return []*dpll.DoDeviceGetReply{
-			{
-				ID:         0,
-				ModuleName: "other",
-				Type:       1,
-				ClockID:    1,
-			},
-			{
-				ID:         1,
-				ModuleName: "module",
-				Type:       2,
-				ClockID:    2,
-			},
-			{
-				ID:         2,
-				ModuleName: "module",
-				Type:       1,
-				ClockID:    42,
-			},
-		}, nil
-	}
-	clockID, err = getClockIDByModule("module")
+	clockID, err = getClockIDByModule("module", devices)
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(42), clockID)
 
-	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
-		return []*dpll.DoDeviceGetReply{
-			{
-				ID:         0,
-				ModuleName: "other",
-				Type:       1,
-				ClockID:    1,
-			},
-			{
-				ID:         1,
-				ModuleName: "module",
-				Type:       2,
-				ClockID:    2,
-			},
-		}, nil
+	devices = []*dpll.DoDeviceGetReply{
+		{
+			ID:         0,
+			ModuleName: "other",
+			Type:       1,
+			ClockID:    1,
+		},
+		{
+			ID:         1,
+			ModuleName: "module",
+			Type:       2,
+			ClockID:    2,
+		},
 	}
-	clockID, err = getClockIDByModule("module")
+	clockID, err = getClockIDByModule("module", devices)
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(2), clockID)
 }

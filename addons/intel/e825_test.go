@@ -360,7 +360,14 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 			data := (*d).(*E825PluginData)
 			mockDpllPinset, restoreDpllPins := setupGNSSMocks(data)
 			defer restoreDpllPins()
+			getDevices := getAllDpllDevices
+			deviceDumps := 0
+			getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
+				deviceDumps++
+				return getDevices()
+			}
 			err = p.OnPTPConfigChange(d, profile)
+			assert.Equal(tt, 1, deviceDumps)
 			if tc.expectError {
 				assert.Error(tt, err)
 			} else {
