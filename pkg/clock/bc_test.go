@@ -202,6 +202,65 @@ func TestBCClock_Holdover(t *testing.T) {
 	})
 }
 
+// TestBCClock_LeadingInterfaceOnReconfigure covers the "higher-priority profile"
+// reconfiguration path: after a profile swap the clock must report the NEW
+// follower interface — both in the emitted ptp_state cloud event (IPC) and in
+// the returned SyncState.LeadingIFace, which is what clockmgr gates clock_state
+// metric emission on. A stale interface from the previous profile must not leak.
+func TestBCClock_LeadingInterfaceOnReconfigure(t *testing.T) {
+	// The interfaces mirror the failing conformance case: the previous profile
+	// followed ens2f0 (on one NIC); the higher-priority profile follows ens1f1
+	// (on another NIC).
+	const (
+		staleIface = testLeadingNIC // "ens2f0" — from the superseded profile
+		newIface   = "ens1f1"       // leading follower of the new profile
+	)
+
+	t.Run("first offset event reports the leading interface in the cloud event and SyncState", func(t *testing.T) {
+		// A freshly constructed clock (as built for the new profile) has no
+		// leading interface until its first offset event resolves one.
+		bc, rio := newTestBCClock()
+		require.Equal(t, event.LEADING_INTERFACE_UNKNOWN, bc.currentSyncState().LeadingIFace,
+			"a clock with no offset yet must not advertise a leading interface")
+
+		cs := bc.AddEvent(offsetEvent(newIface, 50))
+
+		assert.Equal(t, event.PTP_LOCKED, cs.State)
+		// The returned LeadingIFace is what clockmgr uses to emit clock_state; it
+		// must be the real interface, not the UNKNOWN sentinel.
+		assert.Equal(t, newIface, cs.LeadingIFace)
+		require.Len(t, rio.messages, 1)
+		assert.Equal(t, ipc.TypePTPState, rio.messages[0].Type)
+		assert.Equal(t, newIface, rio.messages[0].IFace)
+	})
+
+	t.Run("after reset the clock adopts the new interface, not the stale one", func(t *testing.T) {
+		// Model the teardown/rebuild of a reconfiguration: the clock was locked
+		// on the previous profile's interface, then Reset() runs on teardown.
+		bc, rio := newTestBCClock()
+		bc.iface = staleIface
+		bc.syncState = event.PTP_LOCKED
+		bc.overallSyncState = event.PTP_LOCKED
+
+		bc.Reset()
+		require.Equal(t, event.LEADING_INTERFACE_UNKNOWN, bc.currentSyncState().LeadingIFace,
+			"reset must clear the stale leading interface")
+		rio.messages = nil
+
+		// The new profile's first offset arrives on a different interface.
+		cs := bc.AddEvent(offsetEvent(newIface, 50))
+
+		assert.Equal(t, event.PTP_LOCKED, cs.State)
+		assert.Equal(t, newIface, cs.LeadingIFace, "must report the new interface")
+		assert.NotEqual(t, staleIface, cs.LeadingIFace, "stale interface must not leak")
+		// Reset() may also emit an overall sync_state transition; the interface we
+		// care about rides on the per-port ptp_state cloud event.
+		ptpState := findMessage(rio.messages, ipc.TypePTPState)
+		require.NotNil(t, ptpState, "expected a ptp_state cloud event")
+		assert.Equal(t, newIface, ptpState.IFace)
+	})
+}
+
 func TestBCClock_UpdateOSClockState(t *testing.T) {
 	t.Run("worst of LOCKED and FREERUN is FREERUN", func(t *testing.T) {
 		bc, rio := newTestBCClock()

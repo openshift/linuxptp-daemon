@@ -20,6 +20,17 @@ func (r *ipcRecorder) send(msg ipc.Message) {
 	r.messages = append(r.messages, msg)
 }
 
+// findMessage returns a pointer to the first recorded message of the given type,
+// or nil when none was recorded.
+func findMessage(msgs []ipc.Message, t string) *ipc.Message {
+	for i := range msgs {
+		if msgs[i].Type == t {
+			return &msgs[i]
+		}
+	}
+	return nil
+}
+
 // Generic event.Data tests
 
 func TestAddEvent_StoresSpecFlags(t *testing.T) {

@@ -718,6 +718,15 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// in applyNodePtpProfile below, so removed profiles do not linger.
 	Threshold.Reset()
 
+	// Reset the offset-resolution maps. They are keyed by ptp4l config name,
+	// which restarts at ptp4l.0.config on every apply, so without this a new
+	// profile inherits the superseded profile's slaveIface/masterOffsetIface.
+	// ptp4l emits "master offset" lines during UNCALIBRATED (before the SLAVE
+	// transition), and those would resolve to the old follower interface,
+	// poisoning the new BC/OC clock's leading interface so clock_state is emitted
+	// for the wrong iface and never for the new follower.
+	InitializeOffsetMaps()
+
 	// All configs will be rebuild, and sockets recreated, so they can all be deleted
 	_ = dn.cleanupTempFiles()
 
