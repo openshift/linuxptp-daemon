@@ -244,10 +244,12 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 		case parserconstants.PortRoleSlave:
 			masterOffsetIface.set(configName, interfaceName)
 			slaveIface.set(configName, interfaceName)
-		case parserconstants.PortRoleFaulty:
-			isFaulty := slaveIface.isFaulty(configName, interfaceName)
+		case parserconstants.PortRoleFaulty, parserconstants.PortRoleListening:
+			// The active slave port lost its source: FAULTY = the port/link faulted; LISTENING = the master went away
+			// (announce timeout) while the link stayed up. Both mean the servo has no offset to track.
+			stateChanged := slaveIface.isFollowerIface(configName, interfaceName)
 			sourceIsPtp4l := masterOffsetSource.get(configName) == ptp4lProcessName
-			if isFaulty && sourceIsPtp4l {
+			if stateChanged && sourceIsPtp4l {
 				// Set fault metrics and clear slave & master offset interfaces
 				updatePTPMetrics(master, process.name, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
 				updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)

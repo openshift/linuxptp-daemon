@@ -86,3 +86,61 @@ func TestReplayDualUpstreamLog(t *testing.T) {
 	assert.Equal(t, float64(SLAVE), testutil.ToFloat64(InterfaceRole.WithLabelValues(ptp4lProcessName, NodeName, "eno8303")), "recovery: eno8303 should be SLAVE")
 	assert.Equal(t, float64(MASTER), testutil.ToFloat64(InterfaceRole.WithLabelValues(ptp4lProcessName, NodeName, "eno8403")), "recovery: eno8403 should be MASTER")
 }
+
+// TestSourceLostOnListening covers a dual-follower OC whose grandmaster is
+// removed while the links stay up. The active slave port drops SLAVE→LISTENING
+// (announce timeout, not FAULTY), which must be reported to the BC/OC clock as a
+// source-lost fact so it can enter holdover. A backup follower port sitting in
+// LISTENING during normal operation must NOT produce that fact.
+func TestSourceLostOnListening(t *testing.T) {
+	InitializeOffsetMaps()
+
+	process := &ptpProcess{
+		name:       ptp4lProcessName,
+		configName: "ptp4l.0.config",
+		messageTag: "[ptp4l.0.config]",
+		clockType:  event.OC,
+		ifaces: config.IFaces{
+			{Name: "ens3f0"},
+			{Name: "ens3f1"},
+		},
+		logParser: parser.NewPTP4LExtractor(),
+		eventCh:   make(chan event.Event, 10),
+	}
+
+	// ens3f0 becomes the active slave; ens3f1 stays a passive backup in LISTENING.
+	// The backup's startup LISTENING transition exercises the guard: a port in
+	// LISTENING that is not the active slave must not emit a source-lost fact.
+	setupLines := []string{
+		"ptp4l[100.000]: [ptp4l.0.config:5] port 1 (ens3f0): INITIALIZING to LISTENING on INIT_COMPLETE",
+		"ptp4l[100.010]: [ptp4l.0.config:5] port 2 (ens3f1): INITIALIZING to LISTENING on INIT_COMPLETE",
+		"ptp4l[100.500]: [ptp4l.0.config:5] port 1 (ens3f0): LISTENING to UNCALIBRATED on RS_SLAVE",
+		"ptp4l[101.000]: [ptp4l.0.config:5] port 1 (ens3f0): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
+	}
+	for _, line := range setupLines {
+		processWithParser(process, line)
+	}
+	assert.Empty(t, drainEvents(process.eventCh), "a non-active port in LISTENING must not emit source-lost")
+
+	// Grandmaster removed: the active slave ens3f0 falls back to LISTENING.
+	processWithParser(process, "ptp4l[103.000]: [ptp4l.0.config:5] port 1 (ens3f0): SLAVE to LISTENING on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES")
+	evs := drainEvents(process.eventCh)
+	if assert.Len(t, evs, 1, "active slave dropping to LISTENING must emit one source-lost event") {
+		ptp, ok := evs[0].Data.(*event.PTPData)
+		assert.True(t, ok && ptp.SourceLost, "emitted event must carry SourceLost=true")
+		assert.Equal(t, "ens3f0", evs[0].IFace)
+	}
+}
+
+// drainEvents non-blockingly collects all events currently queued on ch.
+func drainEvents(ch chan event.Event) []event.Event {
+	var evs []event.Event
+	for {
+		select {
+		case ev := <-ch:
+			evs = append(evs, ev)
+		default:
+			return evs
+		}
+	}
+}

@@ -342,7 +342,7 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 					masterOffsetIface.set(configName, ifaces[portId-1].Name)
 					slaveIface.set(configName, ifaces[portId-1].Name)
 				} else if role == FAULTY {
-					if slaveIface.isFaulty(configName, ifaces[portId-1].Name) &&
+					if slaveIface.isFollowerIface(configName, ifaces[portId-1].Name) &&
 						masterOffsetSource.get(configName) == ptp4lProcessName {
 						updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
 						updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
@@ -856,7 +856,7 @@ func (s *slaveInterface) get(configName string) string {
 	return s.name[configName]
 }
 
-func (s *slaveInterface) isFaulty(configName string, iface string) bool {
+func (s *slaveInterface) isFollowerIface(configName string, iface string) bool {
 	s.RLock()
 	defer s.RUnlock()
 
