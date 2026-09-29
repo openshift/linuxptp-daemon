@@ -100,15 +100,11 @@ var getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
 }
 
 // getClockIDByModule returns ClockID for a given DPLL module name, preferring PPS type if present
-func getClockIDByModule(module string) (uint64, error) {
-	devices, err := getAllDpllDevices()
-	if err != nil {
-		return 0, err
-	}
+func getClockIDByModule(module string, devices []*dpll.DoDeviceGetReply) (uint64, error) {
 	var anyID uint64
 	for _, d := range devices {
 		if strings.EqualFold(d.ModuleName, module) {
-			if d.Type == 1 { // PPS
+			if d.Type == dpll.DpllTypePPS {
 				return d.ClockID, nil
 			}
 			anyID = d.ClockID
