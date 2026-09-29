@@ -306,15 +306,21 @@ func mockClockIDsFromProfile(mfs *MockFileSystem, profile *ptpv1.PtpProfile) {
 // testClockID is the ClockID used across test mock pins and devices
 const testClockID = uint64(1000)
 
-// testDpllDevices returns a standard set of mock DPLL devices (EEC id=1, PPS id=2)
+// testDpllDevices includes matching EEC/PPS devices and an unrelated EEC device.
 func testDpllDevices() []*dpll.DoDeviceGetReply {
 	return []*dpll.DoDeviceGetReply{
 		{ID: 1, ClockID: testClockID, Type: dpll.DpllTypeEEC},
 		{ID: 2, ClockID: testClockID, Type: dpll.DpllTypePPS},
+		{ID: 3, ClockID: testClockID + 1, Type: dpll.DpllTypeEEC},
 	}
 }
 
 func setupGNSSMocks(data *E825PluginData) (*mockBatchPinSet, func()) {
+	originalGetAllDpllDevices := getAllDpllDevices
+	originalGetAllDpllPins := getAllDpllPins
+	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) { return testDpllDevices(), nil }
+	getAllDpllPins = func() ([]*dpll.PinInfo, error) { return data.dpllPins, nil }
+
 	// Setup Mock gnss dpll pin data (includes GNSS pin + REF0P/REF0N for T-BC input pin tests)
 	data.dpllPins = []*dpll.PinInfo{
 		{
@@ -349,8 +355,9 @@ func setupGNSSMocks(data *E825PluginData) (*mockBatchPinSet, func()) {
 			Type:         dpll.PinTypeEXT,
 			Capabilities: dpll.PinCapState,
 			ParentDevice: []dpll.PinParentDevice{
-				{ParentID: uint32(1), Direction: dpll.PinDirectionInput},
 				{ParentID: uint32(2), Direction: dpll.PinDirectionInput},
+				{ParentID: uint32(3), Direction: dpll.PinDirectionInput},
+				{ParentID: uint32(1), Direction: dpll.PinDirectionInput},
 			},
 		},
 		{
@@ -361,14 +368,20 @@ func setupGNSSMocks(data *E825PluginData) (*mockBatchPinSet, func()) {
 			Type:         dpll.PinTypeEXT,
 			Capabilities: dpll.PinCapState,
 			ParentDevice: []dpll.PinParentDevice{
-				{ParentID: uint32(1), Direction: dpll.PinDirectionInput},
 				{ParentID: uint32(2), Direction: dpll.PinDirectionInput},
+				{ParentID: uint32(3), Direction: dpll.PinDirectionInput},
+				{ParentID: uint32(1), Direction: dpll.PinDirectionInput},
 			},
 		},
 	}
 	data.dpllDevices = testDpllDevices()
 	// Mock pin-set logic
-	return setupBatchPinSetMock()
+	mock, restoreBatchPinSet := setupBatchPinSetMock()
+	return mock, func() {
+		restoreBatchPinSet()
+		getAllDpllDevices = originalGetAllDpllDevices
+		getAllDpllPins = originalGetAllDpllPins
+	}
 }
 
 type mockedDPLLPins struct {
