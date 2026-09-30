@@ -117,8 +117,9 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 		if !ok || ptp == nil {
 			return c.currentSyncState()
 		}
+
 		// Record the follower interface once known
-		if c.iface == "" && ev.IFace != "" {
+		if !ptp.SourceLost && ev.IFace != "" {
 			c.iface = ev.IFace
 		}
 
