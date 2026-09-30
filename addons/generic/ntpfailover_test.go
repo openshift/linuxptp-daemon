@@ -34,7 +34,7 @@ func TestProcessLogNtpFailover_StartupGoesActive(t *testing.T) {
 	}
 	select {
 	case ev := <-ch:
-		if pd, ok := ev.Data.(*event.PluginData); !ok || pd.EventName != "gnss_recovered" {
+		if pd, ok := ev.Data.(*event.PluginData); !ok || pd.EventName != GnssRecoveredEventName {
 			t.Fatalf("startup must emit a recovered to allow phc2sys to start, got %+v", ev)
 		}
 	case <-time.After(2 * time.Second):
@@ -56,7 +56,7 @@ func TestProcessLogNtpFailover_FailoverAndRecoverEmitPluginEvents(t *testing.T) 
 	}
 	select {
 	case ev := <-ch:
-		if pd, ok := ev.Data.(*event.PluginData); !ok || pd.EventName != "gnss_recovered" {
+		if pd, ok := ev.Data.(*event.PluginData); !ok || pd.EventName != GnssRecoveredEventName {
 			t.Fatalf("startup must emit a recovered to allow phc2sys to start, got %+v", ev)
 		}
 	case <-time.After(2 * time.Second):
@@ -67,7 +67,7 @@ func TestProcessLogNtpFailover_FailoverAndRecoverEmitPluginEvents(t *testing.T) 
 	select {
 	case ev := <-ch:
 		pd, ok := ev.Data.(*event.PluginData)
-		if !ok || pd.EventName != "gnss_failover" {
+		if !ok || pd.EventName != GnssFailoverEventName {
 			t.Fatalf("expected gnss_failover, got %+v", ev)
 		}
 	default:
@@ -82,7 +82,7 @@ func TestProcessLogNtpFailover_FailoverAndRecoverEmitPluginEvents(t *testing.T) 
 	select {
 	case ev := <-ch:
 		pd, ok := ev.Data.(*event.PluginData)
-		if !ok || pd.EventName != "gnss_recovered" {
+		if !ok || pd.EventName != GnssRecoveredEventName {
 			t.Fatalf("expected gnss_recovered, got %+v", ev)
 		}
 	default:

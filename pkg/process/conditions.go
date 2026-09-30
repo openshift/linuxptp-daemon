@@ -11,12 +11,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
-// GnssRecoveredEventName and GnssFailoverEventName are GNSS event names for monitoring state changes.
-const (
-	GnssRecoveredEventName = "gnss_recovered"
-	GnssFailoverEventName  = "gnss_failover"
-)
-
 // EventStats ...
 type EventStats map[string]map[event.EventSource]utils.ROWindow
 

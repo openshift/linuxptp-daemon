@@ -13,6 +13,12 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
+// GnssRecoveredEventName and GnssFailoverEventName are GNSS event names for monitoring state changes.
+const (
+	GnssRecoveredEventName = "gnss_recovered"
+	GnssFailoverEventName  = "gnss_failover"
+)
+
 type ntpFailoverPluginData struct {
 	gnssFailover    bool
 	eventChannel    chan<- event.Event
@@ -110,7 +116,7 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 				switch pluginData.pcfsmState {
 				case pcsmsStartupDefault:
 					pluginData.pcfsmState = pcsmsActive
-					pluginData.emitEvent("gnss_recovered")
+					pluginData.emitEvent(GnssRecoveredEventName)
 					continue
 				case pcsmsActive:
 					if pname == ts2phcPname {
@@ -125,7 +131,7 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 						if currentTime.After(pluginData.expiryTime) {
 							pluginData.pcfsmState = pcsmsFailover
 							glog.Infof("ntpfailover: GNSS failover triggered")
-							pluginData.emitEvent("gnss_failover")
+							pluginData.emitEvent(GnssFailoverEventName)
 							continue
 						}
 					}
@@ -135,7 +141,7 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 						if currentTime.Before(pluginData.expiryTime) {
 							pluginData.pcfsmState = pcsmsStartupDefault
 							glog.Infof("ntpfailover: GNSS recovered")
-							pluginData.emitEvent("gnss_recovered")
+							pluginData.emitEvent(GnssRecoveredEventName)
 							continue
 						}
 					}

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/addons/generic"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
@@ -1222,9 +1223,9 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	if env.hasFailover {
 		startCond = process.Any{Conditions: []process.Condition{
 			startCond,
-			process.OnPluginEvent{EventName: process.GnssRecoveredEventName},
+			process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
 		}}
-		p.conditions[process.ActionStop] = process.OnPluginEvent{EventName: process.GnssFailoverEventName}
+		p.conditions[process.ActionStop] = process.OnPluginEvent{EventName: generic.GnssFailoverEventName}
 	}
 	p.conditions[process.ActionStart] = startCond
 	glog.Infof("phc2sys delayed start: ActionStart=%s", startCond)

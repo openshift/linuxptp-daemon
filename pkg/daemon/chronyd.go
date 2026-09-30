@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/addons/generic"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 )
 
@@ -35,8 +36,8 @@ func NewChronydProcess(env ptpProcessEnv) (*chronydProcess, error) {
 	p.cmd = buildCmd(buildPtpCmdLine(chronydProcessName, configPath, opts, env.nodeProfile))
 	cp := &chronydProcess{ptpProcess: p}
 	cp.conditions = map[process.Action]process.Condition{
-		process.ActionStart: process.OnPluginEvent{EventName: process.GnssFailoverEventName},
-		process.ActionStop:  process.OnPluginEvent{EventName: process.GnssRecoveredEventName},
+		process.ActionStart: process.OnPluginEvent{EventName: generic.GnssFailoverEventName},
+		process.ActionStop:  process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
 	}
 	return cp, nil
 }

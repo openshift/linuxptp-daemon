@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/addons/generic"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -112,12 +113,12 @@ func TestNeverAlwaysFalse(t *testing.T) {
 
 func TestOnPluginEvent(t *testing.T) {
 	p := &stubProc{}
-	c := OnPluginEvent{EventName: "gnss_failover"}
+	c := OnPluginEvent{EventName: generic.GnssFailoverEventName}
 
-	failover := event.PluginEvent("ntpfailover", "gnss_failover")
+	failover := event.PluginEvent("ntpfailover", generic.GnssFailoverEventName)
 	assert.True(t, c.Met(p, failover, EventStats{}))
 
-	recovered := event.PluginEvent("ntpfailover", "gnss_recovered")
+	recovered := event.PluginEvent("ntpfailover", generic.GnssRecoveredEventName)
 	assert.False(t, c.Met(p, recovered, EventStats{}))
 
 	// Non-PluginData event should not match
@@ -159,7 +160,7 @@ func TestAny(t *testing.T) {
 			MaxOffset:  1e9,
 			Count:      0,
 		},
-		OnPluginEvent{EventName: "gnss_recovered"},
+		OnPluginEvent{EventName: generic.GnssRecoveredEventName},
 	}}
 
 	// LOCKED event with sub-second offset and a stats window satisfying count=0
@@ -175,11 +176,11 @@ func TestAny(t *testing.T) {
 	assert.True(t, c.Met(p, locked, stats))
 
 	// Plugin event satisfies second condition
-	recovered := event.PluginEvent("ntpfailover", "gnss_recovered")
+	recovered := event.PluginEvent("ntpfailover", generic.GnssRecoveredEventName)
 	assert.True(t, c.Met(p, recovered, EventStats{}))
 
 	// Neither condition met
-	wrongPlugin := event.PluginEvent("ntpfailover", "gnss_failover")
+	wrongPlugin := event.PluginEvent("ntpfailover", generic.GnssFailoverEventName)
 	assert.False(t, c.Met(p, wrongPlugin, EventStats{}))
 
 	// Empty Any is false

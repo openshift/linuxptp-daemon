@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/addons/generic"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
@@ -18,14 +19,12 @@ import (
 )
 
 const (
-	testETH0          = "eth0"
-	testE810          = "e810"
-	testGNSSFailover  = "gnss_failover"
-	testGNSSRecovered = "gnss_recovered"
-	testPtp4l1Config  = "ptp4l.1.config"
-	clockTypeSetting  = "clockType"
-	testTs2phcConfig  = "ts2phc.0.config"
-	ntpfailover       = "ntpfailover"
+	testETH0         = "eth0"
+	testE810         = "e810"
+	testPtp4l1Config = "ptp4l.1.config"
+	clockTypeSetting = "clockType"
+	testTs2phcConfig = "ts2phc.0.config"
+	ntpfailover      = "ntpfailover"
 )
 
 type stubProcess struct {
@@ -444,12 +443,12 @@ func TestEvalActions_StopRunningProcess(t *testing.T) {
 		name:  phc2sysProcessName,
 		state: process.Running,
 		conds: map[process.Action]process.Condition{
-			process.ActionStop: process.OnPluginEvent{EventName: testGNSSFailover},
+			process.ActionStop: process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
 		},
 	})
 	ct.StartPM()
 
-	ct.SendPluginEvent(ntpfailover, testGNSSFailover)
+	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 
 	select {
 	case <-ct.pm.eventsOut:
@@ -466,12 +465,12 @@ func TestEvalActions_StartStoppedProcess(t *testing.T) {
 		name:  phc2sysProcessName,
 		state: process.Stopped,
 		conds: map[process.Action]process.Condition{
-			process.ActionStart: process.OnPluginEvent{EventName: testGNSSRecovered},
+			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
 		},
 	})
 	ct.Start()
 
-	ct.SendPluginEvent(ntpfailover, testGNSSRecovered)
+	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 
 	assert.Eventually(t, func() bool { return phc2sys.Starts() == 1 }, 2*time.Second, 10*time.Millisecond)
 }
@@ -482,14 +481,14 @@ func TestEvalActions_StartStopChronyD(t *testing.T) {
 		name:  "chronyd",
 		state: process.Created,
 		conds: map[process.Action]process.Condition{
-			process.ActionStart: process.OnPluginEvent{EventName: testGNSSFailover},
-			process.ActionStop:  process.OnPluginEvent{EventName: testGNSSRecovered},
+			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssFailoverEventName},
+			process.ActionStop:  process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
 		},
 	})
 
 	ct.StartPM()
 
-	ct.SendPluginEvent(ntpfailover, testGNSSFailover)
+	ct.SendPluginEvent(ntpfailover, generic.GnssFailoverEventName)
 	select {
 	case <-ct.pm.eventsOut:
 	case <-time.After(2 * time.Second):
@@ -499,7 +498,7 @@ func TestEvalActions_StartStopChronyD(t *testing.T) {
 	assert.Equal(t, 0, chronyd.stops)
 	assert.Equal(t, process.Running, chronyd.state)
 
-	ct.SendPluginEvent(ntpfailover, testGNSSRecovered)
+	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 	select {
 	case <-ct.pm.eventsOut:
 	case <-time.After(2 * time.Second):
@@ -510,7 +509,7 @@ func TestEvalActions_StartStopChronyD(t *testing.T) {
 	assert.Equal(t, process.Stopped, chronyd.state)
 
 	// Do it a second time to make sure it can handle a cycles
-	ct.SendPluginEvent(ntpfailover, testGNSSFailover)
+	ct.SendPluginEvent(ntpfailover, generic.GnssFailoverEventName)
 	select {
 	case <-ct.pm.eventsOut:
 	case <-time.After(2 * time.Second):
@@ -520,7 +519,7 @@ func TestEvalActions_StartStopChronyD(t *testing.T) {
 	assert.Equal(t, 1, chronyd.stops)
 	assert.Equal(t, process.Running, chronyd.state)
 
-	ct.SendPluginEvent(ntpfailover, testGNSSRecovered)
+	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 	select {
 	case <-ct.pm.eventsOut:
 	case <-time.After(2 * time.Second):
@@ -537,12 +536,12 @@ func TestEvalActions_StartNotCheckedWhenRunning(t *testing.T) {
 		name:  phc2sysProcessName,
 		state: process.Running,
 		conds: map[process.Action]process.Condition{
-			process.ActionStart: process.OnPluginEvent{EventName: testGNSSRecovered},
+			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
 		},
 	})
 	ct.StartPM()
 
-	ct.SendPluginEvent(ntpfailover, testGNSSRecovered)
+	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 	select {
 	case <-ct.pm.eventsOut:
 	case <-time.After(2 * time.Second):
@@ -557,15 +556,15 @@ func TestEvalActions_StartOnlyWhenStopped(t *testing.T) {
 		name:  "chronyd",
 		state: process.Running,
 		conds: map[process.Action]process.Condition{
-			process.ActionStart: process.OnPluginEvent{EventName: testGNSSFailover},
-			process.ActionStop:  process.OnPluginEvent{EventName: testGNSSRecovered},
+			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssFailoverEventName},
+			process.ActionStop:  process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
 		},
 	})
 	chronyd.state = process.Running
 	ct.pm.process = append(ct.pm.process, chronyd)
 	ct.StartPM()
 
-	ct.SendPluginEvent(ntpfailover, testGNSSFailover)
+	ct.SendPluginEvent(ntpfailover, generic.GnssFailoverEventName)
 	select {
 	case <-ct.pm.eventsOut:
 	case <-time.After(2 * time.Second):
@@ -580,7 +579,7 @@ func TestEvalActions_NoActionWithoutCondition(t *testing.T) {
 	stub := ct.AddProcess(&stubProcess{name: ptp4lProcessName, state: process.Running})
 	ct.StartPM()
 
-	ct.SendPluginEvent(ntpfailover, testGNSSFailover)
+	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 	select {
 	case <-ct.pm.eventsOut:
 	case <-time.After(2 * time.Second):
@@ -596,8 +595,8 @@ func TestEvalActions_FailOverStart(t *testing.T) {
 		name:  phc2sysProcessName,
 		state: process.Created,
 		conds: map[process.Action]process.Condition{
-			process.ActionStart: process.OnPluginEvent{EventName: testGNSSRecovered},
-			process.ActionStop:  process.OnPluginEvent{EventName: testGNSSFailover},
+			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
+			process.ActionStop:  process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
 		},
 	}
 
@@ -612,7 +611,7 @@ func TestEvalActions_FailOverStart(t *testing.T) {
 
 	pm.StartProcesses(ctx)
 	assert.Equal(t, phc2sys.starts, 0, "phc2sys should start")
-	inbound <- event.PluginEvent("ntpfailover", testGNSSRecovered)
+	inbound <- event.PluginEvent("ntpfailover", generic.GnssRecoveredEventName)
 	select {
 	case <-handler:
 	case <-time.After(2 * time.Second):
@@ -627,23 +626,23 @@ func TestEvalActions_FullFailoverFlow(t *testing.T) {
 		name:  phc2sysProcessName,
 		state: process.Running,
 		conds: map[process.Action]process.Condition{
-			process.ActionStart: process.OnPluginEvent{EventName: testGNSSRecovered},
-			process.ActionStop:  process.OnPluginEvent{EventName: testGNSSFailover},
+			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
+			process.ActionStop:  process.OnPluginEvent{EventName: generic.GnssFailoverEventName},
 		},
 	})
 	chronyd := ct.AddProcess(&stubProcess{
 		name:  "chronyd",
 		state: process.Created,
 		conds: map[process.Action]process.Condition{
-			process.ActionStart: process.OnPluginEvent{EventName: testGNSSFailover},
-			process.ActionStop:  process.OnPluginEvent{EventName: testGNSSRecovered},
+			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssFailoverEventName},
+			process.ActionStop:  process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
 		},
 	})
 	ct.pm.process = append(ct.pm.process, chronyd)
 	ct.StartPM()
 
 	// Failover: stop phc2sys + Start chronyd
-	ct.SendPluginEvent(ntpfailover, testGNSSFailover)
+	ct.SendPluginEvent(ntpfailover, generic.GnssFailoverEventName)
 	select {
 	case <-ct.pm.eventsOut:
 	case <-time.After(2 * time.Second):
@@ -655,7 +654,7 @@ func TestEvalActions_FullFailoverFlow(t *testing.T) {
 	phc2sys.state = process.Stopped
 
 	// Recovery: start phc2sys + Stop chronyd
-	ct.SendPluginEvent(ntpfailover, testGNSSRecovered)
+	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 	assert.Eventually(t, func() bool { return phc2sys.Starts() == 1 }, 2*time.Second, 10*time.Millisecond)
 	select {
 	case <-ct.pm.eventsOut:
@@ -1140,7 +1139,7 @@ func TestUnlock_Failover_Phc2sysAndChronyd(t *testing.T) {
 	ct.StartPM()
 
 	// Failover event triggers stop on phc2sys
-	ct.SendPluginEvent(ntpfailover, testGNSSFailover)
+	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 	select {
 	case <-ct.pm.eventsOut:
 	case <-time.After(2 * time.Second):
@@ -1148,7 +1147,7 @@ func TestUnlock_Failover_Phc2sysAndChronyd(t *testing.T) {
 	}
 
 	// Recovery event triggers start on phc2sys
-	ct.SendPluginEvent(ntpfailover, testGNSSRecovered)
+	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 	assert.Eventually(t, func() bool { return phc2sysStub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond,
 		"phc2sys must start when gnss_recovered event arrives")
 

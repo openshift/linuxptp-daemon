@@ -380,7 +380,7 @@ func ProcessStatusEvent(source EventSource, cfgName string, clockType ClockType,
 	}
 }
 
-// PluginEvent creates an event emitted by a plugin (e.g. "gnss_failover", "gnss_recovered").
+// PluginEvent creates an event emitted by a plugin.
 func PluginEvent(source EventSource, eventName string) Event {
 	return Event{
 		Source: source,
