@@ -397,7 +397,7 @@ func (p *ptpProcess) run() {
 		}
 
 		glog.Infof("Starting %s...", p.name)
-		glog.Infof("%s cmd: %+v", p.name, cmd)
+		glog.Infof("%s cmd: %s", p.name, p.cmd)
 
 		cmdReader, err := cmd.StdoutPipe()
 		if err != nil {

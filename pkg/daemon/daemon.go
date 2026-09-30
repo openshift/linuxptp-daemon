@@ -1019,12 +1019,15 @@ func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *p
 
 	gpsdProcess := NewGpsdProcess(dprocess.gnssSerialPort, gmInterface, dprocess.messageTag, gnssInitCmds, gnssResultsFn, nodeProfile, dn.processManager.eventsIn, processConfigFor(dprocess, dprocess.clockType, dn.processManager.eventsIn))
 	dprocess.depProcess = append(dprocess.depProcess, gpsdProcess)
+
 	// init gpspipe
-	gpsPipeProcess := NewGpsPipeProcess(dprocess.messageTag, nodeProfile, dn.processManager.eventsIn)
+	gpsPipeProcess := NewGpsPipeProcess(dprocess.messageTag, nodeProfile, dn.processManager.eventsIn, dprocess.configName)
 	dprocess.depProcess = append(dprocess.depProcess, gpsPipeProcess)
+
+	// Ts2phc startup condition
 	dprocess.conditions = map[process.Action]process.Condition{
 		process.ActionStart: process.OnProcessUp{
-			Source:     event.GPSD,
+			Source:     event.GPSPIPE,
 			ConfigName: dprocess.configName,
 		},
 	}

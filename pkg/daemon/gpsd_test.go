@@ -8,7 +8,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
@@ -306,10 +305,6 @@ func TestNewGpsdProcessStoresProcessConfig(t *testing.T) {
 	g.offset = 9
 	assert.Equal(t, int64(100), g.processConfig.GMThreshold.Max)
 	assert.True(t, g.isOffsetInRange(), "offset 9 must be in range when Max is 100")
-	up, ok := g.Conditions()[process.ActionStart].(process.OnProcessUp)
-	require.True(t, ok)
-	assert.Equal(t, event.GPSPIPE, up.Source)
-	assert.Equal(t, cfg.ConfigName, up.ConfigName)
 }
 
 func TestProcessConfigForCopiesThresholds(t *testing.T) {

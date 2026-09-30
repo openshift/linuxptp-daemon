@@ -48,7 +48,7 @@ type GpsPipe struct {
 }
 
 // NewGpsPipeProcess creates a new GpsPipe process instance.
-func NewGpsPipeProcess(messageTag string, nodeProfile *ptpv1.PtpProfile, eventCh chan event.Event) process.Process {
+func NewGpsPipeProcess(messageTag string, nodeProfile *ptpv1.PtpProfile, eventCh chan event.Event, gpsdConfig string) process.Process {
 	cmdLine := addScheduling(nodeProfile, fmt.Sprintf("/usr/local/bin/gpspipe -v -R -l -o %s", GPSPIPE_SERIALPORT))
 	args := strings.Split(cmdLine, " ")
 
@@ -60,7 +60,12 @@ func NewGpsPipeProcess(messageTag string, nodeProfile *ptpv1.PtpProfile, eventCh
 		messageTag: messageTag,
 		profile:    nodeProfile,
 		eventCh:    eventCh,
-		conditions: map[process.Action]process.Condition{},
+		conditions: map[process.Action]process.Condition{
+			process.ActionStart: process.OnProcessUp{
+				Source:     event.GPSD,
+				ConfigName: gpsdConfig,
+			},
+		},
 	}
 	return gp
 }
@@ -220,7 +225,7 @@ func (gp *GpsPipe) run() {
 		}
 
 		glog.Infof("Starting %s...", gp.Name())
-		glog.Infof("%s cmd: %+v", gp.Name(), cmd)
+		glog.Infof("%s cmd: %s", gp.Name(), gp.cmdLine)
 		cmd.SetStderr(os.Stderr)
 
 		err := cmd.Start()

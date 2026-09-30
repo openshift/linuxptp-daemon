@@ -195,7 +195,7 @@ func TestGpsdCrashDead(t *testing.T) {
 
 func TestGpspipeNilCmdNoPanic(t *testing.T) {
 	ch := make(chan event.Event, 8)
-	gp := NewTestGpsPipeProcess("", ch, nil, "")
+	gp := NewTestGpsPipeProcess("", ch, nil, "", "")
 	require.NotPanics(t, func() {
 		require.NoError(t, gp.Start(context.Background()))
 	})
@@ -204,7 +204,7 @@ func TestGpspipeNilCmdNoPanic(t *testing.T) {
 }
 
 func TestGpspipeStartGates(t *testing.T) {
-	gp := NewTestGpsPipeProcess("", nil, nil, "")
+	gp := NewTestGpsPipeProcess("", nil, nil, "", "")
 	gp.setState(process.Starting)
 	require.NoError(t, gp.Start(context.Background()))
 	assert.Equal(t, process.Starting, gp.State())

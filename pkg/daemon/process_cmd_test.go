@@ -59,6 +59,7 @@ func (m *MockCmd) Signal(_ os.Signal) error {
 
 func (m *MockCmd) Pid() int          { return m.pid }
 func (m *MockCmd) Clone() ProcessCmd { return NewMockCmd() }
+func (m *MockCmd) String() string    { return "MockCmd" }
 
 // DeadMockCmd is a MockCmd variant that exits immediately on Wait,
 // simulating a process that crashes right after Start.

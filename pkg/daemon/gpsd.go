@@ -98,12 +98,7 @@ func NewGpsdProcess(serialPort string, gmInterface string, messageTag string, gn
 		eventCh:       eventCh,
 		processConfig: processCfg,
 		profile:       nodeProfile,
-		conditions: map[process.Action]process.Condition{
-			process.ActionStart: process.OnProcessUp{
-				Source:     event.GPSPIPE,
-				ConfigName: processCfg.ConfigName,
-			},
-		},
+		conditions:    map[process.Action]process.Condition{},
 	}
 }
 
@@ -259,7 +254,7 @@ func (g *GPSD) run() {
 		}
 
 		glog.Infof("Starting %s...", g.Name())
-		glog.Infof("%s cmd: %+v", g.Name(), cmd)
+		glog.Infof("%s cmd: %s", g.Name(), g.cmdLine)
 		cmd.SetStderr(&filteringStderrWriter{})
 		if resetErr := g.resetSerialPort(g.monitorCtx); resetErr != nil {
 			glog.Warningf("gpsd: proceeding with start despite serial port reset failure: %v", resetErr)

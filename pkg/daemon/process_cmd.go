@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // ProcessCmd is the interface used by run()/Stop() on types that exec a child.
@@ -17,6 +18,7 @@ type ProcessCmd interface {
 	Signal(sig os.Signal) error
 	Pid() int
 	Clone() ProcessCmd
+	String() string
 }
 
 // ExecCmd wraps *exec.Cmd to satisfy ProcessCmd.
@@ -56,4 +58,8 @@ func (e *ExecCmd) Clone() ProcessCmd {
 		return e
 	}
 	return NewExecCmd(exec.Command(e.cmd.Args[0], e.cmd.Args[1:]...))
+}
+
+func (e *ExecCmd) String() string {
+	return strings.Join(e.cmd.Args, " ")
 }
