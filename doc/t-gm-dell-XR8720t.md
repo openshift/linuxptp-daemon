@@ -29,7 +29,7 @@ spec:
   profile:
     - name: "grandmaster"
       ptp4lOpts: "-2 --summary_interval -4"
-      phc2sysOpts: ""-r -u 0 -m -w -N 8 -R 16 -n 24 -s eno8703"
+      phc2sysOpts: "-r -u 0 -m -N 8 -R 16 -n 24 -s eno8703"
       ptpSchedulingPolicy: SCHED_FIFO
       ptpSchedulingPriority: 10
       ptpSettings:
@@ -234,9 +234,10 @@ spec:
           hardwareSpecificDefinitions: dell/XR8720t
           dpll:
             holdoverParameters:
-              maxInSpecOffset: 14400
-              localMaxHoldoverOffset: 1500
-              localHoldoverTimeout: 1500
+              maxInSpecOffset: 100
+              localMaxHoldoverOffset: 100
+              # This is a 4hr holdover.  Set to 28800 for 8hr
+              localHoldoverTimeout: 14400
         - name: cf1
           hardwareSpecificDefinitions: intel/e830
           dpll:
@@ -255,9 +256,10 @@ spec:
                 antennaVoltage: true
                 constellations:
                   - GPS
+                  - Galileo
                 survey:
-                  observationTime: 600
-                  accuracy: 50000
+                  observationTime: 86400
+                  accuracy: 1
   relatedPtpProfileName: grandmaster
 ```
 
