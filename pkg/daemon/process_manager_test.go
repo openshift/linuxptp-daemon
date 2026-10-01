@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -282,6 +283,158 @@ func (c *ConditionsTester) SendOffsetClockSamples(source event.EventSource, cloc
 	for i := 0; i < count; i++ {
 		c.SendOffsetClock(source, clockID, cfgName, state, offset)
 	}
+}
+
+func applyProfilesWithStubProcesses(t *testing.T, ct *ConditionsTester, files ...string) ([]*stubProcess, []ptpv1.PtpProfile) {
+	t.Helper()
+	RegisterMetrics("test-node")
+
+	profiles := make([]ptpv1.PtpProfile, len(files))
+	for i, file := range files {
+		profile, err := loadProfile("testdata/" + file)
+		require.NoError(t, err)
+		profile.PtpSettings["unitTest"] = t.TempDir()
+		profiles[i] = *profile
+	}
+
+	dn := NewDaemonForTests(&ReadyTracker{}, ct.pm)
+	dn.processManager.clockMgr = ct.cm
+	dn.processManager.daemon = dn
+	ct.dn = dn
+	t.Cleanup(dn.cancel)
+
+	osClockConfigs := NewOSClockConfigs(profiles)
+	controlledRunIDs := reconcileRelatedProfiles(profiles)
+	for runID := range profiles {
+		profile := &profiles[runID]
+		if controlledID, ok := controlledRunIDs[*profile.Name]; ok {
+			profile.PtpSettings["controlledId"] = strconv.Itoa(controlledID)
+		}
+		require.NoError(t, dn.applyNodePtpProfile(runID, profile, &osClockConfigs))
+	}
+
+	realProcesses := ct.pm.process
+	ct.pm.process = nil
+	var processes []*stubProcess
+	for _, p := range realProcesses {
+		root := ct.AddProcess(p)
+		collectStubProcesses(root, &processes, make(map[*stubProcess]bool))
+	}
+	return processes, profiles
+}
+
+func collectStubProcesses(p *stubProcess, out *[]*stubProcess, seen map[*stubProcess]bool) {
+	if p == nil || seen[p] {
+		return
+	}
+	seen[p] = true
+	*out = append(*out, p)
+	for _, dep := range p.deps {
+		if stub, ok := dep.(*stubProcess); ok {
+			collectStubProcesses(stub, out, seen)
+		}
+	}
+}
+
+func assertRejectedStartupOffsets(t *testing.T, ct *ConditionsTester, p *stubProcess, source event.EventSource, cfgName string) {
+	t.Helper()
+	ct.SendOffset(event.GPSD, cfgName, event.PTP_LOCKED, 0)
+	ct.SendOffset(source, cfgName, event.PTP_FREERUN, 0)
+	ct.SendOffset(source, cfgName, event.PTP_LOCKED, int64(1<<63-1))
+	assert.Zero(t, p.Starts(), "%s started on wrong-source, unlocked, or out-of-range samples", p.Name())
+}
+
+func findStubProcess(processes []*stubProcess, name string) *stubProcess {
+	for _, p := range processes {
+		if p.Name() == name {
+			return p
+		}
+	}
+	return nil
+}
+
+func findStubProcessForProfile(processes []*stubProcess, name, profileName string) *stubProcess {
+	for _, p := range processes {
+		if p.Name() == name && p.Profile() != nil && p.Profile().Name != nil && *p.Profile().Name == profileName {
+			return p
+		}
+	}
+	return nil
+}
+
+func assertConstructedProcessesRunning(t *testing.T, processes []*stubProcess) {
+	t.Helper()
+	require.NotEmpty(t, processes, "profile must construct processes")
+	assert.Eventually(t, func() bool {
+		for _, p := range processes {
+			if p.State() != process.Running {
+				return false
+			}
+		}
+		return true
+	}, 2*time.Second, 10*time.Millisecond, "constructed process graph did not start")
+	for _, p := range processes {
+		assert.Equal(t, 1, p.Starts(), "%s should start exactly once", p.Name())
+	}
+}
+
+func TestApplyNodePtpProfileStartupConditions(t *testing.T) {
+	t.Run("T-GM", func(t *testing.T) {
+		ct := NewCondiitonsTester(t, event.GM)
+		processes, _ := applyProfilesWithStubProcesses(t, ct, "profile-tgm.yaml")
+		ts2phc := findStubProcess(processes, ts2phcProcessName)
+		phc2sys := findStubProcess(processes, phc2sysProcessName)
+		require.NotNil(t, ts2phc)
+		require.NotNil(t, phc2sys)
+
+		ct.StartProcesses()
+		ct.StartCM()
+		assert.Zero(t, ts2phc.Starts(), "T-GM ts2phc must wait for its constructed process-up condition")
+		gpsd := findStubProcess(processes, GPSD_PROCESSNAME)
+		gpspipe := findStubProcess(processes, GPSPIPE_PROCESSNAME)
+		require.NotNil(t, gpsd)
+		require.NotNil(t, gpspipe)
+		ct.SendProcessStatus(event.GPSD, gpsd.ConfigName(), PtpProcessUp)
+		ct.SendProcessStatus(event.GPSPIPE, gpspipe.ConfigName(), PtpProcessUp)
+		assert.Eventually(t, func() bool { return ts2phc.State() == process.Running }, 2*time.Second, 10*time.Millisecond)
+
+		assertRejectedStartupOffsets(t, ct, phc2sys, event.TS2PHC, ts2phc.ConfigName())
+		ct.SendOffsetSamples(event.TS2PHC, ts2phc.ConfigName(), event.PTP_LOCKED, 0, 5)
+		assertConstructedProcessesRunning(t, processes)
+	})
+
+	t.Run("T-BC", func(t *testing.T) {
+		ct := NewCondiitonsTester(t, event.TBC)
+		processes, profiles := applyProfilesWithStubProcesses(t, ct, "profile-tbc-tt.yaml", "profile-tbc-tr.yaml")
+		ttProfileName := *profiles[0].Name
+		trProfileName := *profiles[1].Name
+		phc2sys := findStubProcessForProfile(processes, phc2sysProcessName, trProfileName)
+		ts2phc := findStubProcessForProfile(processes, ts2phcProcessName, trProfileName)
+		ptp4l := findStubProcessForProfile(processes, ptp4lProcessName, trProfileName)
+		require.NotNil(t, phc2sys)
+		require.NotNil(t, ts2phc)
+		require.NotNil(t, ptp4l)
+		require.NotNil(t, findStubProcessForProfile(processes, ptp4lProcessName, ttProfileName))
+
+		ct.StartProcesses()
+		ct.StartCM()
+		assert.Zero(t, phc2sys.Starts())
+		assert.Zero(t, ts2phc.Starts())
+		for _, ptp4lProcess := range processes {
+			if ptp4lProcess.Name() == ptp4lProcessName {
+				ct.SendProcessStatus(event.PTP4l, ptp4lProcess.ConfigName(), PtpProcessUp)
+			}
+		}
+
+		assertRejectedStartupOffsets(t, ct, phc2sys, event.PTP4l, ptp4l.ConfigName())
+		ct.SendOffsetSamples(event.PTP4l, ptp4l.ConfigName(), event.PTP_LOCKED, 0, 5)
+		assert.Eventually(t, func() bool { return phc2sys.State() == process.Running }, 2*time.Second, 10*time.Millisecond)
+
+		assertRejectedStartupOffsets(t, ct, ts2phc, event.PHC2SYS, ptp4l.ConfigName())
+		ct.SendOffsetSamples(event.PTP4l, ptp4l.ConfigName(), event.PTP_LOCKED, 0, 5)
+		ct.SendOffsetSamples(event.PHC2SYS, ptp4l.ConfigName(), event.PTP_LOCKED, 0, 5)
+		assertConstructedProcessesRunning(t, processes)
+	})
 }
 
 func TestForwardEvents_HopsEvent(t *testing.T) {
