@@ -284,6 +284,43 @@ func resolvePluginDevices(r *InterfaceResolver, profile *ptpv1.PtpProfile, profi
 			}
 		}
 
+		// Resolve interface names in the "interconnections" array. Each element
+		// is an object with an "id" field and an optional comma-separated
+		// "upstreamPort" field, both of which reference interface names.
+		if interconnections, ok := rawOpts["interconnections"].([]any); ok {
+			for i, ic := range interconnections {
+				elem, isMap := ic.(map[string]any)
+				if !isMap {
+					glog.Warningf("Profile %s: plugin %s interconnections[%d] is not an object, skipping", profileName, pluginName, i)
+					continue
+				}
+				if id, isStr := elem["id"].(string); isStr && id != "" {
+					if resolved, remapped := r.Resolve(id); remapped {
+						elem["id"] = resolved
+						changed = true
+						glog.Infof("Profile %s: plugin %s interconnections[%d] id %q -> %q", profileName, pluginName, i, id, resolved)
+					}
+				}
+				// upstreamPort can be comma-separated, mirroring PtpSettings["upstreamPort"]
+				if val, isStr := elem["upstreamPort"].(string); isStr && val != "" {
+					ports := strings.Split(val, ",")
+					portsChanged := false
+					for pi, port := range ports {
+						port = strings.TrimSpace(port)
+						if resolved, remapped := r.Resolve(port); remapped {
+							glog.Infof("Profile %s: plugin %s interconnections[%d] upstreamPort port %q -> %q", profileName, pluginName, i, port, resolved)
+							ports[pi] = resolved
+							portsChanged = true
+						}
+					}
+					if portsChanged {
+						elem["upstreamPort"] = strings.Join(ports, ",")
+						changed = true
+					}
+				}
+			}
+		}
+
 		if changed {
 			newRaw, err := json.Marshal(rawOpts)
 			if err != nil {
