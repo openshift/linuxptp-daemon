@@ -122,10 +122,14 @@ func (pm *ProcessManager) processEvents(ctx context.Context) {
 				return
 			}
 			ps, isPS := ev.Data.(*event.ProcessStatusData)
-			if isPS && ps.Status == PtpProcessDown {
-				pm.handleProcessDown(ctx, ev)
-			}
-			if !isPS {
+			if isPS {
+				if p := pm.findProcess(ev); p != nil {
+					UpdateProcessStatusMetrics(p.Name(), p.ConfigName(), ps.Status)
+				}
+				if ps.Status == PtpProcessDown {
+					pm.handleProcessDown(ctx, ev)
+				}
+			} else {
 				pm.eventsOut <- ev
 			}
 			pm.evalActions(ctx, ev)
@@ -243,13 +247,6 @@ func (pm *ProcessManager) handleProcessDown(ctx context.Context, ev event.Event)
 		glog.V(2).Infof("ProcessManager: process_status down unmatched source=%s cfg=%s iface=%s",
 			ev.Source, ev.CfgName, ev.IFace)
 		return
-	}
-
-	switch p.State() {
-	case process.Running:
-		UpdateProcessStatusMetrics(p.Name(), p.ConfigName(), PtpProcessUp)
-	case process.Stopped, process.Dead:
-		UpdateProcessStatusMetrics(p.Name(), p.ConfigName(), PtpProcessDown)
 	}
 
 	if p.State() != process.Dead {

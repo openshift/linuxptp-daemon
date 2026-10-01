@@ -14,6 +14,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -489,6 +490,28 @@ func TestForwardEvents_ProcessStatusDownDeadRestarts(t *testing.T) {
 
 	assert.Eventually(t, func() bool { return stub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond)
 	assert.Empty(t, ct.pm.eventsOut, "ProcessStatusData must not be forwarded to handler")
+}
+
+func TestProcessStatusEventsUpdateMetrics(t *testing.T) {
+	const configName = "phc2sys.999.config"
+	ct := NewCondiitonsTester(t, event.BC)
+	ct.AddProcess(&stubProcess{name: phc2sysProcessName, cfgName: configName, state: process.Running})
+	ct.StartPM()
+
+	status := ProcessStatus.WithLabelValues(phc2sysProcessName, NodeName, configName)
+	restarts := ProcessRestartCount.WithLabelValues(phc2sysProcessName, NodeName, configName)
+	t.Cleanup(func() {
+		ProcessStatus.DeleteLabelValues(phc2sysProcessName, NodeName, configName)
+		ProcessRestartCount.DeleteLabelValues(phc2sysProcessName, NodeName, configName)
+	})
+
+	ct.SendProcessStatus(event.PHC2SYS, configName, PtpProcessUp)
+	require.Eventually(t, func() bool { return testutil.ToFloat64(status) == 1 }, time.Second, time.Millisecond)
+	assert.Equal(t, float64(1), testutil.ToFloat64(restarts))
+
+	ct.SendProcessStatus(event.PHC2SYS, configName, PtpProcessDown)
+	require.Eventually(t, func() bool { return testutil.ToFloat64(status) == 0 }, time.Second, time.Millisecond)
+	assert.Equal(t, float64(1), testutil.ToFloat64(restarts))
 }
 
 func TestForwardEvents_ProcessStatusDownStoppedNoRestart(t *testing.T) {
