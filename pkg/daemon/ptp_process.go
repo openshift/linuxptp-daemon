@@ -1219,16 +1219,18 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	if p.conditions == nil {
 		p.conditions = map[process.Action]process.Condition{}
 	}
-	startCond := phc2sysOffsetStartCondition(env)
-	if env.hasFailover {
-		startCond = process.Any{Conditions: []process.Condition{
-			startCond,
-			process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
-		}}
-		p.conditions[process.ActionStop] = process.OnPluginEvent{EventName: generic.GnssFailoverEventName}
+	if env.clockType == event.GM || env.clockType == event.TBC {
+		startCond := phc2sysOffsetStartCondition(env)
+		if env.clockType == event.GM && env.hasFailover {
+			startCond = process.Any{Conditions: []process.Condition{
+				startCond,
+				process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
+			}}
+			p.conditions[process.ActionStop] = process.OnPluginEvent{EventName: generic.GnssFailoverEventName}
+		}
+		p.conditions[process.ActionStart] = startCond
+		glog.Infof("phc2sys delayed start: ActionStart=%s", startCond)
 	}
-	p.conditions[process.ActionStart] = startCond
-	glog.Infof("phc2sys delayed start: ActionStart=%s", startCond)
 	return p, nil
 }
 

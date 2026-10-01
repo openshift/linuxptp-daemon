@@ -1217,35 +1217,6 @@ func TestUnlock_TGM_Phc2sys(t *testing.T) {
 		"T-GM phc2sys must unlock and start once ts2phc lock is confirmed")
 }
 
-func TestUnlock_BC_Phc2sys(t *testing.T) {
-	ct := NewCondiitonsTester(t, event.BC, ptp4lConfig)
-
-	profileName := "test-bc-phc2sys"
-	profile := &ptpv1.PtpProfile{
-		Name: &profileName,
-		PtpSettings: map[string]string{
-			clockTypeSetting: string(event.BC),
-		},
-		Phc2sysConf: stringPtr("[global]\n"),
-		Phc2sysOpts: stringPtr("-a -r"),
-	}
-	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
-
-	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.BC, &osClockConfigs))
-	require.NoError(t, err)
-	stub := ct.AddProcess(realPhc2sys)
-
-	ct.StartProcesses()
-	assert.Equal(t, 0, stub.Starts(), "BC phc2sys must not start immediately")
-
-	ct.Start()
-
-	// 5 in-spec samples (> 3) -> unlocks!
-	ct.SendOffsetSamples(event.PTP4l, ptp4lConfig, event.PTP_LOCKED, 10000, 5)
-	assert.Eventually(t, func() bool { return stub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond,
-		"BC phc2sys must unlock and start once ptp4l lock is confirmed")
-}
-
 func TestUnlock_HA_Phc2sys(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.BC, ptp4lConfig, testPtp4l1Config)
 
