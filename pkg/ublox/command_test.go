@@ -496,7 +496,15 @@ func TestBuildInitCommandsInitialConfig(t *testing.T) {
 		}
 		assert.Equal(t, CommandList{
 			{Args: []string{"-z", "CFG-HW-ANT_CFG_VOLTCTRL,1"}},
-			{Args: []string{"-e", "GPS", "-e", "GALILEO", "-e", "GLONASS", "-e", "BEIDOU", "-e", "SBAS"}},
+			{Args: []string{
+				"-z", "CFG-SIGNAL-GPS_ENA,1",
+				"-z", "CFG-SIGNAL-GAL_ENA,1",
+				"-z", "CFG-SIGNAL-GLO_ENA,1",
+				"-z", "CFG-SIGNAL-BDS_ENA,1",
+				"-z", "CFG-SIGNAL-SBAS_ENA,1",
+				"-z", "CFG-SIGNAL-QZSS_ENA,0",
+				"-z", "CFG-SIGNAL-NAVIC_ENA,0",
+			}},
 			{Args: []string{"-t", "-w", "5", "-v", "1", "-e", "SURVEYIN,600,50000"}, ReportOutput: true},
 			{Args: []string{"-p", "MON-RF"}, ReportOutput: true},
 		}, BuildInitCommands(testProtoVersion, config))
@@ -505,7 +513,15 @@ func TestBuildInitCommandsInitialConfig(t *testing.T) {
 	t.Run("empty settings disable all constellations", func(t *testing.T) {
 		assert.Equal(t, CommandList{
 			{Args: []string{"-z", "CFG-HW-ANT_CFG_VOLTCTRL,0"}},
-			{Args: []string{"-d", "GPS", "-d", "GALILEO", "-d", "GLONASS", "-d", "BEIDOU", "-d", "SBAS"}},
+			{Args: []string{
+				"-z", "CFG-SIGNAL-GPS_ENA,1",
+				"-z", "CFG-SIGNAL-QZSS_ENA,1",
+				"-z", "CFG-SIGNAL-GAL_ENA,1",
+				"-z", "CFG-SIGNAL-GLO_ENA,0",
+				"-z", "CFG-SIGNAL-BDS_ENA,0",
+				"-z", "CFG-SIGNAL-SBAS_ENA,0",
+				"-z", "CFG-SIGNAL-NAVIC_ENA,0",
+			}},
 		}, BuildInitCommands(testProtoVersion, &InitConfig{}))
 	})
 }
