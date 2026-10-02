@@ -135,6 +135,30 @@ func TestBuildConstellationCommand(t *testing.T) {
 	}
 }
 
+func TestBuildInitCommandsSurveyInSupportsProtocolVersions(t *testing.T) {
+	config := &InitConfig{
+		SurveyIn: &SurveyInConfig{
+			ObservationTime: 600,
+			AccuracyMeters:  5,
+		},
+	}
+	want := CommandList{
+		{Args: []string{
+			"-z", "CFG-TMODE-SVIN_MIN_DUR,600",
+			"-z", "CFG-TMODE-SVIN_ACC_LIMIT,50000",
+			"-z", surveyInModeCommand,
+		}},
+		{Args: []string{"-p", surveyInPollType}, ReportOutput: true},
+	}
+
+	for _, protoVersion := range []string{ProtoVersion29dot20, ProtoVersion29dot25} {
+		t.Run(protoVersion, func(t *testing.T) {
+			cmds := BuildInitCommands(protoVersion, config)
+			assert.Equal(t, want, cmds[len(cmds)-len(want):])
+		})
+	}
+}
+
 func TestBuildInitCommands(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -187,8 +211,11 @@ func TestBuildInitCommands(t *testing.T) {
 					"-z", NAVICDisabled,
 				}},
 				{Args: []string{
-					"-t", "-w", "5", "-v", "1", "-e", "SURVEYIN,600,50000",
-				}, ReportOutput: true},
+					"-z", "CFG-TMODE-SVIN_MIN_DUR,600",
+					"-z", "CFG-TMODE-SVIN_ACC_LIMIT,50000",
+					"-z", surveyInModeCommand,
+				}},
+				{Args: []string{"-p", surveyInPollType}, ReportOutput: true},
 				{Args: []string{"-p", "MON-RF"}, ReportOutput: true},
 			},
 		},

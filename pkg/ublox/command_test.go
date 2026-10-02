@@ -505,7 +505,12 @@ func TestBuildInitCommandsInitialConfig(t *testing.T) {
 				"-z", "CFG-SIGNAL-QZSS_ENA,0",
 				"-z", "CFG-SIGNAL-NAVIC_ENA,0",
 			}},
-			{Args: []string{"-t", "-w", "5", "-v", "1", "-e", "SURVEYIN,600,50000"}, ReportOutput: true},
+			{Args: []string{
+				"-z", "CFG-TMODE-SVIN_MIN_DUR,600",
+				"-z", "CFG-TMODE-SVIN_ACC_LIMIT,50000",
+				"-z", surveyInModeCommand,
+			}},
+			{Args: []string{"-p", surveyInPollType}, ReportOutput: true},
 			{Args: []string{"-p", "MON-RF"}, ReportOutput: true},
 		}, BuildInitCommands(testProtoVersion, config))
 	})

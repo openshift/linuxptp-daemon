@@ -12,6 +12,9 @@ const (
 	ProtoVersion29dot25 = "29.25"
 	// ProtoVersion29dot20 is 29.20
 	ProtoVersion29dot20 = "29.20"
+
+	surveyInModeCommand = "CFG-TMODE-MODE,1"
+	surveyInPollType    = "TIM-SVIN"
 )
 
 // InitConfig contains the GNSS settings that should be applied before
@@ -97,10 +100,14 @@ func BuildInitCommands(protoVersion string, config *InitConfig) CommandList {
 	}
 
 	if config.SurveyIn != nil && config.SurveyIn.ObservationTime > 0 {
-		cmds = append(cmds, Command{Args: []string{
-			"-t", "-w", "5", "-v", "1", "-e",
-			fmt.Sprintf("SURVEYIN,%d,%d", config.SurveyIn.ObservationTime, config.SurveyIn.AccuracyMeters*10000),
-		}, ReportOutput: true})
+		cmds = append(cmds,
+			Command{Args: []string{
+				"-z", fmt.Sprintf("CFG-TMODE-SVIN_MIN_DUR,%d", config.SurveyIn.ObservationTime),
+				"-z", fmt.Sprintf("CFG-TMODE-SVIN_ACC_LIMIT,%d", config.SurveyIn.AccuracyMeters*10000),
+				"-z", surveyInModeCommand,
+			}},
+			Command{Args: []string{"-p", surveyInPollType}, ReportOutput: true},
+		)
 	}
 	cmds = append(cmds, config.ExtraCommands...)
 	return cmds
