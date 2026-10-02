@@ -558,7 +558,7 @@ func processShouldRun(profile *ptpv1.PtpProfile, processName string) bool {
 		// (Ptp4lOpts != nil && Ptp4lOpts != "") && (Ptp4lConf != nil && Ptp4lConf != "")
 		return true
 	case phc2sysProcessName:
-		return (profile.Phc2sysOpts != nil && *profile.Phc2sysOpts != "") && (profile.Phc2sysConf != nil && *profile.Phc2sysConf != "")
+		return (profile.Phc2sysOpts != nil && *profile.Phc2sysOpts != "") || (profile.Phc2sysConf != nil && *profile.Phc2sysConf != "")
 	case ts2phcProcessName:
 		return (profile.Ts2PhcOpts != nil && *profile.Ts2PhcOpts != "") && (profile.Ts2PhcConf != nil && *profile.Ts2PhcConf != "")
 	case syncEProcessName:
@@ -755,12 +755,6 @@ func printNodeProfile(nodeProfile *ptpv1.PtpProfile) {
 	glog.Infof("------------------------------------")
 }
 
-/*
-update: March 7th 2024
-To support PTP HA phc2sys profile is appended to the end
-since phc2sysOpts needs to collect profile information from applied
-ptpconfig profiles for ptp4l
-*/
 func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, osClockConfigs *OSClockConfigs) error {
 	testDir, test := nodeProfile.PtpSettings["unitTest"]
 	if test {
@@ -781,71 +775,52 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, 
 	var err error
 
 	var clockType event.ClockType
-	profileClockType, profileClockTypefound := (*nodeProfile).PtpSettings["clockType"]
 	var leadingNic string
 	var upstreamPorts []string
-	if profileClockTypefound {
-		switch profileClockType {
-		case TGM:
-			clockType = event.GM
-		case TBC:
-			clockType = event.TBC
-			leadingNic = (*nodeProfile).PtpSettings["leadingInterface"]
-			if portsStr, ok := (*nodeProfile).PtpSettings["upstreamPort"]; ok {
-				upstreamPorts = strings.Split(portsStr, ",")
-			}
-		default:
-			clockType = event.ClockUnset
-		}
-	} else {
-		clockType = event.ClockUnset
-	}
 
-	// If unset default to clock type inferred from ptp4l
-	if clockType == event.ClockUnset {
-		ptp4lOutput := &Ptp4lConf{}
-		// Parsing ptp4l needs to be done here to get the fallback clock type.
-		// Needs to be done outside the loop as we need to guarantee clockType
-		// set before the ts2phcProcessName case where it is used.
-		err = ptp4lOutput.PopulatePtp4lConf(nodeProfile.Ptp4lConf, nodeProfile.Ptp4lOpts)
+	if profileName := getProfileName(nodeProfile); slices.Contains(osClockConfigs.haProfileNames, profileName) {
+		clockType = event.SysClock
+		glog.Info("Skipping Clock Add for HA profile: %s", profileName)
+	} else {
+		clockType, leadingNic, upstreamPorts, err = dn.inspectProfile(nodeProfile)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return err
 		}
-		clockType = ptp4lOutput.clock_type
-	}
 
-	clockCfgName := fmt.Sprintf("ptp4l.%d.config", runID)
-	var c clock.Clock
-	switch clockType {
-	case event.GM:
-		if c, err = clock.NewGM(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
-			return err
-		}
-	case event.TBC:
-		var tbc *clock.TBC
-		if tbc, err = clock.NewTBC(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
-			return err
-		}
-		c = tbc
-		if leadingNic != "" {
-			tbc.SetConfiguredLeadingInterface(leadingNic)
-		}
-	case event.BC:
-		if c, err = clock.NewBC(clockCfgName, false, th); err != nil {
-			return err
-		}
-	case event.OC:
-		if c, err = clock.NewBC(clockCfgName, true, th); err != nil {
-			return err
+		// At some point we may want to have a sysclock object but at the moment it added by
+		// default in the Clock Manager
+		clockCfgName := fmt.Sprintf("ptp4l.%d.config", runID)
+		var c clock.Clock
+		switch clockType {
+		case event.GM:
+			if c, err = clock.NewGM(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
+				return err
+			}
+		case event.TBC:
+			var tbc *clock.TBC
+			if tbc, err = clock.NewTBC(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
+				return err
+			}
+			c = tbc
+			if leadingNic != "" {
+				tbc.SetConfiguredLeadingInterface(leadingNic)
+			}
+		case event.BC:
+			if c, err = clock.NewBC(clockCfgName, false, th); err != nil {
+				return err
+			}
+		case event.OC:
+			if c, err = clock.NewBC(clockCfgName, true, th); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported clock type %q for config %s", clockType, clockCfgName)
 		}
 
-	default:
-		return fmt.Errorf("unsupported clock type %q for config %s", clockType, clockCfgName)
-	}
-
-	if err = dn.processManager.clockMgr.AddClock(c); err != nil {
-		return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
+		if err = dn.processManager.clockMgr.AddClock(c); err != nil {
+			return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
+		}
 	}
 
 	env := ptpProcessEnv{
@@ -919,6 +894,44 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, 
 	dn.populateHAInterfaces(osClockConfigs)
 	glog.Infof("Completed applyNodePtpProfile for profile %s, total processes in manager: %d", *nodeProfile.Name, len(dn.processManager.process))
 	return nil
+}
+
+func (*Daemon) inspectProfile(nodeProfile *ptpv1.PtpProfile) (event.ClockType, string, []string, error) {
+	var clockType event.ClockType
+
+	profileClockType, profileClockTypefound := nodeProfile.PtpSettings["clockType"]
+	var leadingNic string
+	var upstreamPorts []string
+
+	if profileClockTypefound {
+		switch profileClockType {
+		case TGM:
+			clockType = event.GM
+		case TBC:
+			clockType = event.TBC
+			leadingNic = nodeProfile.PtpSettings["leadingInterface"]
+			if portsStr, ok := nodeProfile.PtpSettings["upstreamPort"]; ok {
+				upstreamPorts = strings.Split(portsStr, ",")
+			}
+		default:
+			clockType = event.ClockUnset
+		}
+	} else {
+		clockType = event.ClockUnset
+	}
+	// If unset default to clock type inferred from ptp4l
+	if clockType == event.ClockUnset {
+		ptp4lOutput := &Ptp4lConf{}
+		// Parsing ptp4l needs to be done here to get the fallback clock type.
+		// Needs to be done outside the loop as we need to guarantee clockType
+		// set before the ts2phcProcessName case where it is used.
+		err := ptp4lOutput.PopulatePtp4lConf(nodeProfile.Ptp4lConf, nodeProfile.Ptp4lOpts)
+		if err != nil {
+			return "", "", nil, err
+		}
+		clockType = ptp4lOutput.clock_type
+	}
+	return clockType, leadingNic, upstreamPorts, nil
 }
 
 // Validate that all plugin names in the profile match registered plugins

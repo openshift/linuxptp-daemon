@@ -410,6 +410,51 @@ func Test_applyProfile_TBC(t *testing.T) {
 	}
 }
 
+func Test_applyProfile_DualNICBCHAClockType(t *testing.T) {
+	ct := NewCondiitonsTester(t, event.BC)
+	configDir := configPrefix
+
+	bc1Conf := "[global]\n[ens1f0]\nmasterOnly 0\n[ens1f1]\nmasterOnly 1\n"
+	bc2Conf := "[global]\n[ens2f0]\nmasterOnly 0\n[ens2f1]\nmasterOnly 1\n"
+	bcOpts := "-m"
+	noPtp4l := ""
+	phc2sysOpts := "-a -r -m -l 7 -n 24 "
+	// CI sets phc2sysOpts but leaves phc2sysConf unset on the HA profile.
+	profiles := []ptpv1.PtpProfile{
+		{Name: stringPointer("bc1"), Ptp4lConf: &bc1Conf, Ptp4lOpts: &bcOpts, PtpSettings: map[string]string{"unitTest": configDir}},
+		{Name: stringPointer("bc2"), Ptp4lConf: &bc2Conf, Ptp4lOpts: &bcOpts, PtpSettings: map[string]string{"unitTest": configDir}},
+		{Name: stringPointer("ha"), Ptp4lOpts: &noPtp4l, Phc2sysOpts: &phc2sysOpts,
+			PtpSettings: map[string]string{"unitTest": configDir, PTP_HA_IDENTIFIER: "bc1,bc2"}},
+	}
+
+	dn := NewDaemonForTests(&ReadyTracker{}, ct.pm)
+	t.Cleanup(dn.cancel)
+	osClockConfigs := NewOSClockConfigs(profiles)
+
+	for i := range profiles {
+		require.NoError(t, dn.applyNodePtpProfile(i, &profiles[i], &osClockConfigs))
+	}
+
+	clockTypes := map[string]event.ClockType{}
+	for _, proc := range dn.processManager.process {
+		if ptpProc, ok := proc.(*ptpProcess); ok && ptpProc.nodeProfile != nil {
+			clockTypes[*ptpProc.nodeProfile.Name] = ptpProc.clockType
+		}
+	}
+	assert.Equal(t, event.BC, clockTypes["bc1"])
+	assert.Equal(t, event.BC, clockTypes["bc2"])
+	assert.Equal(t, event.SysClock, clockTypes["ha"], "CI omits Phc2sysConf; HA profile must still be detected")
+	for _, proc := range dn.processManager.process {
+		if ptpProc, ok := proc.(*ptpProcess); ok && ptpProc.Name() == phc2sysProcessName {
+			assert.Equal(t, string(event.SysClock), reportedClockType(ptpProc))
+			assert.Equal(t, process.Immediate{}, process.GetCondition(ptpProc, process.ActionStart, process.Immediate{}))
+			assert.ElementsMatch(t, []string{"ens1f0", "ens1f1"}, ptpProc.haProfile["bc1"])
+			assert.ElementsMatch(t, []string{"ens2f0", "ens2f1"}, ptpProc.haProfile["bc2"])
+			t.Logf("HA phc2sys inferred clock type: %s; NodePtpDevice reports: %s", ptpProc.clockType, reportedClockType(ptpProc))
+		}
+	}
+}
+
 func Test_applyProfile_TGM(t *testing.T) {
 	defer clean(t)
 	mkPath(t)

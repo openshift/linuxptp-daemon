@@ -1202,6 +1202,7 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		env.clockType,
 		env.dn,
 	)
+	p.haProfile = make(map[string][]string)
 	output, opts, err := p.loadProcessConf(env)
 	if err != nil {
 		return nil, err

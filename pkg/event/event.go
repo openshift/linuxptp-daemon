@@ -350,6 +350,8 @@ const (
 	TBC ClockType = "T-BC"
 	// OC ...
 	OC ClockType = "OC"
+	// SysClock only the system clock not a PTP Clock (this is updated by another clock)
+	SysClock ClockType = "SysClock"
 	// ClockUnset ...
 	ClockUnset ClockType = ""
 )
