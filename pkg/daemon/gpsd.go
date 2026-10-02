@@ -48,6 +48,8 @@ type GPSD struct {
 	stopped              bool
 	noFixStateOccurrence int // number of times no fix state has occurred
 	offset               int64
+	lastNavStatus        *ublox.NavStatus
+	lastNavClock         *ublox.NavClock
 	processConfig        config.ProcessConfig
 	gmInterface          string
 	messageTag           string
@@ -73,7 +75,7 @@ type GPSD struct {
 func NewGpsdProcess(serialPort string, gmInterface string, messageTag string, gnssInitCmds ublox.CommandList, gnssResultsFn func(results []string), nodeProfile *ptpv1.PtpProfile, eventCh chan event.Event, processCfg config.ProcessConfig) process.Process {
 	monitorCtx, monitorCancel := context.WithCancel(context.Background())
 
-	cmdLine := fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -G -N %s", GPSD_PROCESSNAME, serialPort)
+	cmdLine := fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -N %s", GPSD_PROCESSNAME, serialPort)
 	cmdLine = addScheduling(nodeProfile, cmdLine)
 	args := strings.Split(cmdLine, " ")
 
@@ -117,6 +119,11 @@ func (g *GPSD) Profile() *ptpv1.PtpProfile {
 	return g.profile
 }
 
+// SerialPort returns the configured GNSS serial port.
+func (g *GPSD) SerialPort() string {
+	return g.serialPort
+}
+
 // ConfigName ...
 func (g *GPSD) ConfigName() string {
 	return g.processConfig.ConfigName
@@ -133,8 +140,12 @@ func (g *GPSD) gnssClockType() event.ClockType {
 }
 
 func (g *GPSD) sendGNSSEvent(ev event.Event) {
+	var ch chan<- event.Event = g.eventCh
+	if ch == nil {
+		ch = g.processConfig.EventChannel
+	}
 	select {
-	case g.eventCh <- ev:
+	case ch <- ev:
 	default:
 		glog.Error("failed to send gnss event to ProcessManager")
 	}
@@ -313,24 +324,24 @@ func (g *GPSD) Start(_ context.Context) error {
 	return nil
 }
 
-// MonitorGNSSEventsWithUblox ... monitor GNSS events with ublox
+// monitorGNSSEventsWithUblox monitors typed GNSS messages from ubxtool.
 func (g *GPSD) monitorGNSSEventsWithUblox() {
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
-		ticker := time.NewTicker(GNSSMONITOR_INTERVAL)
-		defer func() {
-			g.sendGNSSEvent(event.Event{
-				Source:    event.GNSS,
-				CfgName:   g.ConfigName(),
-				ClockType: g.gnssClockType(),
-				Time:      time.Now().UnixMilli(),
-				Reset:     true,
-			})
-			ticker.Stop()
-		}()
+		defer g.sendGNSSEvent(event.Event{
+			Source:    event.GNSS,
+			CfgName:   g.ConfigName(),
+			ClockType: g.gnssClockType(),
+			Time:      time.Now().UnixMilli(),
+			Reset:     true,
+		})
+
 		for {
 			ublx, err := ublox.NewUblox(g.gnssInitCmds...)
+			if ublx != nil && len(ublx.InitResults()) > 0 && g.gnssResultsFn != nil {
+				g.gnssResultsFn(ublx.InitResults())
+			}
 			if err != nil {
 				glog.Errorf("failed to initialize GNSS monitoring via ublox %s", err)
 				g.execMutex.RLock()
@@ -346,87 +357,105 @@ func (g *GPSD) monitorGNSSEventsWithUblox() {
 				}
 			}
 			g.ublxTool = ublx
-			if results := ublx.InitResults(); len(results) > 0 && g.gnssResultsFn != nil {
-				g.gnssResultsFn(results)
+			if err = g.pollForMessages(); err == nil {
+				return
 			}
-			missedTickers := 0
-			for {
-				g.execMutex.RLock()
-				stopCh := g.stopCh
-				g.execMutex.RUnlock()
-				select {
-				case <-ticker.C:
-					ublx.UbloxPollInit()
-					var lines []string
-					emptyCount := 0
-					for {
-						line := ublx.UbloxPollPull()
-						if len(line) == 0 {
-							emptyCount++
-							if emptyCount >= 10 {
-								missedTickers++
-								if missedTickers > 3 {
-									ublx.UbloxPollReset()
-									missedTickers = 0
-								}
-								break
-							}
-							continue
-						}
-						emptyCount = 0
-						missedTickers = 0
-						lines = append(lines, line)
-					}
-					if len(lines) > 0 {
-						g.processGNSSLines(lines)
-					}
-				case <-g.monitorCtx.Done():
-					return
-				case <-stopCh:
-					return
-				}
-			}
+			glog.Errorf("Retrying ubxtool monitor loop: %s", err)
 		}
 	}()
 }
 
-// processGNSSLines parses ubxtool-formatted lines, extracts GNSS status and
-// offset, determines the sync state, and emits an event on the event channel.
-// Each element of lines is one ubxtool output line (trailing newline optional).
-func (g *GPSD) processGNSSLines(lines []string) {
-	const timeLsResultLines = 4
-	nStatus := int64(0)
-	nOffset := int64(99999999)
-	var timeLs *ublox.TimeLs
+// pollForMessages receives typed UBX messages and processes GNSS status.
+func (g *GPSD) pollForMessages() error {
+	ticker := time.NewTicker(GNSSMONITOR_INTERVAL)
+	defer ticker.Stop()
+	g.resetiTOWMatch()
+	subscription := g.ublxTool.Subscribe(g.monitorCtx,
+		ublox.NavClockType,
+		ublox.NavStatusType,
+		ublox.NavTimeLsType,
+	)
+	g.ublxTool.UbloxPollInit()
+	missedTickers := 0
+	iTOWEventSinceLastTick := false
+	g.execMutex.RLock()
+	stopCh := g.stopCh
+	g.execMutex.RUnlock()
 
-	for i, line := range lines {
-		if strings.Contains(line, "UBX-NAV-CLOCK") {
-			if i+1 < len(lines) {
-				nOffset = ublox.ExtractOffset(lines[i+1])
+	for {
+		select {
+		case <-ticker.C:
+			if iTOWEventSinceLastTick {
+				missedTickers = 0
+			} else {
+				missedTickers++
+				if missedTickers > 3 {
+					g.resetiTOWMatch()
+					g.ublxTool.UbloxPollReset()
+					missedTickers = 0
+				}
 			}
-		} else if strings.Contains(line, "UBX-NAV-STATUS") {
-			if i+1 < len(lines) {
-				nStatus = ublox.ExtractNavStatus(lines[i+1])
+			iTOWEventSinceLastTick = false
+			g.ublxTool.UbloxPollInit()
+		case message, ok := <-subscription.Messages:
+			if !ok {
+				return fmt.Errorf("ubxtool subscription channel closed unexpectedly")
 			}
-		} else if strings.Contains(line, "UBX-NAV-TIMELS") {
-			end := i + 1 + timeLsResultLines
-			if end > len(lines) {
-				end = len(lines)
+			if g.processGNSSMessage(message) {
+				iTOWEventSinceLastTick = true
 			}
-			timeLs = ublox.ExtractLeapSec(lines[i+1 : end])
+		case <-g.monitorCtx.Done():
+			return nil
+		case <-stopCh:
+			return nil
 		}
 	}
+}
 
-	g.offset = nOffset
-	g.sourceLost = false
-	switch nStatus >= 3 {
-	case true:
-		if !g.isOffsetInRange() {
-			g.sourceLost = true
-		}
+// processGNSSMessage applies one typed ublox message. NAV-CLOCK and NAV-STATUS
+// are emitted only after matching iTOW values; TIMELS is forwarded immediately.
+func (g *GPSD) processGNSSMessage(message ublox.Message) bool {
+	switch payload := message.Payload.(type) {
+	case ublox.NavStatus:
+		g.lastNavStatus = &payload
+	case ublox.NavClock:
+		g.lastNavClock = &payload
+	case ublox.TimeLs:
+		processTimeLs(payload)
+		return false
 	default:
-		g.sourceLost = true
+		return false
 	}
+	return g.checkForiTOWCorrelation()
+}
+
+func processTimeLs(timels ublox.TimeLs) {
+	if leap.LeapMgr != nil {
+		select {
+		case leap.LeapMgr.UbloxLsInd <- timels:
+		case <-time.After(100 * time.Millisecond):
+			glog.Infof("failed to send leap event updates")
+		}
+	}
+}
+
+func (g *GPSD) resetiTOWMatch() {
+	g.lastNavStatus = nil
+	g.lastNavClock = nil
+}
+
+// checkForiTOWCorrelation consumes and emits a matching NAV-CLOCK/NAV-STATUS pair.
+func (g *GPSD) checkForiTOWCorrelation() bool {
+	if g.lastNavStatus == nil || g.lastNavClock == nil ||
+		g.lastNavStatus.ITOW != g.lastNavClock.ITOW {
+		return false
+	}
+	clock := g.lastNavClock
+	status := g.lastNavStatus
+	g.resetiTOWMatch()
+
+	g.offset = clock.Offset
+	g.sourceLost = status.GPSFix < 3 || !g.isOffsetInRange()
 	g.sendGNSSEvent(event.Event{
 		Source:     event.GNSS,
 		CfgName:    g.ConfigName(),
@@ -435,15 +464,13 @@ func (g *GPSD) processGNSSLines(lines []string) {
 		Time:       time.Now().UnixMilli(),
 		WriteToLog: true,
 		Reset:      false,
-		Data:       &event.GNSSData{GPSStatus: nStatus, Offset: g.offset, SourceLost: g.sourceLost},
+		Data: &event.GNSSData{
+			GPSStatus:  status.GPSFix,
+			Offset:     g.offset,
+			SourceLost: g.sourceLost,
+		},
 	})
-	if timeLs != nil && leap.LeapMgr != nil {
-		select {
-		case leap.LeapMgr.UbloxLsInd <- *timeLs:
-		case <-time.After(100 * time.Millisecond):
-			glog.Infof("failed to send leap event updates")
-		}
-	}
+	return true
 }
 
 // isOffsetInRange ... check if offset is in range

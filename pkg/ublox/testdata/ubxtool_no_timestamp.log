@@ -1,0 +1,134 @@
+UBX-NAV-STATUS:
+  iTOW 462982000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 34849542
+
+UBX-NAV-CLOCK:
+  iTOW 462982000 clkB 200397 clkD 317 tAcc 9 fAcc 277
+
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+UBX-NAV-STATUS:
+  iTOW 462983000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 34850542
+
+UBX-NAV-CLOCK:
+  iTOW 462983000 clkB 200714 clkD 317 tAcc 9 fAcc 284
+
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+UBX-NAV-STATUS:
+  iTOW 462984000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 34851542
+
+UBX-NAV-CLOCK:
+  iTOW 462984000 clkB 201031 clkD 317 tAcc 9 fAcc 284
+
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+UBX-MON-RF:
+ version 0 nBlocks 2 reserved1 x0
+   0: blockId 0 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 x0
+      noisePerMS 29 agcCnt 5265 jamInd 1 ofsI 10 magI 163 ofsQ 5 magQ 150
+      reserved3 0 0 0
+   1: blockId 1 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 x0
+      noisePerMS 52 agcCnt 5616 jamInd 32 ofsI 14 magI 147 ofsQ 8 magQ 145
+      reserved3 0 0 0
+
+UBX-NAV-STATUS:
+  iTOW 462985000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 34852542
+
+UBX-NAV-CLOCK:
+  iTOW 462985000 clkB 201348 clkD 317 tAcc 9 fAcc 284
+
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+UBX-NAV-STATUS:
+  iTOW 462986000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 34853542
+
+UBX-NAV-CLOCK:
+  iTOW 462986000 clkB 201665 clkD 317 tAcc 9 fAcc 284
+
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+UBX-NAV-STATUS:
+  iTOW 462987000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 34854542
+
+UBX-NAV-CLOCK:
+  iTOW 462987000 clkB 201982 clkD 317 tAcc 9 fAcc 275
+
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+UBX-NAV-STATUS:
+  iTOW 462988000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 34855542
+
+UBX-NAV-TIMELS:
+  iTOW 462988000 version 0 reserved2 0 0 0 srcOfCurrLs 2
+  currLs 18 srcOfLsChange 2 lsChange 0 timeToLsEvent -151662969
+  dateOfLsGpsWn 2185 dateOfLsGpsDn 7 reserved2 0 0 0
+  valid x3
+
+UBX-NAV-CLOCK:
+  iTOW 462988000 clkB 202300 clkD 317 tAcc 9 fAcc 273
+
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+UBX-MON-RF:
+ version 0 nBlocks 2 reserved1 x0
+   0: blockId 0 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 x0
+      noisePerMS 29 agcCnt 5265 jamInd 2 ofsI 12 magI 154 ofsQ 0 magQ 151
+      reserved3 0 0 0
+   1: blockId 1 flags x0 antStatus 2 antPower 1 postStatus 0 reserved2 x0
+      noisePerMS 52 agcCnt 5616 jamInd 30 ofsI 13 magI 147 ofsQ 6 magQ 146
+      reserved3 0 0 0
+
+UBX-NAV-STATUS:
+  iTOW 462989000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 34856542
+
+UBX-NAV-CLOCK:
+  iTOW 462989000 clkB 202617 clkD 317 tAcc 9 fAcc 272
+
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+UBX-NAV-STATUS:
+  iTOW 462990000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 34857542
+
+UBX-NAV-CLOCK:
+  iTOW 462990000 clkB 202934 clkD 317 tAcc 9 fAcc 275
+
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
+UBX-NAV-STATUS:
+  iTOW 462991000 gpsFix 5 flags 0xdd fixStat 0x0 flags2 0x8
+  ttff 531, msss 34858542
+
+UBX-NAV-CLOCK:
+  iTOW 462991000 clkB 203251 clkD 317 tAcc 9 fAcc 271
+
+UBX-TIM-SVIN:
+  dur 600 meanX 99772435 meanY -507557958 meanZ 371904696 meanV 86339224
+  obs 601 valid 1 active 0
+
