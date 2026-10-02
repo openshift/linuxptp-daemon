@@ -17,6 +17,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -180,29 +181,26 @@ func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
 	}
 }
 
-func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
+func TestDpllConfig_GNSS(t *testing.T) {
 	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
 	assert.True(t, dpll.MockDpllReplies != nil)
 	eChannel := make(chan event.Event, 10)
 	// event has to be running before dpll is started
 	eventProcessor := clockmgr.Init("node", eChannel, nil, nil, nil, nil)
-	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
-		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
-	d.CmdInit()
 	eventChannel := make(chan event.Event, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go eventProcessor.ProcessEvents(ctx)
-
-	if d != nil {
-		d.MonitorProcess(config.ProcessConfig{
+	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
+		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0,
+		config.ProcessConfig{
 			ClockType:       "GM",
 			ConfigName:      "test",
 			EventChannel:    eventChannel,
 			GMThreshold:     config.Threshold{Max: 100}, // non-zero Max: isOffsetInRange now does abs(offset) < Max (strict)
 			InitialPTPState: event.PTP_FREERUN,
-		})
-	}
+		}, &ptpv1.PtpProfile{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eventProcessor.ProcessEvents(ctx)
+
 	fmt.Println("starting Mock replies ")
 	for _, tt := range getTestData(event.GNSS, 2) {
 		d.SetSourceLost(tt.sourceLost)
@@ -212,39 +210,36 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 		d.SetDependsOn([]event.EventSource{tt.source})
 		d.MonitorDpllMock()
 		time.Sleep(10 * time.Millisecond)
-		assert.Equal(t, tt.expectedIntermediateState, d.State(), tt.desc)
+		assert.Equal(t, tt.expectedIntermediateState, d.PTPState(), tt.desc)
 		time.Sleep(tt.sleep * time.Second)
 		assert.Equal(t, tt.expectedPhaseStatus, d.PhaseStatus(), tt.desc)
 		assert.Equal(t, tt.expectedFrequencyStatus, d.FrequencyStatus(), tt.desc)
 		assert.Equal(t, tt.expectedPhaseOffset/1000000, d.PhaseOffset(), tt.desc)
-		assert.Equal(t, tt.expectedState, d.State(), tt.desc)
+		assert.Equal(t, tt.expectedState, d.PTPState(), tt.desc)
 		assert.Equal(t, tt.expectedInSpecState, d.InSpec())
 	}
 }
 
-func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
+func TestDpllConfig_PPS(t *testing.T) {
 	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
 	assert.True(t, dpll.MockDpllReplies != nil)
 	eChannel := make(chan event.Event, 10)
 	// event has to be running before dpll is started
 	eventProcessor := clockmgr.Init("node", eChannel, nil, nil, nil, nil)
-	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
-		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
-	d.CmdInit()
 	eventChannel := make(chan event.Event, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go eventProcessor.ProcessEvents(ctx)
-
-	if d != nil {
-		d.MonitorProcess(config.ProcessConfig{
+	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
+		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0,
+		config.ProcessConfig{
 			ClockType:       "GM",
 			ConfigName:      "test",
 			EventChannel:    eventChannel,
 			GMThreshold:     config.Threshold{Max: 100}, // non-zero Max: isOffsetInRange now does abs(offset) < Max (strict)
 			InitialPTPState: event.PTP_FREERUN,
-		})
-	}
+		}, &ptpv1.PtpProfile{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eventProcessor.ProcessEvents(ctx)
+
 	fmt.Println("starting Mock replies ")
 	for _, tt := range getTestData(event.PPS, 1) {
 		d.SetSourceLost(tt.sourceLost)
@@ -256,35 +251,32 @@ func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 		assert.Equal(t, tt.expectedPhaseStatus, d.PhaseStatus(), tt.desc)
 		assert.Equal(t, tt.expectedFrequencyStatus, d.FrequencyStatus(), tt.desc)
 		assert.Equal(t, tt.expectedPhaseOffset/1000000, d.PhaseOffset(), tt.desc)
-		assert.Equal(t, tt.expectedState, d.State(), tt.desc)
+		assert.Equal(t, tt.expectedState, d.PTPState(), tt.desc)
 		assert.Equal(t, tt.expectedInSpecState, d.InSpec(), tt.desc)
 
 	}
 }
 
-func TestDpllConfig_MonitorProcessPartial(t *testing.T) {
+func TestDpllConfig_Partial(t *testing.T) {
 	dpll.MockDpllReplies = make(chan *nl.DoDeviceGetReply, 1)
 	assert.True(t, dpll.MockDpllReplies != nil)
 	eChannel := make(chan event.Event, 10)
 	// event has to be running before dpll is started
 	eventProcessor := clockmgr.Init("node", eChannel, nil, nil, nil, nil)
-	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
-		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, dpll.FlagOnlyPhaseStatus)
-	d.CmdInit()
 	eventChannel := make(chan event.Event, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go eventProcessor.ProcessEvents(ctx)
-
-	if d != nil {
-		d.MonitorProcess(config.ProcessConfig{
+	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
+		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, dpll.FlagOnlyPhaseStatus,
+		config.ProcessConfig{
 			ClockType:       "GM",
 			ConfigName:      "test",
 			EventChannel:    eventChannel,
 			GMThreshold:     config.Threshold{},
 			InitialPTPState: event.PTP_FREERUN,
-		})
-	}
+		}, &ptpv1.PtpProfile{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eventProcessor.ProcessEvents(ctx)
+
 	fmt.Println("starting Mock replies ")
 	// Test with a state that gives PhaseStatus LHAQ
 	reply := &nl.DoDeviceGetReply{
@@ -303,7 +295,7 @@ func TestDpllConfig_MonitorProcessPartial(t *testing.T) {
 	d.MonitorDpllMock()
 
 	assert.Equal(t, int64(2), d.PhaseStatus(), "phase status should be locked")
-	assert.Equal(t, event.PTP_LOCKED, d.State(), "state should be locked based only on phase status")
+	assert.Equal(t, event.PTP_LOCKED, d.PTPState(), "state should be locked based only on phase status")
 }
 
 func TestSysfs(t *testing.T) {
@@ -337,7 +329,7 @@ func TestSlopeAndTimer(t *testing.T) {
 	}
 	for _, tt := range testCase {
 		d := dpll.NewDpll(100, tt.localMaxHoldoverOffSet, tt.localHoldoverTimeout, tt.maxInSpecOffset,
-			"test", []event.EventSource{}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
+			"test", []event.EventSource{}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0, config.ProcessConfig{}, &ptpv1.PtpProfile{})
 		assert.Equal(t, tt.localMaxHoldoverOffSet, d.LocalMaxHoldoverOffSet, "localMaxHoldover offset")
 		assert.Equal(t, tt.localHoldoverTimeout, d.LocalHoldoverTimeout, "Local holdover timeout")
 		assert.Equal(t, tt.maxInSpecOffset, d.MaxInSpecOffset, "Max In Spec Offset")

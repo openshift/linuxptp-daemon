@@ -10,13 +10,16 @@ import (
 type Clock interface {
 	AddEvent(ev event.Event) SyncState
 	GetState() event.PTPState
-	SystemClockUpdate(state event.PTPState)
+	SystemClockUpdate()
 	Reset()
 	ConfigName() string
 	ClockType() event.ClockType
 	ClockClass() fbprotocol.ClockClass
 	SetIPC(func(message ipc.Message))
 	SetEventLoopbackFunc(f func(event.Event))
+	GetData(processName event.EventSource) *event.Data
+	ProcessData() []*event.Data
+	SetOsClock(*OsClock)
 }
 
 // SyncState holds the composite synchronization state of a clock.

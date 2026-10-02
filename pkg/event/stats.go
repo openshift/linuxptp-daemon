@@ -42,6 +42,9 @@ type DataDetails struct {
 	SignalSource       EventSource // GNSS PPS
 	SourceLost         bool
 	Offset             int64
+	HasOffset          bool
+	ProcessStatus      int64
+	HasProcessStatus   bool
 	OutOfSpec          bool
 	FrequencyTraceable bool
 }
@@ -91,6 +94,7 @@ func (d *Data) AddEvent(event Event) {
 	var offset int64
 	var hasOffset bool
 	var outOfSpec, frequencyTraceable bool
+	var leading bool
 
 	switch data := event.Data.(type) {
 	case *GNSSData:
@@ -102,15 +106,28 @@ func (d *Data) AddEvent(event Event) {
 		} else {
 			state = PTP_FREERUN
 		}
-	case *PTPData:
+	case *OffsetData:
+		state = data.State
+		sourceLost = data.SourceLost
+		offset = data.Offset
+		hasOffset = true
+	case *DPLLData:
 		state = data.State
 		sourceLost = data.SourceLost
 		outOfSpec = data.OutOfSpec
 		frequencyTraceable = data.FrequencyTraceable
-		if off, fnd := data.Values[OFFSET]; fnd {
-			offset = off.(int64)
+		if data.Offset != nil {
+			offset = *data.Offset
 			hasOffset = true
 		}
+		if data.LeadingSource {
+			leading = true
+		}
+	case *StateData:
+		state = data.State
+		sourceLost = data.SourceLost
+	case *SyncEData:
+		state = data.State
 	}
 
 	for _, dd := range d.Details {
@@ -125,6 +142,7 @@ func (d *Data) AddEvent(event Event) {
 				dd.LogData = event.GetLogData()
 				if hasOffset {
 					dd.Offset = offset
+					dd.HasOffset = true
 					d.Window.Insert(float64(offset))
 				}
 			} else {
@@ -145,27 +163,128 @@ func (d *Data) AddEvent(event Event) {
 		OutOfSpec:          outOfSpec,
 		FrequencyTraceable: frequencyTraceable,
 	}
-	if ptp, ok := event.Data.(*PTPData); ok {
-		leading, found := ptp.Values[LeadingSource]
-		if found && leading.(bool) {
-			glog.Info(details.IFace, " is set as the leading source ")
-			details.SignalSource = PTP4l
-		}
+	if leading {
+		glog.Info(details.IFace, " is set as the leading source ")
+		details.SignalSource = PTP4l
 	}
 	d.LogData = details.LogData
 	d.Details = append(d.Details, details)
 }
 
-// toString ... data details
-func (dd DDetails) toString() string {
+// String prints ProcessName and each populated DataDetails.
+func (d *Data) String() string {
 	out := strings.Builder{}
-	for _, d := range dd {
-		out.WriteString("  Iface name: " + d.IFace)
-		out.WriteString("  state: " + string(d.State))
-		out.WriteString("  clock type: " + string(d.ClockType))
-		out.WriteString(" signal source: " + string(d.SignalSource))
-		out.WriteString(" source lost: " + strconv.FormatBool(d.SourceLost))
-		out.WriteString("-----\r\n")
+	out.WriteString(string(d.ProcessName))
+	for _, dd := range d.Details {
+		if dd == nil {
+			continue
+		}
+		out.WriteString(" {")
+		out.WriteString(dd.String())
+		out.WriteByte('}')
 	}
 	return out.String()
+}
+
+// String emits populated fields only.
+func (dd *DataDetails) String() string {
+	parts := make([]string, 0, 5)
+	if dd.IFace != "" {
+		parts = append(parts, "iface="+dd.IFace)
+	}
+	switch dd.State {
+	case PTP_FREERUN, PTP_HOLDOVER, PTP_LOCKED:
+		parts = append(parts, "state="+string(dd.State))
+	}
+	if dd.HasOffset {
+		parts = append(parts, "offset="+strconv.FormatInt(dd.Offset, 10))
+	}
+	if dd.SourceLost {
+		parts = append(parts, "sourceLost=true")
+	}
+	if dd.HasProcessStatus {
+		parts = append(parts, "process_status="+strconv.FormatInt(dd.ProcessStatus, 10))
+	}
+	return strings.Join(parts, " ")
+}
+
+// Summary prints ProcessName, detail count, and the latest populated value of each field.
+func (d *Data) Summary() string {
+	if d == nil {
+		return ""
+	}
+	var (
+		n              int
+		iface          string
+		ifaceTime      int64
+		haveIFace      bool
+		state          PTPState
+		stateTime      int64
+		haveState      bool
+		offset         int64
+		offsetTime     int64
+		haveOffset     bool
+		sourceLost     bool
+		sourceLostTime int64
+		haveSourceLost bool
+		processStatus  int64
+		statusTime     int64
+		haveStatus     bool
+	)
+	for _, dd := range d.Details {
+		if dd == nil {
+			continue
+		}
+		n++
+		if dd.IFace != "" && (!haveIFace || dd.Time >= ifaceTime) {
+			iface = dd.IFace
+			ifaceTime = dd.Time
+			haveIFace = true
+		}
+		if ptpStatePopulated(dd.State) && (!haveState || dd.Time >= stateTime) {
+			state = dd.State
+			stateTime = dd.Time
+			haveState = true
+		}
+		if dd.HasOffset && (!haveOffset || dd.Time >= offsetTime) {
+			offset = dd.Offset
+			offsetTime = dd.Time
+			haveOffset = true
+		}
+		if (ptpStatePopulated(dd.State) || dd.HasOffset) && (!haveSourceLost || dd.Time >= sourceLostTime) {
+			sourceLost = dd.SourceLost
+			sourceLostTime = dd.Time
+			haveSourceLost = true
+		}
+		if dd.HasProcessStatus && (!haveStatus || dd.Time >= statusTime) {
+			processStatus = dd.ProcessStatus
+			statusTime = dd.Time
+			haveStatus = true
+		}
+	}
+	parts := []string{string(d.ProcessName), "n=" + strconv.Itoa(n)}
+	if haveIFace {
+		parts = append(parts, "iface="+iface)
+	}
+	if haveState {
+		parts = append(parts, "state="+string(state))
+	}
+	if haveOffset {
+		parts = append(parts, "offset="+strconv.FormatInt(offset, 10))
+	}
+	if haveSourceLost && sourceLost {
+		parts = append(parts, "sourceLost=true")
+	}
+	if haveStatus {
+		parts = append(parts, "process_status="+strconv.FormatInt(processStatus, 10))
+	}
+	return strings.Join(parts, " ")
+}
+
+func ptpStatePopulated(s PTPState) bool {
+	switch s {
+	case PTP_FREERUN, PTP_HOLDOVER, PTP_LOCKED:
+		return true
+	}
+	return false
 }

@@ -46,16 +46,19 @@ func TestDpllStateDecisionWithFlags(t *testing.T) {
 	tests := []struct {
 		name          string
 		flags         Flag
+		source        event.EventSource
 		phaseStatus   int64
 		freqStatus    int64
 		expectedState int64
 	}{
-		{"NoFlags_WorstIsFreq", 0, DPLL_LOCKED, DPLL_FREERUN, DPLL_FREERUN},
-		{"NoFlags_WorstIsPhase", 0, DPLL_HOLDOVER, DPLL_LOCKED, DPLL_HOLDOVER},
-		{"NoPhaseStatus", FlagNoPhaseStatus, DPLL_LOCKED, DPLL_FREERUN, DPLL_FREERUN},
-		{"NoFrequencyStatus", FlagNoFreqencyStatus, DPLL_LOCKED, DPLL_FREERUN, DPLL_LOCKED},
+		{"NoFlags_WorstIsFreq", 0, event.GNSS, DPLL_LOCKED, DPLL_FREERUN, DPLL_FREERUN},
+		{"NoFlags_WorstIsPhase", 0, event.GNSS, DPLL_HOLDOVER, DPLL_LOCKED, DPLL_HOLDOVER},
+		{"NoPhaseStatus", FlagNoPhaseStatus, event.GNSS, DPLL_LOCKED, DPLL_FREERUN, DPLL_FREERUN},
+		{"NoFrequencyStatus", FlagNoFreqencyStatus, event.GNSS, DPLL_LOCKED, DPLL_FREERUN, DPLL_LOCKED},
 		// E830: only pps device exists; getDpllState must return phaseStatus (LOCKED), not frequencyStatus (FREERUN)
-		{"OnlyPhaseStatus_E830", FlagOnlyPhaseStatus, DPLL_LOCKED, DPLL_FREERUN, DPLL_LOCKED},
+		{"OnlyPhaseStatus_E830", FlagOnlyPhaseStatus, event.GNSS, DPLL_LOCKED, DPLL_FREERUN, DPLL_LOCKED},
+		{"PPSSource_IgnoresUnlockedEEC", 0, event.PPS, DPLL_LOCKED_HO_ACQ, DPLL_FREERUN, DPLL_LOCKED_HO_ACQ},
+		{"PTPSource_IgnoresUnlockedEEC", 0, event.PTP4l, DPLL_LOCKED_HO_ACQ, DPLL_FREERUN, DPLL_LOCKED_HO_ACQ},
 	}
 
 	for _, tt := range tests {
@@ -64,11 +67,29 @@ func TestDpllStateDecisionWithFlags(t *testing.T) {
 				flags:           tt.flags,
 				phaseStatus:     tt.phaseStatus,
 				frequencyStatus: tt.freqStatus,
-				dependsOn:       []event.EventSource{event.GNSS},
+				dependsOn:       []event.EventSource{tt.source},
 			}
 			assert.Equal(t, tt.expectedState, d.getDpllState())
 		})
 	}
+}
+
+func TestStateDecision_PPSSourceLockedWhileEECUnlocked(t *testing.T) {
+	d := &DpllConfig{
+		iface:           "ens1f0",
+		phaseStatus:     DPLL_LOCKED_HO_ACQ,
+		frequencyStatus: DPLL_FREERUN,
+		phaseOffset:     -673,
+		dependsOn:       []event.EventSource{event.PPS},
+		processConfig: config.ProcessConfig{
+			GMThreshold: config.Threshold{Max: 1500},
+		},
+	}
+	d.stateDecision()
+	assert.Equal(t, event.PTP_LOCKED, d.state)
+	assert.False(t, d.sourceLost)
+	assert.Equal(t, int64(-673), d.phaseOffset)
+	assert.True(t, d.inSpec)
 }
 
 func TestDpllOffsetChecksWithFlags(t *testing.T) {
@@ -151,17 +172,11 @@ func TestDpllSendEventWithFlags(t *testing.T) {
 		assert.Equal(t, event.DPLL, e.Source)
 		assert.Equal(t, "test-iface", e.IFace)
 
-		ptpData := e.Data.(*event.PTPData)
-
-		_, hasFreq := ptpData.Values[event.FREQUENCY_STATUS]
-		assert.False(t, hasFreq, "should not have frequency status")
-
-		_, hasOffset := ptpData.Values[event.OFFSET]
-		assert.False(t, hasOffset, "should not have offset")
-
-		phase, hasPhase := ptpData.Values[event.PHASE_STATUS]
-		assert.True(t, hasPhase, "should have phase status")
-		assert.Equal(t, int64(DPLL_LOCKED), phase)
+		dpllData := e.Data.(*event.DPLLData)
+		assert.Nil(t, dpllData.FrequencyStatus, "should not have frequency status")
+		assert.Nil(t, dpllData.Offset, "should not have offset")
+		assert.NotNil(t, dpllData.PhaseStatus, "should have phase status")
+		assert.Equal(t, int64(DPLL_LOCKED), *dpllData.PhaseStatus)
 
 	case <-time.After(1 * time.Second):
 		t.Fatal("Timeout waiting for event")

@@ -314,7 +314,7 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 	} else if strings.Contains(output, " offset ") {
 		err, ifaceName, clockstate, ptpOffset, maxPtpOffset, frequencyAdjustment, delay := extractRegularMetrics(configName, processName, output, ifaces)
 		if err != nil {
-			glog.Error(err.Error())
+			glog.Error(err)
 
 		} else if ifaceName != "" {
 			offsetSource := master
@@ -338,10 +338,11 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 		if portId, role := extractPTP4lEventState(output); portId > 0 {
 			if len(ifaces) >= portId-1 {
 				UpdateInterfaceRoleMetrics(processName, ifaces[portId-1].Name, role)
-				if role == SLAVE {
+				switch role {
+				case SLAVE:
 					masterOffsetIface.set(configName, ifaces[portId-1].Name)
 					slaveIface.set(configName, ifaces[portId-1].Name)
-				} else if role == FAULTY {
+				case FAULTY:
 					if slaveIface.isFollowerIface(configName, ifaces[portId-1].Name) &&
 						masterOffsetSource.get(configName) == ptp4lProcessName {
 						updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
@@ -812,26 +813,6 @@ func (m *masterOffsetInterface) getByAlias(configName string, alias string) ptpI
 	return ptpInterface{
 		name:  alias,
 		alias: alias,
-	}
-}
-
-func (m *masterOffsetInterface) getAliasByName(configName string, name string) ptpInterface {
-	if name == clockRealTime || name == master {
-		return ptpInterface{
-			name:  name,
-			alias: name,
-		}
-	}
-	m.RLock()
-	defer m.RUnlock()
-	if s, found := m.iface[configName]; found {
-		if s.name == name {
-			return s
-		}
-	}
-	return ptpInterface{
-		name:  name,
-		alias: name,
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -105,6 +106,35 @@ func defaultUblxCmds() CommandList {
 	return cmds
 }
 
+// pollProcess abstracts the running ubxtool poll process.
+// Production uses pollExecProcess (wraps *exec.Cmd). Tests inject a mock.
+type pollProcess interface {
+	Pid() int
+	Kill() error
+	Wait() error
+}
+
+type pollExecProcess struct{ cmd *exec.Cmd }
+
+func (p *pollExecProcess) Pid() int    { return p.cmd.Process.Pid }
+func (p *pollExecProcess) Kill() error { return p.cmd.Process.Kill() }
+func (p *pollExecProcess) Wait() error { return p.cmd.Wait() }
+
+// startPollProcess launches the long-running ubxtool poll process and returns
+// a stdout reader and a process handle. Replace in tests to inject a mock.
+var startPollProcess = func(protoVersion string) (io.ReadCloser, pollProcess, error) {
+	args := []string{"-u", UBXCommand, "-t", "-P", protoVersion, "-w", pollTimeout}
+	cmd := exec.Command("python3", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = cmd.Start(); err != nil {
+		return nil, nil, err
+	}
+	return stdout, &pollExecProcess{cmd: cmd}, nil
+}
+
 // UBlox ... UBlox type
 type UBlox struct {
 	status       int
@@ -112,7 +142,7 @@ type UBlox struct {
 	protoVersion string
 	initResults  []string // recorded output from extra init commands with ReportOutput=true
 	mockExp      func(cmdStr string) ([]string, error)
-	cmd          *exec.Cmd
+	proc         pollProcess
 	reader       *bufio.Reader
 	match        string
 	buffer       []string
@@ -191,23 +221,20 @@ func (u *UBlox) UbloxPollInit() {
 		u.bufferlen = 0
 		u.buffer = nil
 		u.buffermutex.Unlock()
-		// Run via `python -u ubxtool` to force unbuffered stdin/stdout
-		args := []string{"-u", UBXCommand, "-t", "-P", u.protoVersion, "-w", pollTimeout}
-		u.cmd = exec.Command("python3", args...)
-		stdoutreader, _ := u.cmd.StdoutPipe()
-		u.reader = bufio.NewReader(stdoutreader)
-		u.setStatus(ubxtoolActive)
-		err := u.cmd.Start()
+
+		stdout, proc, err := startPollProcess(u.protoVersion)
 		if err != nil {
 			glog.Errorf("UbloxPoll err=%s", err.Error())
 			// TODO: Switching this to ubxtoolDead would allow recovery in the
 			// future, but we are not making functional changes in this refactor.
 			u.setStatus(ubxtoolStopped)
-		} else {
-			pid := u.cmd.Process.Pid
-			glog.Infof("Starting ubxtool polling with PID=%d", pid)
-			go u.UbloxPollPushThread()
+			return
 		}
+		u.proc = proc
+		u.reader = bufio.NewReader(stdout)
+		u.setStatus(ubxtoolActive)
+		glog.Infof("Starting ubxtool polling with PID=%d", proc.Pid())
+		go u.UbloxPollPushThread()
 	}
 }
 
@@ -247,22 +274,20 @@ func (u *UBlox) getStatus() int {
 
 // UbloxPollReset resets the ubxtool poll process
 func (u *UBlox) UbloxPollReset() {
-	pid := u.cmd.Process.Pid
-	glog.Infof("Resetting ubxtool polling with PID=%d", pid)
-	_ = u.cmd.Process.Kill()
+	glog.Infof("Resetting ubxtool polling with PID=%d", u.proc.Pid())
+	_ = u.proc.Kill()
 	if u.getStatus() != ubxtoolStopped {
 		u.setStatus(ubxtoolDead)
 	}
-	u.cmd.Wait()
+	u.proc.Wait()
 }
 
 // UbloxPollStop stops the ubxtool poll process
 func (u *UBlox) UbloxPollStop() {
-	pid := u.cmd.Process.Pid
-	glog.Infof("Stopping ubxtool polling with PID=%d", pid)
+	glog.Infof("Stopping ubxtool polling with PID=%d", u.proc.Pid())
 	u.setStatus(ubxtoolStopped)
-	_ = u.cmd.Process.Kill()
-	u.cmd.Wait()
+	_ = u.proc.Kill()
+	u.proc.Wait()
 }
 
 // ExtractOffset extracts the tAcc offset from a single ubxtool data line.

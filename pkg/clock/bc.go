@@ -26,16 +26,12 @@ import (
 // The offset gate and the holdover timer both live here so cancellation stays
 // coherent: the same code that decides LOCKED is the code that cancels the timer.
 type BCClock struct {
-	cfgName          string
-	clockType        event.ClockType
-	sendIPC          func(ipc.Message)
-	sendEvent        func(event.Event)
-	threshold        event.PtpClockThreshold
-	iface            string
-	syncState        event.PTPState
-	clockClass       fbprotocol.ClockClass
-	overallSyncState event.PTPState
-	osClockState     event.PTPState
+	BaseClock
+	clockType  event.ClockType
+	sendEvent  func(event.Event)
+	iface      string
+	syncState  event.PTPState
+	clockClass fbprotocol.ClockClass
 	// holdoverCancel stops the pending holdover timer goroutine when the clock
 	// leaves HOLDOVER (offset recovered, or Reset). nil when no timer is armed.
 	holdoverCancel chan struct{}
@@ -54,19 +50,11 @@ func NewBC(cfgName string, isOC bool, threshold event.PtpClockThreshold) (*BCClo
 		clockType = event.OC
 	}
 	c := &BCClock{
-		cfgName:          cfgName,
-		clockType:        clockType,
-		threshold:        threshold,
-		syncState:        event.PTP_NOTSET,
-		overallSyncState: event.PTP_NOTSET,
-		osClockState:     event.PTP_NOTSET,
+		BaseClock: newBaseClock(cfgName, threshold),
+		clockType: clockType,
+		syncState: event.PTP_NOTSET,
 	}
 	return c, nil
-}
-
-// SetIPC sets the IPC sender function
-func (c *BCClock) SetIPC(f func(message ipc.Message)) {
-	c.sendIPC = f
 }
 
 // SetEventLoopbackFunc provides a function for the clock to send its own events into the event pipeline
@@ -84,9 +72,6 @@ func (c *BCClock) ClockType() event.ClockType {
 
 // ClockClass returns the current clock class.
 func (c *BCClock) ClockClass() fbprotocol.ClockClass { return c.clockClass }
-
-// ConfigName returns the configuration name.
-func (c *BCClock) ConfigName() string { return c.cfgName }
 
 // GetState returns the current PTP synchronization state.
 func (c *BCClock) GetState() event.PTPState { return c.syncState }
@@ -112,20 +97,31 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 			c.handleHoldoverExpired(he.Generation)
 			return c.currentSyncState()
 		}
+		d := c.GetData(ev.Source)
+		d.AddEvent(ev)
+		d.UpdateState()
 
-		ptp, ok := ev.Data.(*event.PTPData)
-		if !ok || ptp == nil {
+		sourceLost := false
+		switch data := ev.Data.(type) {
+		case *event.OffsetData:
+			sourceLost = data.SourceLost
+		case *event.StateData:
+			sourceLost = ev.Data.(*event.StateData).SourceLost
+		case *event.DPLLData:
+			sourceLost = ev.Data.(*event.DPLLData).SourceLost
+		case *event.SyncEData:
+		default:
 			return c.currentSyncState()
 		}
 
 		// Record the follower interface once known
-		if !ptp.SourceLost && ev.IFace != "" {
+		if !sourceLost && ev.IFace != "" {
 			c.iface = ev.IFace
 		}
 
 		prev := c.syncState
-		switch {
-		case ptp.SourceLost:
+		// TODO: Feels like we should have SourceLost Data type.
+		if sourceLost {
 			// ptp4l lost contact with its master (slave port faulty), so there
 			// is no offset to range-check. Coast in HOLDOVER until the timer
 			// expires or the source returns; if we were not LOCKED there is
@@ -134,18 +130,20 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 				c.syncState = event.PTP_HOLDOVER
 				c.armHoldoverTimer()
 			}
-		default:
-			offset, hasOffset := ptpOffset(ptp)
-			if !hasOffset {
-				return c.currentSyncState()
-			}
-			// We have offset data again, so cancel the timer to enter freerun
-			c.cancelHoldoverTimer()
-			if isOffsetInRange(offset, c.threshold.MaxOffsetThreshold, c.threshold.MinOffsetThreshold) {
-				c.syncState = event.PTP_LOCKED
-			} else {
-				c.syncState = event.PTP_FREERUN
-			}
+			c.onStateChanged(prev, ev.IFace)
+			return c.currentSyncState()
+		}
+
+		offset, hasOffset := ptpOffset(ev)
+		if !hasOffset {
+			return c.currentSyncState()
+		}
+		// We have offset data again, so cancel the timer to enter freerun
+		c.cancelHoldoverTimer()
+		if isOffsetInRange(offset, c.threshold.MaxOffsetThreshold, c.threshold.MinOffsetThreshold) {
+			c.syncState = event.PTP_LOCKED
+		} else {
+			c.syncState = event.PTP_FREERUN
 		}
 
 		c.onStateChanged(prev, ev.IFace)
@@ -222,7 +220,7 @@ func (c *BCClock) onStateChanged(prev event.PTPState, iface string) {
 			Values:  ipc.StateValue{State: event.PtpStateToIPCState(c.syncState)},
 		})
 	}
-	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState, c.osClockState, c.cfgName)
+	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState, c.osClock.State, c.cfgName)
 }
 
 // currentSyncState returns the clock's state. LeadingIFace is only reported once
@@ -237,14 +235,14 @@ func (c *BCClock) currentSyncState() SyncState {
 }
 
 // SystemClockUpdate updates the OS clock state.
-func (c *BCClock) SystemClockUpdate(osClockState event.PTPState) {
-	c.osClockState = osClockState
-	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState, c.osClockState, c.cfgName)
+func (c *BCClock) SystemClockUpdate() {
+	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState, c.osClock.State, c.cfgName)
 }
 
 // Reset resets the clock state.
 func (c *BCClock) Reset() {
 	c.cancelHoldoverTimer()
+	c.BaseClock.Reset()
 	c.syncState = event.PTP_FREERUN
 	c.overallSyncState = event.PTP_FREERUN
 	// Clear the last-published class so the next PMC update re-emits it and
@@ -273,11 +271,12 @@ func isOffsetInRange(offset, maxOffset, minOffset int64) bool {
 }
 
 // ptpOffset extracts the OFFSET value from PTP data, if present.
-func ptpOffset(ptp *event.PTPData) (int64, bool) {
-	if v, ok := ptp.Values[event.OFFSET]; ok {
-		if i, isInt := v.(int64); isInt {
-			return i, true
-		}
+func ptpOffset(ev event.Event) (int64, bool) {
+	switch data := ev.Data.(type) {
+	case *event.OffsetData:
+		return data.Offset, true
+	case *event.DPLLData:
+		return *data.Offset, true
 	}
 	return 0, false
 }

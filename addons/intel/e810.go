@@ -179,6 +179,9 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 }
 
 func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, command string) error {
+	if nodeProfile == nil {
+		return fmt.Errorf("e810 requires a non-Nil profile")
+	}
 	pluginData := (*data).(*E810PluginData)
 	glog.Info("calling AfterRunPTPCommandE810 for e810 plugin")
 	var e810Opts E810Opts

@@ -356,8 +356,15 @@ func (d *E825PluginData) setupDpllInputPins() error {
 
 // AfterRunPTPCommandE825 performs actions after certain PTP commands for e825 plugin
 func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, command string) error {
+	if nodeProfile == nil {
+		return fmt.Errorf("e825 requires a non-Nil profile")
+	}
 	pluginData := (*data).(*E825PluginData)
-	glog.Infof("calling AfterRunPTPCommandE825 for e825 plugin (%s): %s", *nodeProfile.Name, command)
+	name := ""
+	if nodeProfile.Name != nil {
+		name = *nodeProfile.Name
+	}
+	glog.Infof("calling AfterRunPTPCommandE825 for e825 plugin (%s): %s", name, command)
 	var e825Opts E825Opts
 	var err error
 	var optsByteArray []byte
