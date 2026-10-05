@@ -592,16 +592,6 @@ func UpdateProcessStatusMetrics(process, cfgName string, status int64) {
 	}
 }
 
-// UpdatePTPHAMetrics ... update ptp ha  metrics
-func UpdatePTPHAMetrics(profile string, inActiveProfiles []string, state int64) {
-	PTPHAMetrics.With(prometheus.Labels{
-		"process": phc2sysProcessName, "node": NodeName, "profile": profile}).Set(float64(state))
-	for _, inActive := range inActiveProfiles {
-		PTPHAMetrics.With(prometheus.Labels{
-			"process": phc2sysProcessName, "node": NodeName, "profile": inActive}).Set(0)
-	}
-}
-
 func UpdateSynceClockQlMetrics(process, cfgName string, iface string, network_option int, device string, value int) {
 	if !utils.CheckMetricSanity("SynceClockQl", process, iface) {
 		return

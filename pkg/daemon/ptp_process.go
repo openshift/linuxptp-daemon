@@ -323,8 +323,6 @@ func (p *ptpProcess) processOutput(output string) string {
 		if p.profileClockType() == TBC {
 			p.tBCTransitionCheck(output, p.pm)
 		}
-	} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-		p.announceHAFailOver(output)
 	}
 	return output
 }
@@ -555,94 +553,6 @@ func (p *ptpProcess) processTs2PhcEvents(ptpOffset float64, source string, iface
 			updateClockStateMetrics(p.name, iface, HOLDOVER, "")
 		}
 	}
-}
-
-func (p *ptpProcess) announceHAFailOver(output string) {
-	// TODO refactor into phc2sys specific process
-
-	defer func() {
-		if r := recover(); r != nil {
-			glog.Errorf("Recovered in f %#v", r)
-		}
-	}()
-	var activeIFace string
-	var match []string
-	// selecting ens2f2 as out-of-domain source clock - 0
-	// selecting ens2f0 as domain source clock - 1
-	inDomain, active := failOverIndicator(output, len(p.haProfile))
-
-	if inDomain {
-		match = haInDomainRegEx.FindStringSubmatch(output)
-	} else if !inDomain && active {
-		match = haOutDomainRegEx.FindStringSubmatch(output)
-	} else {
-		return
-	}
-
-	if match != nil {
-		activeIFace = match[1]
-	} else {
-		glog.Errorf("couldn't retrieve interface name from fail over logs %s\n", output)
-		return
-	}
-	// find profile name and construct the log-out and metrics
-	var currentProfile string
-	var inActiveProfiles []string
-	for profile, ifaces := range p.haProfile {
-		for _, iface := range ifaces {
-			if iface == activeIFace {
-				currentProfile = profile
-				break
-			}
-		}
-		// mark all other profiles as inactive
-		if currentProfile != profile && active {
-			inActiveProfiles = append(inActiveProfiles, profile)
-		}
-	}
-	// log both active and inactive profiles
-	logString := []string{fmt.Sprintf("%s[%d]:[%s] ptp_ha_profile %s state %d\n", p.name, time.Now().Unix(), p.configName, currentProfile, boolToInt(active))}
-	for _, inActive := range inActiveProfiles {
-		logString = append(logString, fmt.Sprintf("%s[%d]:[%s] ptp_ha_profile %s state %d\n", p.name, time.Now().Unix(), p.configName, inActive, 0))
-	}
-
-	for _, logProfile := range logString {
-		fmt.Printf("%s", logProfile)
-	}
-	UpdatePTPHAMetrics(currentProfile, inActiveProfiles, boolToInt(active))
-}
-
-// boolToInt converts a boolean to int64 (true=1, false=0).
-func boolToInt(b bool) int64 {
-	if b {
-		return 1
-	}
-	return 0
-}
-
-// failOverIndicator determines domain and active state based on HA indicators.
-// Returns:
-//
-//	inDomain: true = in-domain, false = out-of-domain
-//	active: true = active profile, false = inactive profile
-//
-// Rules:
-// - Single profile in-domain is always active (true, true)
-// - Multiple profiles in-domain returns (true, false) for inactive
-// - Out-of-domain active returns (false, true)
-// - Default returns (false, false)
-func failOverIndicator(output string, count int) (inDomain bool, active bool) {
-	// TODO refactor into phc2sys specific process
-
-	if strings.Contains(output, HAInDomainIndicator) { // in-domain indicator found
-		if count == 1 {
-			return true, true // single profile is always active
-		}
-		return true, false // multiple profiles, this one is inactive
-	} else if strings.Contains(output, HAOutOfDomainIndicator) {
-		return false, true // out-of-domain and active
-	}
-	return false, false // out-of-domain and inactive
 }
 
 // linuxptp 4.2 uses ptp device id ; this function will replace the ptp device id by the interface name
@@ -981,14 +891,14 @@ func addScheduling(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
 }
 
 type ptpProcessEnv struct {
-	runID          int
-	nodeProfile    *ptpv1.PtpProfile
-	clockType      event.ClockType
-	dn             *Daemon
-	leadingNic     string
-	upstreamPorts  []string
-	hasFailover    bool
-	osClockConfigs *OSClockConfigs
+	runID         int
+	nodeProfile   *ptpv1.PtpProfile
+	clockType     event.ClockType
+	dn            *Daemon
+	leadingNic    string
+	upstreamPorts []string
+	hasFailover   bool
+	topology      *ProfileTopology
 }
 
 func profileClockType(p *ptpv1.PtpProfile) string {
@@ -1184,7 +1094,7 @@ func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
 func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	configFile := fmt.Sprintf("phc2sys.%d.config", env.runID)
 	configPath := fmt.Sprintf("%s/%s", configPrefix, configFile)
-	ptpHAEnabled := len(listHaProfiles(env.nodeProfile)) > 0
+	ptpHAEnabled := len(listHAMemberProfiles(env.nodeProfile)) > 0
 	var socketPath, messageTag string
 	if ptpHAEnabled {
 		messageTag = fmt.Sprintf("[phc2sys.%d.config:{level}]", env.runID)
@@ -1211,8 +1121,8 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		return nil, err
 	}
 
-	if slices.Contains(env.osClockConfigs.haProfileNames, getProfileName(env.nodeProfile)) {
-		*opts += " " + haSocketOpts(env.osClockConfigs)
+	if env.topology.isHAProfile(getProfileName(env.nodeProfile)) {
+		*opts += " " + haSocketOpts(env.topology)
 	}
 
 	cmdLine := buildPtpCmdLine(phc2sysProcessName, configPath, opts, env.nodeProfile)
@@ -1235,10 +1145,10 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	return p, nil
 }
 
-func haPtp4lConfigs(osClockConfigs *OSClockConfigs) []string {
+func haPtp4lConfigs(topology *ProfileTopology) []string {
 	configs := []string{}
-	for _, profileName := range osClockConfigs.haReferencedProfiles {
-		if runID, ok := osClockConfigs.profileRunID[profileName]; ok {
+	for _, profileName := range topology.haMemberNames() {
+		if runID, ok := topology.profileRunID[profileName]; ok {
 			configs = append(configs, getPtp4lConfig(runID))
 		}
 	}
@@ -1261,7 +1171,7 @@ func phc2sysOffsetStartCondition(env ptpProcessEnv) process.Condition {
 	}
 	base.Source = event.PTP4l
 
-	cfgs := haPtp4lConfigs(env.osClockConfigs)
+	cfgs := haPtp4lConfigs(env.topology)
 	if len(cfgs) == 0 {
 		cfgName := fmt.Sprintf("ptp4l.%d.config", env.runID)
 		base.ClockID = cfgName
@@ -1380,7 +1290,7 @@ func ts2phcConditionsForTBC(p *ptpProcess, env ptpProcessEnv) map[process.Action
 	// p.haProfile is already set at this point from ApplyHaProfiles
 	if shouldWaitForPhc2sys(env.nodeProfile, p.haProfile) {
 		cfgName := fmt.Sprintf("ptp4l.%d.config", env.runID)
-		if len(env.osClockConfigs.haProfileNames) > 0 {
+		if env.topology.haProfile != "" {
 			cfgName = fmt.Sprintf("phc2sys.%d.config", env.runID)
 		}
 

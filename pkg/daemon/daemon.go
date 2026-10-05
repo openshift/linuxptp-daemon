@@ -63,8 +63,6 @@ const (
 	NMEASourceDisabledIndicator2    = "source ts not valid"
 	InvalidMasterTimestampIndicator = "ignoring invalid master time stamp"
 	PTP_HA_IDENTIFIER               = "haProfiles"
-	HAInDomainIndicator             = "as domain source clock"
-	HAOutOfDomainIndicator          = "as out-of-domain source"
 	MessageTagSuffixSeperator       = ":"
 	TBC                             = "T-BC"
 	TGM                             = "T-GM"
@@ -81,8 +79,6 @@ const (
 )
 
 var (
-	haInDomainRegEx       = regexp.MustCompile(`selecting ([\w\-]+) as domain source clock`)
-	haOutDomainRegEx      = regexp.MustCompile(`selecting ([\w\-]+) as out-of-domain source clock`)
 	messageTagSuffixRegEx = regexp.MustCompile(`([a-zA-Z0-9]+\.[a-zA-Z0-9]+\.config):[a-zA-Z0-9]+(:[a-zA-Z0-9]+)?`)
 	clockIDRegEx          = regexp.MustCompile(`\/dev\/ptp\d+`)
 )
@@ -486,29 +482,50 @@ func (dn *Daemon) cleanupTempFiles() error {
 	return nil
 }
 
-// OSClockConfigs ...
-type OSClockConfigs struct {
+// ProfileTopology describes the profiles which make up a PTPConfig
+type ProfileTopology struct {
 	phc2sysProfiles         []string
-	haReferencedProfiles    []string
-	haProfileNames          []string
 	ntpFailOverProfileNames []string
 	profileRunID            map[string]int
+	// haProfile is the name of the HA profile
+	haProfile string
+	//haMembers is a list of clocks that make up the HA profile
+	haMembers []string
 }
 
-func listHaProfiles(nodeProfile *ptpv1.PtpProfile) (haProfiles []string) {
+// isHAProfile reports whether profileName is an HA profile that contains member clocks.
+func (t *ProfileTopology) isHAProfile(profileName string) bool {
+	return t.haProfile == profileName
+}
+
+// isHAMember reports whether profileName is referenced as a member by any HA profile.
+func (t *ProfileTopology) isHAMember(profileName string) bool {
+	return slices.Contains(t.haMembers, profileName)
+}
+
+// haMemberNames returns the member profile names across all HA profiles.
+func (t *ProfileTopology) haMemberNames() []string {
+	return t.haMembers
+}
+
+// listHAMemberProfiles lists all profiles that are a member of the given profile.
+// Returns an empty slice if this is not an HA profile
+func listHAMemberProfiles(nodeProfile *ptpv1.PtpProfile) []string {
+	var haProfiles []string
 	if profiles, ok := nodeProfile.PtpSettings[PTP_HA_IDENTIFIER]; ok {
 		haProfiles = strings.Split(profiles, ",")
 		for index, profile := range haProfiles {
 			haProfiles[index] = strings.TrimSpace(profile)
 		}
 	}
-	return
+	return haProfiles
 }
 
-// NewOSClockConfigs ...
-func NewOSClockConfigs(nodeProfiles []ptpv1.PtpProfile) OSClockConfigs {
-	haProfileHierarchy := make(map[string][]string)
-	result := OSClockConfigs{profileRunID: map[string]int{}}
+// NewProfileTopology returns the ProfileTopology for a set of PTP profiles
+func NewProfileTopology(nodeProfiles []ptpv1.PtpProfile) (ProfileTopology, error) {
+	result := ProfileTopology{
+		profileRunID: map[string]int{},
+	}
 
 	for runID, profile := range nodeProfiles {
 		profileName := getProfileName(&profile)
@@ -517,11 +534,12 @@ func NewOSClockConfigs(nodeProfiles []ptpv1.PtpProfile) OSClockConfigs {
 		if processShouldRun(&profile, phc2sysProcessName) {
 			result.phc2sysProfiles = append(result.phc2sysProfiles, profileName)
 
-			if referencedProfiles := listHaProfiles(&profile); len(referencedProfiles) > 0 {
-				result.haProfileNames = append(result.haProfileNames, profileName)
-				result.haReferencedProfiles = append(result.haReferencedProfiles, referencedProfiles...)
-
-				haProfileHierarchy[profileName] = referencedProfiles
+			if referencedProfiles := listHAMemberProfiles(&profile); len(referencedProfiles) > 0 {
+				if result.haProfile != "" {
+					return ProfileTopology{}, fmt.Errorf("multiple HA profiles found: %s and %s. Limit 1", result.haProfile, profileName)
+				}
+				result.haProfile = profileName
+				result.haMembers = referencedProfiles
 			}
 
 			if profile.Plugins != nil && profile.Plugins["ntpfailover"] != nil {
@@ -530,27 +548,21 @@ func NewOSClockConfigs(nodeProfiles []ptpv1.PtpProfile) OSClockConfigs {
 		}
 	}
 
-	if len(result.haProfileNames) > 0 {
-		glog.Warningf("More than one HA Profile is active: %s", strings.Join(result.haProfileNames, ", "))
-	}
-
 	seen := slices.Collect(maps.Keys(result.profileRunID))
-	for haProfileName, refrencedProfiles := range haProfileHierarchy {
-		missing := []string{}
-		for _, rProfileName := range refrencedProfiles {
-			if !slices.Contains(seen, rProfileName) {
-				missing = append(missing, rProfileName)
-			}
+	for _, haMember := range result.haMembers {
+		var missing []string
+		if !slices.Contains(seen, haMember) {
+			missing = append(missing, haMember)
 		}
 		if len(missing) > 0 {
-			glog.Warningf("HA Profile %q is missing the following refrenced profiles: %s", haProfileName, strings.Join(missing, ", "))
+			return ProfileTopology{}, fmt.Errorf("HA Profile %s is missing the following referenced profiles: %s", result.haProfile, strings.Join(missing, ", "))
 		}
 	}
 
 	if len(result.phc2sysProfiles) > 0 {
 		glog.Warningf("More than one Profile with phc2sys is active: %s", strings.Join(result.phc2sysProfiles, ", "))
 	}
-	return result
+	return result, nil
 }
 
 func processShouldRun(profile *ptpv1.PtpProfile, processName string) bool {
@@ -628,15 +640,14 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.hwconfigsMu.Unlock()
 
 	glog.Infof("updating NodePTPProfiles to:")
-	runID := 0
 	slices.SortFunc(dn.ptpUpdate.NodeProfiles, func(a, b ptpv1.PtpProfile) int {
-		aHasPhc2sysOpts := a.Phc2sysOpts != nil && *a.Phc2sysOpts != ""
-		bHasPhc2sysOpts := b.Phc2sysOpts != nil && *b.Phc2sysOpts != ""
+		aHasPhc2sys := processShouldRun(&a, phc2sysProcessName)
+		bHasPhc2sys := processShouldRun(&b, phc2sysProcessName)
 		// sorted in ascending order
 		// here having phc2sysOptions is considered a high number
-		if !aHasPhc2sysOpts && bHasPhc2sysOpts {
+		if !aHasPhc2sys && bHasPhc2sys {
 			return -1 //  a<b return -1
-		} else if aHasPhc2sysOpts && !bHasPhc2sysOpts {
+		} else if aHasPhc2sys && !bHasPhc2sys {
 			return 1 //  a>b return
 		}
 		return cmp.Compare(*a.Name, *b.Name)
@@ -662,11 +673,17 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 		glog.Warningf("Failed to refresh interface resolver, name resolution may use stale data: %v", err)
 	}
 
-	osClockSettings := NewOSClockConfigs(dn.ptpUpdate.NodeProfiles)
+	topology, err := NewProfileTopology(dn.ptpUpdate.NodeProfiles)
+	if err != nil {
+		return fmt.Errorf("failed to create profile topology: %w", err)
+	}
 
 	// TODO: resolve clock IDs, clockType, leadingInterface and upstreamPort from hardware config
 	// (needed to keep code compatibility elsewhere and allow it to work both with hardware config and plugins)
-	for _, profile := range dn.ptpUpdate.NodeProfiles {
+
+	// Mutate all profiles with to have a resolved interface
+	for i := range dn.ptpUpdate.NodeProfiles {
+		profile := &dn.ptpUpdate.NodeProfiles[i]
 		glog.Infof("Processing profile: %s", *profile.Name)
 
 		// Log profile details for debugging
@@ -691,17 +708,31 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 			profile.PtpSettings["controlledId"] = strconv.Itoa(controlledID)
 		}
 
-		dn.interfaceResolver.ResolveProfileInterfaces(&profile)
-
-		glog.Infof("Calling applyNodePtpProfile for profile %s with runID %d", *profile.Name, runID)
-		err := dn.applyNodePtpProfile(runID, &profile, &osClockSettings)
-		if err != nil {
-			glog.Errorf("Failed to apply profile %s: %v", *profile.Name, err)
-			return err
-		}
-		glog.Infof("Successfully applied profile: %s", *profile.Name)
-		runID++
+		dn.interfaceResolver.ResolveProfileInterfaces(profile)
 	}
+
+	// Apply standalone (non-HA) profiles
+	for i := range dn.ptpUpdate.NodeProfiles {
+		profile := &dn.ptpUpdate.NodeProfiles[i]
+		profileName := getProfileName(profile)
+		if topology.isHAProfile(profileName) || topology.isHAMember(profileName) {
+			continue
+		}
+		runID := topology.profileRunID[profileName]
+		glog.Infof("Calling applyNodePtpProfile for profile %s with runID %d", profileName, runID)
+		if err = dn.applyNodePtpProfile(runID, profile, &topology); err != nil {
+			return fmt.Errorf("failed to apply profile %s: %w", profileName, err)
+		}
+		glog.Infof("Successfully applied profile: %s", profileName)
+	}
+
+	// Assemble the HA profile into a composite clock from its member profiles.
+	if topology.haProfile != "" {
+		if err = dn.assembleHAClock(topology.haProfile, topology.haMembers, &topology); err != nil {
+			return fmt.Errorf("failed to assemble HA clock for profile %s: %w", topology.haProfile, err)
+		}
+	}
+	dn.populateHAInterfaces(&topology)
 
 	glog.Infof("All profiles applied, starting %d processes", len(dn.processManager.process))
 	dn.pluginManager.SetEventChannel(dn.processManager.eventsIn)
@@ -756,83 +787,90 @@ func printNodeProfile(nodeProfile *ptpv1.PtpProfile) {
 	glog.Infof("------------------------------------")
 }
 
-func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, osClockConfigs *OSClockConfigs) error {
+// prepareProfile runs the per-profile setup shared by every profile: plugin and
+// hardware initialization, and publishing the configured clock thresholds as the
+// read-back openshift_ptp_threshold gauge. It returns the resolved thresholds for
+// use by the profile's clock.
+func (dn *Daemon) prepareProfile(nodeProfile *ptpv1.PtpProfile) event.PtpClockThreshold {
 	testDir, test := nodeProfile.PtpSettings["unitTest"]
 	if test {
 		configPrefix = testDir
 	}
 	var pluginErrors []error
-
 	pluginErrors = dn.checkPlugins(nodeProfile, pluginErrors)
 	pluginErrors = dn.initHardware(nodeProfile, pluginErrors)
-
 	dn.reportPluginStatus(*nodeProfile.Name, pluginErrors)
 
-	// Publish the profile's configured clock thresholds as the read-back
-	// openshift_ptp_threshold gauge (config value, not a live measurement).
 	th := resolvePTPThreshold(nodeProfile)
 	updatePTPThresholdMetrics(nodeProfile, th)
+	return th
+}
 
-	var err error
+func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, topology *ProfileTopology) error {
+	th := dn.prepareProfile(nodeProfile)
 
-	var clockType event.ClockType
-	var leadingNic string
-	var upstreamPorts []string
-
-	if profileName := getProfileName(nodeProfile); slices.Contains(osClockConfigs.haProfileNames, profileName) {
-		clockType = event.SysClock
-		glog.Info("Skipping Clock Add for HA profile: %s", profileName)
-	} else {
-		clockType, leadingNic, upstreamPorts, err = dn.inspectProfile(nodeProfile)
-		if err != nil {
-			printNodeProfile(nodeProfile)
-			return err
-		}
-
-		// At some point we may want to have a sysclock object but at the moment it added by
-		// default in the Clock Manager
-		clockCfgName := fmt.Sprintf("ptp4l.%d.config", runID)
-		var c clock.Clock
-		switch clockType {
-		case event.GM:
-			if c, err = clock.NewGM(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
-				return err
-			}
-		case event.TBC:
-			var tbc *clock.TBC
-			if tbc, err = clock.NewTBC(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
-				return err
-			}
-			c = tbc
-			if leadingNic != "" {
-				tbc.SetConfiguredLeadingInterface(leadingNic)
-			}
-		case event.BC:
-			if c, err = clock.NewBC(clockCfgName, false, th); err != nil {
-				return err
-			}
-		case event.OC:
-			if c, err = clock.NewBC(clockCfgName, true, th); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("unsupported clock type %q for config %s", clockType, clockCfgName)
-		}
-
-		if err = dn.processManager.clockMgr.AddClock(c); err != nil {
-			return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
-		}
+	clockType, leadingNic, upstreamPorts, err := dn.inspectProfile(nodeProfile)
+	if err != nil {
+		printNodeProfile(nodeProfile)
+		return err
 	}
 
+	clockCfgName := clockCfgName(runID)
+	var c clock.Clock
+	switch clockType {
+	case event.GM:
+		if c, err = clock.NewGM(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
+			return err
+		}
+	case event.TBC:
+		var tbc *clock.TBC
+		if tbc, err = clock.NewTBC(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
+			return err
+		}
+		c = tbc
+		if leadingNic != "" {
+			tbc.SetConfiguredLeadingInterface(leadingNic)
+		}
+	case event.BC:
+		if c, err = clock.NewBC(clockCfgName, false, th); err != nil {
+			return err
+		}
+	case event.OC:
+		if c, err = clock.NewBC(clockCfgName, true, th); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported clock type %q for config %s", clockType, clockCfgName)
+	}
+
+	if err = dn.processManager.clockMgr.AddClock(c); err != nil {
+		return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
+	}
+
+	if err = dn.createProcesses(runID, nodeProfile, topology, clockType, leadingNic, upstreamPorts); err != nil {
+		return err
+	}
+	glog.Infof("Completed applyNodePtpProfile for profile %s, total processes in manager: %d", *nodeProfile.Name, len(dn.processManager.process))
+	return nil
+}
+
+func clockCfgName(runID int) string {
+	return fmt.Sprintf("ptp4l.%d.config", runID)
+}
+
+// createProcesses builds and registers the ptp processes (ptp4l, phc2sys, ts2phc,
+// ...) for a profile given its resolved clock type. It is shared by standalone
+// profiles and the member/HA profiles assembled by assembleHAClock.
+func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topology *ProfileTopology, clockType event.ClockType, leadingNic string, upstreamPorts []string) error {
 	env := ptpProcessEnv{
-		runID:          runID,
-		nodeProfile:    nodeProfile,
-		clockType:      clockType,
-		dn:             dn,
-		leadingNic:     leadingNic,
-		upstreamPorts:  upstreamPorts,
-		osClockConfigs: osClockConfigs,
-		hasFailover:    len(osClockConfigs.ntpFailOverProfileNames) > 0,
+		runID:         runID,
+		nodeProfile:   nodeProfile,
+		clockType:     clockType,
+		dn:            dn,
+		leadingNic:    leadingNic,
+		upstreamPorts: upstreamPorts,
+		topology:      topology,
+		hasFailover:   len(topology.ntpFailOverProfileNames) > 0,
 	}
 
 	for _, pProcess := range ptpProcesses {
@@ -844,6 +882,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, 
 		glog.Infof("Processing %s for profile %s with opts: %s", pProcess, *nodeProfile.Name, *configOpts)
 
 		var dprocess process.Process
+		var err error
 		switch pProcess {
 		case ptp4lProcessName:
 			var ptpProc *ptpProcess
@@ -864,7 +903,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, 
 			dprocess, err = NewPhc2sysProcess(env)
 		case ts2phcProcessName:
 			if leap.LeapMgr != nil {
-				leap.LeapMgr.SetPtp4lConfigPath(fmt.Sprintf("ptp4l.%d.config", runID))
+				leap.LeapMgr.SetPtp4lConfigPath(clockCfgName(runID))
 			}
 			var ts2phcProc *ptpProcess
 			ts2phcProc, err = NewTs2phcProcess(env)
@@ -891,9 +930,75 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, 
 		dn.processManager.process = append(dn.processManager.process, dprocess)
 		glog.Infof("Added %s process to process manager for profile %s", pProcess, *nodeProfile.Name)
 	}
+	return nil
+}
 
-	dn.populateHAInterfaces(osClockConfigs)
-	glog.Infof("Completed applyNodePtpProfile for profile %s, total processes in manager: %d", *nodeProfile.Name, len(dn.processManager.process))
+// assembleHAClock builds the composite HA clock for an HA phc2sys profile. It
+// creates each member's BC clock and ptp4l processes, then the HA phc2sys process,
+// and registers a single HAClock that owns the members. Only the HAClock is
+// registered with the clock manager (keyed by phc2sys.{runID}.config, which carries
+// the source-selection events); member ptp4l events route to it via its member
+// configs, so members publish no standalone node sync state.
+func (dn *Daemon) assembleHAClock(haProfileName string, memberNames []string, topology *ProfileTopology) error {
+	haProfile := dn.findProfile(haProfileName)
+	if haProfile == nil {
+		return fmt.Errorf("HA profile %q not found", haProfileName)
+	}
+	haRunID, ok := topology.profileRunID[haProfileName]
+	if !ok {
+		return fmt.Errorf("HA profile %q has no run ID", haProfileName)
+	}
+
+	var members []clock.HAMember
+	for _, memberName := range memberNames {
+		memberProfile := dn.findProfile(memberName)
+		memberRunID, hasRunID := topology.profileRunID[memberName]
+		if memberProfile == nil || !hasRunID {
+			glog.Warningf("HA profile %q references member profile %q which is not applied; skipping it", haProfileName, memberName)
+			continue
+		}
+
+		// HA member BC: owned by the composite HA clock, not registered standalone.
+		th := dn.prepareProfile(memberProfile)
+		bc, err := clock.NewBC(clockCfgName(memberRunID), false, th)
+		if err != nil {
+			return err
+		}
+		members = append(members, clock.HAMember{Profile: memberName, Clock: bc})
+
+		if createErr := dn.createProcesses(memberRunID, memberProfile, topology, event.BC, "", nil); createErr != nil {
+			return createErr
+		}
+	}
+	if len(members) == 0 {
+		return fmt.Errorf("HA profile %q has no member clocks to compose", haProfileName)
+	}
+
+	// HA phc2sys profile disciplines the system clock across the members.
+	dn.prepareProfile(haProfile)
+	if err := dn.createProcesses(haRunID, haProfile, topology, event.SysClock, "", nil); err != nil {
+		return err
+	}
+
+	haCfgName := fmt.Sprintf("%s.%d.config", phc2sysProcessName, haRunID)
+	haClock, err := clock.NewHA(haCfgName, members...)
+	if err != nil {
+		return err
+	}
+	if err = dn.processManager.clockMgr.AddClock(haClock); err != nil {
+		return fmt.Errorf("failed to register HA clock for profile %s: %v", haProfileName, err)
+	}
+	glog.Infof("Registered HA clock %s composing %d member(s) for profile %s", haCfgName, len(members), haProfileName)
+	return nil
+}
+
+// findProfile returns the applied node profile with the given name, or nil.
+func (dn *Daemon) findProfile(name string) *ptpv1.PtpProfile {
+	for i := range dn.ptpUpdate.NodeProfiles {
+		if getProfileName(&dn.ptpUpdate.NodeProfiles[i]) == name {
+			return &dn.ptpUpdate.NodeProfiles[i]
+		}
+	}
 	return nil
 }
 
@@ -1244,17 +1349,18 @@ func resolvePTPThreshold(nodeProfile *ptpv1.PtpProfile) event.PtpClockThreshold 
 	}
 }
 
-func haSocketOpts(osClockConfigs *OSClockConfigs) string {
+func haSocketOpts(topology *ProfileTopology) string {
 	socketOptions := []string{}
-	for _, profile := range osClockConfigs.haReferencedProfiles {
-		if runID, ok := osClockConfigs.profileRunID[profile]; ok {
+	for _, profile := range topology.haMemberNames() {
+		if runID, ok := topology.profileRunID[profile]; ok {
 			socketOptions = append(socketOptions, "-z "+getPtp4lSocket(configPrefix, runID))
 		}
 	}
 	return strings.Join(socketOptions, " ")
 }
 
-func (dn *Daemon) populateHAInterfaces(osClockConfigs *OSClockConfigs) {
+// populateHAInterfaces sets each HA phc2sys process interface map
+func (dn *Daemon) populateHAInterfaces(topology *ProfileTopology) {
 	phc2sysProcesses := dn.processManager.findProcessesByName(phc2sysProcessName)
 	ptp4lProcesses := dn.processManager.findProcessesByName(ptp4lProcessName)
 
@@ -1266,7 +1372,7 @@ func (dn *Daemon) populateHAInterfaces(osClockConfigs *OSClockConfigs) {
 	// looping also handles the 0 case nicely
 	for _, proc := range phc2sysProcesses {
 		phc2sysProcess := proc.(*ptpProcess)
-		if !slices.Contains(osClockConfigs.haProfileNames, getProfileName(proc.Profile())) {
+		if !topology.isHAProfile(getProfileName(proc.Profile())) {
 			continue
 		}
 
@@ -1276,7 +1382,7 @@ func (dn *Daemon) populateHAInterfaces(osClockConfigs *OSClockConfigs) {
 				continue
 			}
 			profileName := getProfileName(ptp4lProcess.Profile())
-			if slices.Contains(osClockConfigs.haReferencedProfiles, profileName) {
+			if topology.isHAMember(profileName) {
 				var ifaces []string
 				for _, iface := range ptp4lProcess.ifaces {
 					ifaces = append(ifaces, iface.Name)
