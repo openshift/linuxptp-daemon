@@ -15,6 +15,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 )
 
 const (
@@ -212,13 +213,19 @@ func (dn *Daemon) doSyncStatusUpdate(force bool) {
 		if proc == nil {
 			continue
 		}
-		if !proc.Stopped() {
-			anyRunning = true
-		}
-		if proc.nodeProfile.Name == nil {
+		ptpProc, ok := proc.(*ptpProcess)
+		if !ok {
 			continue
 		}
-		profileName := *proc.nodeProfile.Name
+
+		if state := proc.State(); state == process.Running {
+			anyRunning = true
+		}
+		profile := proc.Profile()
+		if profile == nil || profile.Name == nil {
+			continue
+		}
+		profileName := *profile.Name
 		if firstProfile == "" {
 			firstProfile = profileName
 		}
@@ -226,12 +233,12 @@ func (dn *Daemon) doSyncStatusUpdate(force bool) {
 		if _, exists := seen[profileName]; !exists {
 			profiles = append(profiles, ptpv1.NodeProfileStatus{
 				Name:      profileName,
-				ClockType: reportedClockType(proc),
+				ClockType: reportedClockType(ptpProc),
 			})
 			seen[profileName] = struct{}{}
 		}
 
-		for _, iface := range proc.ifaces {
+		for _, iface := range ptpProc.ifaces {
 			if iface.Name != "" {
 				profileByIface[iface.Name] = profileName
 			}

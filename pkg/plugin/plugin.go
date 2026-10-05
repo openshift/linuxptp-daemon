@@ -4,18 +4,19 @@ import (
 	"fmt"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
 // Plugin type
 type Plugin struct {
-	Name                   string
-	Options                interface{}
-	OnPTPConfigChange      OnPTPConfigChange
-	AfterRunPTPCommand     AfterRunPTPCommand
-	PopulateHwConfig       PopulateHwConfig
-	RegisterEnableCallback RegisterEnableCallback
-	ProcessLog             ProcessLog
+	Name               string
+	Options            interface{}
+	OnPTPConfigChange  OnPTPConfigChange
+	AfterRunPTPCommand AfterRunPTPCommand
+	PopulateHwConfig   PopulateHwConfig
+	SetEventChannel    SetEventChannel
+	ProcessLog         ProcessLog
 }
 
 // PluginManager type
@@ -36,8 +37,8 @@ type PopulateHwConfig func(*interface{}, *[]ptpv1.HwConfig) error
 // AfterRunPTPCommand type
 type AfterRunPTPCommand func(*interface{}, *ptpv1.PtpProfile, string) error
 
-// RegisterEnableCallback type
-type RegisterEnableCallback func(*interface{}, string, func(bool))
+// SetEventChannel type
+type SetEventChannel func(*interface{}, chan<- event.Event)
 
 // ProcessLog type
 type ProcessLog func(*interface{}, string, string) string
@@ -63,6 +64,9 @@ func (pm *PluginManager) OnPTPConfigChange(nodeProfile *ptpv1.PtpProfile) []erro
 
 // AfterRunPTPCommand is plugin interface
 func (pm *PluginManager) AfterRunPTPCommand(nodeProfile *ptpv1.PtpProfile, command string) {
+	if nodeProfile == nil {
+		return
+	}
 	for pluginName, pluginObject := range pm.Plugins {
 		pluginFunc := pluginObject.AfterRunPTPCommand
 		if pluginFunc != nil {
@@ -81,12 +85,12 @@ func (pm *PluginManager) PopulateHwConfig(hwconfigs *[]ptpv1.HwConfig) {
 	}
 }
 
-// RegisterEnableCallback is plugin interface
-func (pm *PluginManager) RegisterEnableCallback(pname string, cmdSetEnabled func(bool)) {
+// SetEventChannel passes the event channel to all plugins that need it.
+func (pm *PluginManager) SetEventChannel(ch chan<- event.Event) {
 	for pluginName, pluginObject := range pm.Plugins {
-		pluginFunc := pluginObject.RegisterEnableCallback
+		pluginFunc := pluginObject.SetEventChannel
 		if pluginFunc != nil {
-			pluginFunc(pm.Data[pluginName], pname, cmdSetEnabled)
+			pluginFunc(pm.Data[pluginName], ch)
 		}
 	}
 }

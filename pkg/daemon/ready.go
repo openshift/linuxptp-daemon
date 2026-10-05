@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	utilwait "k8s.io/apimachinery/pkg/util/wait"
 )
@@ -34,20 +35,24 @@ func (rt *ReadyTracker) Ready() (bool, string) {
 	noMetrics := strings.Builder{}
 	activeCount := 0
 	for _, p := range rt.processManager.process {
-		if p == nil || p.skipInitialStartup != "" {
+		proc, ok := p.(*ptpProcess)
+		if !ok {
+			continue
+		}
+		if pendingDelayedStartPTP(proc) {
 			continue
 		}
 		activeCount++
-		if p.Stopped() {
+		if proc.State() == process.Stopping || proc.State() == process.Stopped {
 			if notRunning.Len() > 0 {
 				notRunning.WriteString(", ")
 			}
-			notRunning.WriteString(p.name)
-		} else if !p.hasCollectedMetrics {
+			notRunning.WriteString(proc.Name())
+		} else if !proc.hasCollectedMetrics {
 			if noMetrics.Len() > 0 {
 				noMetrics.WriteString(", ")
 			}
-			noMetrics.WriteString(p.name)
+			noMetrics.WriteString(proc.Name())
 		}
 
 	}
@@ -64,6 +69,16 @@ func (rt *ReadyTracker) Ready() (bool, string) {
 	}
 
 	return true, ""
+}
+
+// pendingDelayedStart checks if a process has a delayed start condition
+// by type-asserting to process.Immediate.
+func pendingDelayedStartPTP(p *ptpProcess) bool {
+	if p == nil {
+		return true // Skip nil
+	}
+	// Reuse the shared pendingDelayedStart logic from process_manager
+	return pendingDelayedStart(p)
 }
 
 func (rt *ReadyTracker) setConfig(v bool) {

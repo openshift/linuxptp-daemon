@@ -12,7 +12,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
-	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/pointer"
@@ -640,51 +639,6 @@ func Test_ProcessPTPMetrics(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestDaemon_ApplyHaProfiles(t *testing.T) {
-	skip, teardownTest := testhelpers.SetupForTestBCPTPHA()
-	defer teardownTest()
-	if skip {
-		t.Skip("BC PTP-HA is not supported")
-		t.SkipNow()
-	}
-
-	p1 := ptpv1.PtpProfile{
-		Name: pointer.String("profile1"),
-	}
-	p2 := ptpv1.PtpProfile{
-		Name: pointer.String("profile2"),
-	}
-	p3 := ptpv1.PtpProfile{
-		Name:        pointer.String("ha_profile1"),
-		PtpSettings: map[string]string{daemon.PTP_HA_IDENTIFIER: "profile1,profile2"},
-	}
-	processManager := daemon.NewProcessManager()
-	ifaces1 := []config.Iface{
-		{
-			Name:     "ens2f2",
-			IsMaster: false,
-			Source:   "",
-			PhcId:    "phcid-2",
-		},
-	}
-	ifaces2 := []config.Iface{
-		{
-			Name:     "ens3f2",
-			IsMaster: false,
-			Source:   "",
-			PhcId:    "phcid-2",
-		},
-	}
-
-	processManager.SetTestProfileProcess(*p1.Name, ifaces1, "socket1", "config1", p1)
-	processManager.SetTestProfileProcess(*p2.Name, ifaces2, "socket2", "config1", p2)
-	processManager.SetTestProfileProcess(*p3.Name, nil, "", "config1", p3)
-	dd := daemon.NewDaemonForTests(&daemon.ReadyTracker{}, processManager)
-	haProfiles, cmdLine := dd.ApplyHaProfiles(&p3, "phc2sys")
-	assert.Equal(t, len(haProfiles), 2, "ha has two profiles")
-	assert.Equal(t, cmdLine, "phc2sys -z socket1 -z socket2", "CmdLine is empty")
 }
 
 var (

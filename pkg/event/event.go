@@ -2,7 +2,6 @@ package event
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -24,13 +23,12 @@ const (
 // TODO: fix ALL_CAPS and add comments to the exported keys
 const (
 	OFFSET     ValueType = "offset"
-	STATE      ValueType = "state"
 	GPS_STATUS ValueType = "gnss_status"
 	//Status           ValueType = "status"
 	PHASE_STATUS              ValueType = "phase_status"
 	FREQUENCY_STATUS          ValueType = "frequency_status"
 	NMEA_STATUS               ValueType = parserconstants.NmeaStatus
-	PROCESS_STATUS            ValueType = "process_status"
+	PROCESS_STATUS            ValueType = "process_status" // 0 = DOWN, 1 = UP (PtpProcessDown / PtpProcessUp)
 	PPS_STATUS                ValueType = "pps_status"
 	LEADING_INTERFACE_UNKNOWN string    = "unknown"
 	DEVICE                    ValueType = "device"
@@ -44,11 +42,13 @@ const (
 	InSyncConditionTimes      ValueType = "in-sync-times"
 	ToFreeRunThreshold        ValueType = "free-run_th"
 	ControlledPortsConfig     ValueType = "controlled-ports-config"
-	ParentDataSetKey          ValueType = "parent-ds"
-	CurrentDataSetKey         ValueType = "current-ds"
 	ClockIDKey                ValueType = "clock-id"
-	TimePropertiesDataSet     ValueType = "time-props"
 	MaxInSpecOffset           ValueType = "max-in-spec"
+)
+
+const (
+	// ProcessStatusUnset is stored on Data before any up/down event. 0 is down, 1 is up.
+	ProcessStatusUnset int64 = -1
 )
 
 // ValueTypeHelpTxt provides help text for PTP value types.
@@ -59,6 +59,7 @@ var ValueTypeHelpTxt = map[ValueType]string{
 	FREQUENCY_STATUS: "-1=UNKNOWN, 0=INVALID, 1=FREERUN, 2=LOCKED, 3=LOCKED_HO_ACQ, 4=HOLDOVER",
 	NMEA_STATUS:      "0 = UNAVAILABLE, 1 = AVAILABLE",
 	PPS_STATUS:       "0 = UNAVAILABLE, 1 = AVAILABLE",
+	PROCESS_STATUS:   "0 = DOWN, 1 = UP",
 }
 
 // PTP4lProcessName ...
@@ -84,6 +85,8 @@ const (
 	CHRONYD    EventSource = "chronyd"
 	MONITORING EventSource = "monitoring"
 	PMC        EventSource = "pmc"
+	GPSD       EventSource = "gpsd"
+	GPSPIPE    EventSource = "gpspipe"
 )
 
 // PTPState ...
@@ -116,7 +119,12 @@ const (
 )
 
 // EventData is the sealed interface for type-specific event payloads.
-type EventData interface{ eventData() } //nolint:revive // "Data" conflicts with stats.go Data struct
+//
+//nolint:revive // "Data" conflicts with stats.go Data struct
+type EventData interface {
+	eventData()
+	String() string
+}
 
 // GNSSData carries GNSS receiver status. It does not use PTPState.
 type GNSSData struct {
@@ -127,16 +135,127 @@ type GNSSData struct {
 
 func (*GNSSData) eventData() {}
 
-// PTPData carries PTP synchronization status (DPLL, ts2phc, ptp4l, SyncE).
-type PTPData struct {
-	State              PTPState
-	Values             map[ValueType]interface{}
-	OutOfSpec          bool
-	SourceLost         bool
-	FrequencyTraceable bool
+func (d *GNSSData) String() string {
+	state := PTP_FREERUN
+	if d.GPSStatus >= 3 && !d.SourceLost {
+		state = PTP_LOCKED
+	}
+	return fmt.Sprintf("%s %d %s %d %s", GPS_STATUS, d.GPSStatus, OFFSET, d.Offset, state)
 }
 
-func (*PTPData) eventData() {}
+// OffsetData is a ptp4l/ts2phc/phc2sys/chronyd offset sample.
+type OffsetData struct {
+	State      PTPState
+	Offset     int64
+	SourceLost bool
+	NMEALocked *bool // ts2phc GNSS only
+}
+
+func (*OffsetData) eventData() {}
+
+func (d *OffsetData) String() string {
+	parts := make([]string, 0, 3)
+	if d.NMEALocked != nil {
+		parts = append(parts, fmt.Sprintf("%s %t", NMEA_STATUS, *d.NMEALocked))
+	}
+	parts = append(parts, fmt.Sprintf("%s %d", OFFSET, d.Offset), string(d.State))
+	return strings.Join(parts, " ")
+}
+
+// DPLLData is a DPLL status sample. Offset/PhaseStatus/FrequencyStatus are nil when FlagNo* is set.
+type DPLLData struct {
+	State                    PTPState
+	OutOfSpec                bool
+	SourceLost               bool
+	FrequencyTraceable       bool
+	LeadingSource            bool
+	Offset                   *int64
+	PhaseStatus              *int64
+	FrequencyStatus          *int64
+	PPSStatus                int
+	InSyncConditionThreshold uint64
+	InSyncConditionTimes     uint64
+	ToFreeRunThreshold       uint64
+	MaxInSpecOffset          uint64
+}
+
+func (*DPLLData) eventData() {}
+
+func (d *DPLLData) String() string {
+	parts := make([]string, 0, 5)
+	if d.FrequencyStatus != nil {
+		parts = append(parts, fmt.Sprintf("%s %d", FREQUENCY_STATUS, *d.FrequencyStatus))
+	}
+	if d.Offset != nil {
+		parts = append(parts, fmt.Sprintf("%s %d", OFFSET, *d.Offset))
+	}
+	if d.PhaseStatus != nil {
+		parts = append(parts, fmt.Sprintf("%s %d", PHASE_STATUS, *d.PhaseStatus))
+	}
+	parts = append(parts, fmt.Sprintf("%s %d", PPS_STATUS, d.PPSStatus), string(d.State))
+	return strings.Join(parts, " ")
+}
+
+// SyncEData is a synce4l quality or EEC state sample. QL/ExtQL are nil when that TLV is absent.
+type SyncEData struct {
+	State         PTPState
+	Device        string
+	QL            *byte
+	ExtQL         *byte
+	ClockQuality  string
+	EECState      string
+	NetworkOption int
+}
+
+func (*SyncEData) eventData() {}
+
+func (d *SyncEData) String() string {
+	parts := make([]string, 0, 7)
+	if d.ClockQuality != "" {
+		parts = append(parts, fmt.Sprintf("%s %s", CLOCK_QUALITY, d.ClockQuality))
+	}
+	if d.Device != "" {
+		parts = append(parts, fmt.Sprintf("%s %s", DEVICE, d.Device))
+	}
+	if d.EECState != "" {
+		parts = append(parts, fmt.Sprintf("%s %s", EEC_STATE, d.EECState))
+	}
+	if d.ExtQL != nil {
+		parts = append(parts, fmt.Sprintf("%s %#x", EXT_QL, *d.ExtQL))
+	}
+	if d.NetworkOption != 0 {
+		parts = append(parts, fmt.Sprintf("%s %d", NETWORK_OPTION, d.NetworkOption))
+	}
+	if d.QL != nil {
+		parts = append(parts, fmt.Sprintf("%s %#x", QL, *d.QL))
+	}
+	if d.State != "" && d.State != PTP_UNKNOWN {
+		parts = append(parts, string(d.State))
+	}
+	return strings.Join(parts, " ")
+}
+
+// StateData is a lock/holdover transition. ClockID and ControlledPortsConfig are set on T-BC transitions.
+type StateData struct {
+	State                 PTPState
+	SourceLost            bool
+	ControlledPortsConfig string
+	ClockID               string
+}
+
+func (*StateData) eventData() {}
+
+func (d *StateData) String() string {
+	parts := make([]string, 0, 3)
+	if d.ClockID != "" {
+		parts = append(parts, fmt.Sprintf("%s %s", ClockIDKey, d.ClockID))
+	}
+	if d.ControlledPortsConfig != "" {
+		parts = append(parts, fmt.Sprintf("%s %s", ControlledPortsConfig, d.ControlledPortsConfig))
+	}
+	parts = append(parts, string(d.State))
+	return strings.Join(parts, " ")
+}
 
 // PtpClockThreshold carries the resolved clock thresholds used by BC/OC state
 // decisions: the offset bounds (ns) that gate LOCKED/FREERUN and the holdover
@@ -162,6 +281,21 @@ type HoldoverExpired struct {
 
 func (*HoldoverExpired) eventData() {}
 
+func (he *HoldoverExpired) String() string {
+	return fmt.Sprintf("Holover Expired: generation=%d", he.Generation)
+}
+
+// ProcessStatusData is process up/down. Status is 0 (down) or 1 (up).
+type ProcessStatusData struct {
+	Status int64
+}
+
+func (*ProcessStatusData) eventData() {}
+
+func (d *ProcessStatusData) String() string {
+	return fmt.Sprintf("PTP_PROCESS_STATUS:%d", d.Status)
+}
+
 // ParentTimeCurrentDS carries the upstream parent/time/current datasets fetched
 // via PMC, tagged with the announce token that requested the fetch.
 type ParentTimeCurrentDS struct {
@@ -174,12 +308,35 @@ type ParentTimeCurrentDS struct {
 
 func (*ParentTimeCurrentDS) eventData() {}
 
+func (d *ParentTimeCurrentDS) String() string { return "" }
+
 // ParentDSData carries a PARENT_DATA_SET update from the PMC poller.
 type ParentDSData struct {
 	ParentDataSet protocol.ParentDataSet
 }
 
 func (*ParentDSData) eventData() {}
+
+func (d *ParentDSData) String() string { return "" }
+
+// PluginData carries a plugin-emitted event (e.g. ntpfailover FSM transitions).
+type PluginData struct {
+	EventName string
+}
+
+func (*PluginData) eventData() {}
+
+func (d *PluginData) String() string { return d.EventName }
+
+// Int64Ptr returns a pointer to v. Used by DPLL/offset senders for optional fields.
+func Int64Ptr(v int64) *int64 { return &v }
+
+// Ptr returns a pointer to the type you pass in it the type is ambiguious
+// e.g. Ptr(15) you have coherse the type by using Ptr[int64](15)
+func Ptr[T any](v T) *T { return &v }
+
+// BytePtr returns a pointer to v. Used by SyncE senders for optional QL fields.
+func BytePtr(v byte) *byte { return &v }
 
 // ClockType ...
 type ClockType string
@@ -193,6 +350,8 @@ const (
 	TBC ClockType = "T-BC"
 	// OC ...
 	OC ClockType = "OC"
+	// SysClock only the system clock not a PTP Clock (this is updated by another clock)
+	SysClock ClockType = "SysClock"
 	// ClockUnset ...
 	ClockUnset ClockType = ""
 )
@@ -207,47 +366,44 @@ type Event struct {
 	Time       int64       // time.Now().UnixMilli()
 	WriteToLog bool
 	Reset      bool      // reset data on ptp deletes or process died
-	Data       EventData // *GNSSData or *PTPData; nil for reset events
+	Data       EventData // typed payload, or nil for reset events
+}
+
+// ProcessStatusEvent is a process Up/Down event. status is 0 (down) or 1 (up).
+func ProcessStatusEvent(source EventSource, cfgName string, clockType ClockType, iface string, status int64) Event {
+	return Event{
+		Source:     source,
+		IFace:      iface,
+		CfgName:    cfgName,
+		ClockType:  clockType,
+		Time:       time.Now().UnixMilli(),
+		WriteToLog: true,
+		Data:       &ProcessStatusData{Status: status},
+	}
+}
+
+// PluginEvent creates an event emitted by a plugin.
+func PluginEvent(source EventSource, eventName string) Event {
+	return Event{
+		Source: source,
+		Time:   time.Now().UnixMilli(),
+		Data:   &PluginData{EventName: eventName},
+	}
 }
 
 // GetLogData returns a formatted log line for the event.
 func (e *Event) GetLogData() string {
-	switch d := e.Data.(type) {
-	case *GNSSData:
-		state := PTP_FREERUN
-		if d.GPSStatus >= 3 && !d.SourceLost {
-			state = PTP_LOCKED
-		}
-		return fmt.Sprintf("%s[%d]:[%s] %s %s %d %s %d %s\n", e.Source,
-			time.Now().Unix(), e.CfgName, e.IFace,
-			GPS_STATUS, d.GPSStatus, OFFSET, d.Offset, state)
-	case *PTPData:
-		return formatPTPLogData(e.Source, e.CfgName, e.IFace, d.State, d.Values)
-	default:
-		return fmt.Sprintf("%s[%d]:[%s] %s\n", e.Source,
-			time.Now().Unix(), e.CfgName, e.IFace)
+	prefix := fmt.Sprintf("%s[%d]:[%s]", e.Source, time.Now().Unix(), e.CfgName)
+	parts := []string{prefix}
+	if e.IFace != "" {
+		parts = append(parts, e.IFace)
 	}
-}
-
-func formatPTPLogData(source EventSource, cfgName, iface string, state PTPState, values map[ValueType]interface{}) string {
-	logData := make([]string, 0, len(values))
-	for k, v := range values {
-		switch val := v.(type) {
-		case int64, int, int32:
-			logData = append(logData, fmt.Sprintf("%s %d", k, val))
-		case float64:
-			logData = append(logData, fmt.Sprintf("%s %f", k, val))
-		case string:
-			logData = append(logData, fmt.Sprintf("%s %s", k, val))
-		case byte:
-			logData = append(logData, fmt.Sprintf("%s %#x", k, val))
-		default:
-			continue
+	if e.Data != nil {
+		if s := e.Data.String(); s != "" {
+			parts = append(parts, s)
 		}
 	}
-	sort.Strings(logData)
-	return fmt.Sprintf("%s[%d]:[%s] %s %s %s\n", source,
-		time.Now().Unix(), cfgName, iface, strings.Join(logData, " "), state)
+	return strings.Join(parts, " ") + "\n"
 }
 
 // PtpStateToIPCState converts PTP state to IPC state string.

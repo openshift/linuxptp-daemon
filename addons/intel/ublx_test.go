@@ -24,6 +24,11 @@ func (m *mockRunner) Run(cmd ublox.Command) (string, error) {
 	return m.defaultOutput, m.defaultErr
 }
 
+func (m *mockRunner) Poll(cmd ublox.Command, responseType ublox.MessageType) (ublox.Message, error) {
+	output, err := m.Run(cmd)
+	return ublox.Message{Type: responseType, Raw: []string{output}}, err
+}
+
 func (m *mockRunner) RunAll(cmds ublox.CommandList, withSave bool) []string {
 	var results []string
 	for _, cmd := range cmds {

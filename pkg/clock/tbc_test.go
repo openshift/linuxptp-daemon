@@ -67,7 +67,11 @@ func (r *eventRecorder) snapshot() []event.Event {
 func newPMCTestTBCClock(pmcClient pmc.Client) *TBC {
 	rec := &ipcRecorder{}
 	return &TBC{
-		sendIPC:          rec.send,
+		BaseClock: BaseClock{
+			sendIPC:          rec.send,
+			overallSyncState: event.PTP_NOTSET,
+			osClock:          &OsClock{State: event.PTP_NOTSET},
+		},
 		sendEvent:        func(event.Event) {},
 		getUtcOffset:     stubUtcOffset,
 		pmcClient:        pmcClient,
@@ -562,11 +566,9 @@ func TestUpdateDownstreamData_Freerun_CallsAnnounceLocalData(t *testing.T) {
 func TestUpdateLeadingClockData_PTP4lProcessName(t *testing.T) {
 	ev := event.Event{
 		Source: event.PTP4lProcessName,
-		Data: &event.PTPData{
-			Values: map[event.ValueType]interface{}{
-				event.ControlledPortsConfig: testConfig,
-				event.ClockIDKey:            "clockID",
-			},
+		Data: &event.StateData{
+			ControlledPortsConfig: testConfig,
+			ClockID:               "clockID",
 		},
 	}
 
@@ -581,14 +583,12 @@ func TestUpdateLeadingClockData_DPLL(t *testing.T) {
 	ev := event.Event{
 		Source: event.DPLL,
 		IFace:  testIface,
-		Data: &event.PTPData{
-			Values: map[event.ValueType]interface{}{
-				event.LeadingSource:            true,
-				event.InSyncConditionThreshold: uint64(100),
-				event.InSyncConditionTimes:     uint64(200),
-				event.ToFreeRunThreshold:       uint64(300),
-				event.MaxInSpecOffset:          uint64(400),
-			},
+		Data: &event.DPLLData{
+			LeadingSource:            true,
+			InSyncConditionThreshold: 100,
+			InSyncConditionTimes:     200,
+			ToFreeRunThreshold:       300,
+			MaxInSpecOffset:          400,
 		},
 	}
 
@@ -628,6 +628,18 @@ func TestGetLeadingInterfaceBC(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestGetLeadingInterfaceBC_UsesConfiguredProfileInterface(t *testing.T) {
+	bc := newPMCTestTBCClock(nil)
+	bc.SetConfiguredLeadingInterface(testEth0)
+	assert.Equal(t, testEth0, bc.getLeadingInterfaceBC())
+
+	bc.Reset()
+	assert.Equal(t, testEth0, bc.getLeadingInterfaceBC(), "profile leadingInterface must survive Reset")
+
+	bc.leadingClockData.leadingInterface = testEth1
+	assert.Equal(t, testEth1, bc.getLeadingInterfaceBC(), "DPLL-learned interface takes precedence")
 }
 
 func TestInSpecCondition(t *testing.T) {
@@ -794,7 +806,7 @@ func TestAddEvent_SourceLostPropagation(t *testing.T) {
 				Source: event.PTP4l,
 				IFace:  testEno8703,
 				Time:   now,
-				Data:   &event.PTPData{State: event.PTP_FREERUN, SourceLost: true},
+				Data:   &event.StateData{State: event.PTP_FREERUN, SourceLost: true},
 			},
 			expectedStates: map[string]event.PTPState{
 				testEno8903: event.PTP_LOCKED,
@@ -849,7 +861,7 @@ func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 			Source: event.PTP4l,
 			IFace:  testEno8703,
 			Time:   now,
-			Data:   &event.PTPData{State: event.PTP_FREERUN, SourceLost: true},
+			Data:   &event.StateData{State: event.PTP_FREERUN, SourceLost: true},
 		})
 
 		assert.False(t, bc.isSourceLostBC(), "stale LOCKED detail on other iface prevents ptpLost")
@@ -919,14 +931,12 @@ func TestUpdateBCState(t *testing.T) {
 func TestProcessSyncE(t *testing.T) {
 	t.Run("state event emits synce_state IPC", func(t *testing.T) {
 		rio := &ipcRecorder{}
-		bc := &TBC{cfgName: testPTP4lCfg, sendIPC: rio.send}
+		bc := TBC{BaseClock: BaseClock{cfgName: testPTP4lCfg, sendIPC: rio.send}}
 		ev := event.Event{
 			Source: event.SYNCE,
 			IFace:  testEns7f0,
-			Data: &event.PTPData{
-				Values: map[event.ValueType]interface{}{
-					event.EEC_STATE: "EEC_LOCKED",
-				},
+			Data: &event.SyncEData{
+				EECState: "EEC_LOCKED",
 			},
 		}
 		bc.processSyncE(ev)
@@ -939,15 +949,13 @@ func TestProcessSyncE(t *testing.T) {
 
 	t.Run("quality event emits synce_clock_quality IPC", func(t *testing.T) {
 		rio := &ipcRecorder{}
-		bc := &TBC{cfgName: testPTP4lCfg, sendIPC: rio.send}
+		bc := TBC{BaseClock: BaseClock{cfgName: testPTP4lCfg, sendIPC: rio.send}}
 		ev := event.Event{
 			Source: event.SYNCE,
 			IFace:  testEns7f0,
-			Data: &event.PTPData{
-				Values: map[event.ValueType]interface{}{
-					event.QL:     byte(4),
-					event.EXT_QL: byte(0xFF),
-				},
+			Data: &event.SyncEData{
+				QL:    event.BytePtr(4),
+				ExtQL: event.BytePtr(0xFF),
 			},
 		}
 		bc.processSyncE(ev)
@@ -957,9 +965,9 @@ func TestProcessSyncE(t *testing.T) {
 		assert.Equal(t, ipc.SyncEClockQualityValue{QL: 4, ExtendedQL: 0xFF}, rio.messages[0].Values)
 	})
 
-	t.Run("nil PTPData does not panic", func(t *testing.T) {
+	t.Run("nil Data does not panic", func(t *testing.T) {
 		rio := &ipcRecorder{}
-		bc := &TBC{cfgName: testPTP4lCfg, sendIPC: rio.send}
+		bc := TBC{BaseClock: BaseClock{cfgName: testPTP4lCfg, sendIPC: rio.send}}
 		bc.processSyncE(event.Event{Source: event.SYNCE, Data: nil})
 		assert.Empty(t, rio.messages)
 	})
@@ -973,9 +981,10 @@ func TestUpdateOSClockState(t *testing.T) {
 		bc.syncState.State = event.PTP_LOCKED
 		bc.overallSyncState = event.PTP_LOCKED
 
-		bc.SystemClockUpdate(event.PTP_FREERUN)
+		bc.osClock.State = event.PTP_FREERUN // Set on osClock on Clock Manager which this is a pointer to
+		bc.SystemClockUpdate()
 		assert.Equal(t, event.PTP_FREERUN, bc.overallSyncState)
-		assert.Equal(t, event.PTP_FREERUN, bc.osClockState)
+		assert.Equal(t, event.PTP_FREERUN, bc.osClock.State)
 		require.Len(t, rio.messages, 1)
 		assert.Equal(t, ipc.TypeSyncState, rio.messages[0].Type)
 		assert.Equal(t, ipc.SyncStateValue{State: ipc.StateFreerun}, rio.messages[0].Values)
@@ -988,7 +997,8 @@ func TestUpdateOSClockState(t *testing.T) {
 		bc.syncState.State = event.PTP_LOCKED
 		bc.overallSyncState = event.PTP_LOCKED
 
-		bc.SystemClockUpdate(event.PTP_LOCKED)
+		bc.osClock.State = event.PTP_LOCKED // Set on osClock on Clock Manager which this is a pointer to
+		bc.SystemClockUpdate()
 		assert.Equal(t, event.PTP_LOCKED, bc.overallSyncState)
 		assert.Empty(t, rio.messages)
 	})
@@ -1057,9 +1067,9 @@ func makeTBCEvent(process event.EventSource, state event.PTPState, offset int64,
 		ClockType:  event.BC,
 		Time:       time.Now().UnixMilli(),
 		WriteToLog: true,
-		Data: &event.PTPData{
+		Data: &event.OffsetData{
 			State:      state,
-			Values:     map[event.ValueType]interface{}{event.OFFSET: offset},
+			Offset:     offset,
 			SourceLost: sourceLost,
 		},
 	}
@@ -1082,19 +1092,21 @@ func tbcLeadingClockParams() *LeadingClockParams {
 func newLockedTBCClock() (*TBC, *ipcRecorder) {
 	rec := ipcRecorder{}
 	bc := &TBC{
-		sendIPC:          rec.send,
+		BaseClock: BaseClock{
+			cfgName:          testTS2PHCCfg,
+			sendIPC:          rec.send,
+			overallSyncState: event.PTP_NOTSET,
+			osClock:          &OsClock{State: event.PTP_NOTSET},
+		},
 		sendEvent:        func(event.Event) {},
 		getUtcOffset:     stubUtcOffset,
 		pmcClient:        &pmc.MockClient{},
-		cfgName:          testTS2PHCCfg,
 		leadingClockData: tbcLeadingClockParams(),
 		syncState: SyncState{
 			State:         event.PTP_FREERUN,
 			ClockClass:    protocol.ClockClassUninitialized,
 			ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 		},
-		overallSyncState: event.PTP_FREERUN,
-		osClockState:     event.PTP_NOTSET,
 	}
 	bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
 	bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_LOCKED, 10, false))

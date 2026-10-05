@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -8,11 +9,12 @@ import (
 
 	"github.com/golang/glog"
 	expect "github.com/google/goexpect"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	pmcPkg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
 const (
@@ -24,7 +26,7 @@ const (
 )
 
 // NewPMCProcess creates a new PMC process instance for monitoring PTP events.
-func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType string, waitInterval time.Duration) *PMCProcess {
+func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType event.ClockType, nodeProfile *ptpv1.PtpProfile, waitInterval time.Duration) *PMCProcess {
 	return &PMCProcess{
 		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
 		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
@@ -33,31 +35,41 @@ func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType string, wait
 		eventCh:           eventCh,
 		clockType:         clockType,
 		waitInterval:      waitInterval,
+		profile:           nodeProfile,
 		getMonitorFn:      pmcPkg.GetPMCMontior,
+		conditions: map[process.Action]process.Condition{
+			process.ActionStart: process.OnProcessUp{
+				Source:     event.PTP4l,
+				ConfigName: fmt.Sprintf("ptp4l.%d.config", runID),
+			},
+		},
 	}
 }
 
 // PMCProcess manages a PMC (PTP Management Client) process for monitoring PTP events.
 type PMCProcess struct {
-	lock              sync.Mutex
+	lock              sync.RWMutex
 	configFileName    string
-	stopped           bool
 	monitorPortState  bool
 	monitorTimeSync   bool
 	monitorParentData bool
 	monitorCMLDS      bool
 	parentDS          *protocol.ParentDataSet
 	parentDSCh        chan protocol.ParentDataSet
-	exitCh            chan struct{}
-	clockType         string
 	// waitInterval bounds how long expectWorker blocks on Expect before it re-polls the parent data set. This
 	// guarantees the clock class metric recovers within one interval even if a NOTIFY_PARENT_DATA_SET push is never
 	// delivered (observed on netdevsim after a link outage recovers).
 	waitInterval time.Duration
+	stopCh       chan struct{}
+	clockType    event.ClockType
 	messageTag   string
 	eventCh      chan<- event.Event
+	profile      *ptpv1.PtpProfile
 
 	getMonitorFn func(string) (*expect.GExpect, <-chan error, error)
+	processState process.State
+	conditions   map[process.Action]process.Condition
+	wg           sync.WaitGroup
 }
 
 // Name returns the process name.
@@ -65,33 +77,69 @@ func (pmc *PMCProcess) Name() string {
 	return PMCProcessName
 }
 
-// Stopped returns whether the process has been stopped.
+// ConfigName ...
+func (pmc *PMCProcess) ConfigName() string {
+	return pmc.configFileName
+}
+
+// SyncInitialState ...
+func (pmc *PMCProcess) SyncInitialState() {}
+
+// Conditions returns the action conditions for the PMCProcess.
+func (pmc *PMCProcess) Conditions() map[process.Action]process.Condition {
+	return pmc.conditions
+}
+
+// State returns the current process state of PMCProcess.
+func (pmc *PMCProcess) State() process.State {
+	pmc.lock.RLock()
+	defer pmc.lock.RUnlock()
+	return pmc.processState
+}
+
+// Profile returns the PTP profile associated with PMCProcess.
+func (pmc *PMCProcess) Profile() *ptpv1.PtpProfile {
+	return pmc.profile
+}
+
+// ClockType returns the clock type of PMCProcess.
+func (pmc *PMCProcess) ClockType() event.ClockType {
+	return pmc.clockType
+}
+
+// DependentProcesses returns processes that depend on PMCProcess.
+func (pmc *PMCProcess) DependentProcesses() []process.Process {
+	return []process.Process{}
+}
+
+func (pmc *PMCProcess) setProcessState(s process.State) {
+	pmc.lock.Lock()
+	pmc.processState = s
+	pmc.lock.Unlock()
+}
+
+// Stopped returns whether the process has not been started or has already exited.
 func (pmc *PMCProcess) Stopped() bool {
-	pmc.lock.Lock()
-	defer pmc.lock.Unlock()
-	return pmc.stopped
+	st := pmc.State()
+	return st == process.Created || st == process.Stopped || st == process.Dead
 }
 
-func (pmc *PMCProcess) getAndSetStopped(val bool) bool {
+// Stop signals the process to stop.
+func (pmc *PMCProcess) Stop() error {
 	pmc.lock.Lock()
-	defer pmc.lock.Unlock()
-	oldVal := pmc.stopped
-	pmc.stopped = val
-	return oldVal
-}
-
-// CmdStop signals the process to stop.
-func (pmc *PMCProcess) CmdStop() {
-	pmc.getAndSetStopped(true)
-	select {
-	case <-pmc.exitCh:
-	default:
-		close(pmc.exitCh)
+	st := pmc.processState
+	if st == process.Created || st == process.Stopping || st == process.Stopped || st == process.Dead {
+		pmc.lock.Unlock()
+		return nil
 	}
-}
-
-// CmdInit initializes the process state.
-func (pmc *PMCProcess) CmdInit() {
+	pmc.processState = process.Stopping
+	stopCh := pmc.stopCh
+	pmc.lock.Unlock()
+	if stopCh != nil {
+		close(stopCh)
+	}
+	pmc.wg.Wait()
+	return nil
 }
 
 // ProcessStatus processes status updates for the PMC process.
@@ -120,25 +168,43 @@ func (pmc *PMCProcess) getMonitorSubcribeCommand() string {
 	)
 }
 
-// CmdRun starts the PMC monitoring process.
-func (pmc *PMCProcess) CmdRun() {
-	isStopped := pmc.getAndSetStopped(false)
-	if isStopped {
-		return
+// Start starts the PMC monitoring process.
+func (pmc *PMCProcess) Start(_ context.Context) error {
+	pmc.lock.Lock()
+	st := pmc.processState
+	switch st {
+	case process.Starting, process.Running:
+		pmc.lock.Unlock()
+		return nil
+	case process.Stopping:
+		pmc.lock.Unlock()
+		return fmt.Errorf("%s is stopping", pmc.Name())
 	}
-	pmc.exitCh = make(chan struct{}, 1)
+	pmc.stopCh = make(chan struct{})
+	pmc.processState = process.Starting
+	pmc.lock.Unlock()
 
+	pmc.run()
+	return nil
+}
+
+func (pmc *PMCProcess) run() {
+	pmc.wg.Add(1)
 	go func() {
-		for {
-			if pmc.Stopped() {
-				return
+		defer pmc.wg.Done()
+		defer func() {
+			if pmc.State() == process.Stopping {
+				pmc.setProcessState(process.Stopped)
+			} else {
+				pmc.setProcessState(process.Dead)
 			}
-
-			monitorErr := pmc.Monitor()
-			if monitorErr == nil && pmc.Stopped() {
-				return
-			}
-		}
+			pmc.ProcessStatus(PtpProcessDown)
+			sendProcessStatusEvent(pmc.eventCh, event.PMC, pmc.configFileName, pmc.clockType, "", PtpProcessDown)
+		}()
+		pmc.setProcessState(process.Running)
+		pmc.ProcessStatus(PtpProcessUp)
+		sendProcessStatusEvent(pmc.eventCh, event.PMC, pmc.configFileName, pmc.clockType, "", PtpProcessUp)
+		_ = pmc.Monitor()
 	}()
 }
 
@@ -151,7 +217,7 @@ type workerSignal struct {
 // Poll runs a Poll operation in a goroutine and sends the result to the struct's ParentDataSet channel
 func (pmc *PMCProcess) Poll() {
 	select {
-	case <-pmc.exitCh:
+	case <-pmc.stopCh:
 		return
 	default:
 	}
@@ -175,25 +241,29 @@ func (pmc *PMCProcess) monitor() error {
 	}
 
 	doneCh := make(chan struct{})
+	workerCh := make(chan workerSignal, 5)
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		pmc.expectWorker(exp, pmc.parentDSCh, workerCh, doneCh)
+	}()
 	defer func() {
 		close(doneCh)
 		utils.CloseExpect(exp, r)
+		workers.Wait()
 	}()
 
 	subscribeCmd := pmc.getMonitorSubcribeCommand()
 	glog.Infof("Sending '%s' to pmc", subscribeCmd)
 	exp.Send(subscribeCmd + "\n")
 
-	workerCh := make(chan workerSignal, 5)
-
-	go pmc.expectWorker(exp, pmc.parentDSCh, workerCh, doneCh)
-
 	for {
 		select {
 		case <-r:
 			glog.Warningf("PMC monitoring process exited")
 			return fmt.Errorf("PMC needs to restart")
-		case <-pmc.exitCh:
+		case <-pmc.stopCh:
 			return nil
 		case parentDS := <-pmc.parentDSCh:
 			go pmc.handleParentDS(parentDS)
@@ -214,7 +284,7 @@ func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- proto
 
 	for {
 		select {
-		case <-pmc.exitCh:
+		case <-pmc.stopCh:
 			return
 		case <-doneCh:
 			return
@@ -259,7 +329,7 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 	case pmc.eventCh <- event.Event{
 		Source:    event.PMC,
 		CfgName:   pmc.configFileName,
-		ClockType: event.ClockType(pmc.clockType),
+		ClockType: pmc.clockType,
 		Time:      time.Now().UnixMilli(),
 		Data:      &event.ParentDSData{ParentDataSet: parentDS},
 	}:
@@ -270,27 +340,21 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 
 // Monitor continuously monitors the PMC process and handles restarts.
 func (pmc *PMCProcess) Monitor() error {
-	for {
-		err := pmc.monitor()
-		if err != nil {
-			select {
-			case <-pmc.exitCh:
-				glog.Info("PMC Monitor stopping gracefully")
-				return nil
-			default:
-				glog.Info("pmc process hit an issue (%s). restarting...", err)
-				continue
-			}
+	err := pmc.monitor()
+	if err != nil {
+		select {
+		case <-pmc.stopCh:
+			glog.Info("PMC Monitor stopping gracefully")
+			return nil
+		default:
+			glog.Infof("pmc process hit an issue (%s)", err)
+			return err
 		}
-		return err
 	}
+	return err
 }
 
 // ExitCh returns the exit channel for the process.
 func (pmc *PMCProcess) ExitCh() chan struct{} {
-	return pmc.exitCh
-}
-
-// MonitorProcess is a placeholder for process monitoring configuration.
-func (pmc *PMCProcess) MonitorProcess(_ config.ProcessConfig) {
+	return pmc.stopCh
 }

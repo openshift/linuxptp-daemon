@@ -15,7 +15,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
@@ -36,9 +36,8 @@ type ClockManager struct {
 	offsetMetric      *prometheus.GaugeVec
 	clockMetric       *prometheus.GaugeVec
 	clockClassMetric  *prometheus.GaugeVec
-	portRole          map[string]map[string]*parser.PTPEvent
 	clocks            map[string]clock.Clock // cfgName → Clock
-	osClockState      event.PTPState
+	osClock           clock.OsClock
 	ipcCache          *ipc.Cache
 	// applyingProfiles is set while applyNodePTPProfiles is tearing down /
 	// restarting processes. When true, T-BC/T-TSC events are skipped so
@@ -93,9 +92,8 @@ func Init(nodeName string, processChannel chan event.Event, offsetMetric *promet
 		clockMetric:      clockMetric,
 		offsetMetric:     offsetMetric,
 		clockClassMetric: clockClassMetric,
-		portRole:         map[string]map[string]*parser.PTPEvent{},
 		clocks:           map[string]clock.Clock{},
-		osClockState:     event.PTP_NOTSET,
+		osClock:          clock.OsClock{State: event.PTP_FREERUN},
 		ipcCache:         ipcCache,
 		syncStatusCh:     make(chan struct{}, 1),
 	}
@@ -111,6 +109,7 @@ func (m *ClockManager) AddClock(clk clock.Clock) error {
 	if prev, exists := m.clocks[clk.ConfigName()]; exists {
 		glog.Warningf("AddClock: replacing existing %s clock for config %s", prev.ClockType(), clk.ConfigName())
 	}
+	clk.SetOsClock(&m.osClock)
 	m.clocks[clk.ConfigName()] = clk
 	// BC/OC events may arrive with ts2phc.{runID}.config as cfgName,
 	// so register under that key too.
@@ -122,13 +121,41 @@ func (m *ClockManager) AddClock(clk clock.Clock) error {
 	return nil
 }
 
+// GetWindows returns offset sample windows keyed by clock config name.
+// If requiredStatsConfigs is empty, all windows are returned.
+// Otherwise, only windows for configs in requiredStatsConfigs are returned.
+func (m *ClockManager) GetWindows(windowRequests []process.WindowRequest) map[string]map[event.EventSource]utils.ROWindow {
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+
+	out := make(map[string]map[event.EventSource]utils.ROWindow)
+	for _, req := range windowRequests {
+		clk := m.GetClock(req.ClockID)
+		if clk == nil {
+			continue
+		}
+		if _, ok := out[req.ClockID]; !ok {
+			out[req.ClockID] = map[event.EventSource]utils.ROWindow{}
+		}
+
+		// TODO: We might want to process the requests and group them in the future so
+		// requests for the same clock but different event source can be done in one go
+		for _, d := range clk.ProcessData() {
+			if d == nil {
+				continue
+			}
+			if d.ProcessName == req.Source {
+				out[req.ClockID][req.Source] = &d.Window
+			}
+		}
+	}
+	return out
+}
+
 // RemoveAllClocks tears down all registered clocks and cleans up associated state.
 func (m *ClockManager) RemoveAllClocks() {
 	m.clockManagementMu.Lock()
-	for cfgName := range m.clocks {
-		delete(m.portRole, cfgName)
-	}
-	m.osClockState = event.PTP_NOTSET
+	m.osClock.Reset()
 
 	for cfgName := range m.clocks {
 		m.unregisterMetrics(cfgName, "")
@@ -168,32 +195,27 @@ func (m *ClockManager) GetUtcOffset() int {
 // handleOSClockEvent fans out a PHC2SYS/CHRONYD event to all clocks, emits os_clock_state message once, and emits
 // a sync_state message per-profile when the overall state changes.
 func (m *ClockManager) handleOSClockEvent(ev event.Event) {
-	prevClockState := m.osClockState
-	ptp, ok := ev.Data.(*event.PTPData)
+	ptp, ok := ev.Data.(*event.OffsetData)
 	if !ok {
 		glog.Warningf("handleOSClockEvent: received unexpected event")
 		return
 	}
-	m.osClockState = ptp.State
-	if m.osClockState == prevClockState {
+	m.osClock.AddEvent(ev)
+	if m.osClock.State == ptp.State {
 		return
 	}
+	m.osClock.State = ptp.State
 	m.signalSyncStatus()
 
 	// if the OS clock state changed, emit the event to CEP and also pass it along to each clock
-	var osOffset int64
-	if v, exists := ptp.Values[event.OFFSET]; exists {
-		if i, isInt := v.(int64); isInt {
-			osOffset = i
-		}
-	}
+	osOffset := ptp.Offset
 	m.sendIPC(ipc.Message{
 		Type:   ipc.TypeOSClockState,
 		IFace:  ev.IFace,
-		Values: ipc.StateValue{State: event.PtpStateToIPCState(m.osClockState), Offset: osOffset},
+		Values: ipc.StateValue{State: event.PtpStateToIPCState(m.osClock.State), Offset: osOffset},
 	})
 	for _, clk := range m.clocks {
-		clk.SystemClockUpdate(m.osClockState)
+		clk.SystemClockUpdate()
 	}
 }
 
@@ -209,8 +231,6 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 			// TODO: This is a pretty large lock. Using it for simplicity. We should evaluate this in the future.
 			//       I think a combination of the manager lock + locks for each individual clock will be the end goal.
 			m.clockManagementMu.Lock()
-			glog.V(14).Infof("ProcessEvents: received event source=%s iface=%s cfg=%s clockType=%s reset=%v",
-				ev.Source, ev.IFace, ev.CfgName, ev.ClockType, ev.Reset)
 			if ev.Reset {
 				m.reset(ev)
 				m.clockManagementMu.Unlock()
@@ -251,7 +271,7 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 			if prevState != event.PTP_NOTSET && prevState != clockState.State {
 				m.signalSyncStatus()
 			}
-			if clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
+			if clockState.LeadingIFace != "" && clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
 				// BC/OC clock_state is scraped as process="ptp4l" (ptp4l is the
 				// servo), whereas GM/T-BC report under their clock-type label.
 				process := string(ev.ClockType)
@@ -337,8 +357,24 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 			event.GPS_STATUS: data.GPSStatus,
 			event.OFFSET:     data.Offset,
 		}
-	case *event.PTPData:
-		processData = data.Values
+	case *event.OffsetData:
+		processData = map[event.ValueType]interface{}{
+			event.OFFSET: data.Offset,
+		}
+		if data.NMEALocked != nil {
+			processData[event.NMEA_STATUS] = *data.NMEALocked
+		}
+	case *event.DPLLData:
+		processData = map[event.ValueType]interface{}{}
+		if data.Offset != nil {
+			processData[event.OFFSET] = *data.Offset
+		}
+		if data.PhaseStatus != nil {
+			processData[event.PHASE_STATUS] = *data.PhaseStatus
+		}
+		if data.FrequencyStatus != nil {
+			processData[event.FREQUENCY_STATUS] = *data.FrequencyStatus
+		}
 	default:
 		return
 	}

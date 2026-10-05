@@ -2,6 +2,8 @@ package generic
 
 import (
 	"encoding/json"
+	"fmt"
+
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -55,6 +57,9 @@ func PopulateHwConfigGeneric(data *interface{}, hwconfigs *[]ptpv1.HwConfig) err
 }
 
 func AfterRunPTPCommandGeneric(data *interface{}, nodeProfile *ptpv1.PtpProfile, command string) error {
+	if nodeProfile == nil {
+		return fmt.Errorf("generic requires a non-Nil profile")
+	}
 	var pluginOpts string = ""
 	var err error
 	var optsByteArray []byte

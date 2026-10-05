@@ -132,9 +132,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		if ptpMetrics.Iface != "" && configName != "" {
 			masterOffsetIface.set(configName, ptpMetrics.Iface)
 		}
-		if ptpMetrics.Source == "master" && process.dn != nil {
-			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
-		}
+
 		// sendPtp4lOffsetEvent handles T-BC: windowed offset averaging,
 		// rate-limited to 1/sec, using tBCAttributes. It no-ops for simple
 		// OC/BC (offsetEventWindow is nil), so we send the event directly below.
@@ -152,25 +150,23 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 				IFace:     ptpMetrics.Iface,
 				ClockType: process.clockType,
 				Time:      time.Now().UnixMilli(),
-				Data: &event.PTPData{
+				Data: &event.OffsetData{
 					State:  state,
-					Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+					Offset: int64(ptpMetrics.Offset),
 				},
 			}:
 			default:
 			}
 		}
 	case ts2phcProcessName:
-		if process.dn != nil {
-			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
-		}
 		// Send event for ts2phc
 		eventSource := process.ifaces.GetEventSource(process.ifaces.GetPhcID2IFace(ptpMetrics.Iface))
-		values := map[event.ValueType]interface{}{
-			event.OFFSET: int64(ptpMetrics.Offset),
+		od := &event.OffsetData{
+			State:  state,
+			Offset: int64(ptpMetrics.Offset),
 		}
 		if eventSource == event.GNSS {
-			values[event.NMEA_STATUS] = int64(1)
+			od.NMEALocked = event.Ptr(true)
 		}
 		select {
 		case process.eventCh <- event.Event{
@@ -181,10 +177,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			Time:       time.Now().UnixMilli(),
 			WriteToLog: eventSource == event.GNSS,
 			Reset:      false,
-			Data: &event.PTPData{
-				State:  state,
-				Values: values,
-			},
+			Data:       od,
 		}:
 		default:
 		}
@@ -196,9 +189,9 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			IFace:     ptpMetrics.Iface,
 			ClockType: process.clockType,
 			Time:      time.Now().UnixMilli(),
-			Data: &event.PTPData{
+			Data: &event.OffsetData{
 				State:  state,
-				Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+				Offset: int64(ptpMetrics.Offset),
 			},
 		}:
 		default:
@@ -211,9 +204,9 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			IFace:     ptpMetrics.Iface,
 			ClockType: process.clockType,
 			Time:      time.Now().UnixMilli(),
-			Data: &event.PTPData{
+			Data: &event.OffsetData{
 				State:  state,
-				Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+				Offset: int64(ptpMetrics.Offset),
 			},
 		}:
 		default:
@@ -244,10 +237,12 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 		case parserconstants.PortRoleSlave:
 			masterOffsetIface.set(configName, interfaceName)
 			slaveIface.set(configName, interfaceName)
-		case parserconstants.PortRoleFaulty:
-			isFaulty := slaveIface.isFaulty(configName, interfaceName)
+		case parserconstants.PortRoleFaulty, parserconstants.PortRoleListening:
+			// The active slave port lost its source: FAULTY = the port/link faulted; LISTENING = the master went away
+			// (announce timeout) while the link stayed up. Both mean the servo has no offset to track.
+			stateChanged := slaveIface.isFollowerIface(configName, interfaceName)
 			sourceIsPtp4l := masterOffsetSource.get(configName) == ptp4lProcessName
-			if isFaulty && sourceIsPtp4l {
+			if stateChanged && sourceIsPtp4l {
 				// Set fault metrics and clear slave & master offset interfaces
 				updatePTPMetrics(master, process.name, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
 				updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
@@ -262,7 +257,7 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 						IFace:     interfaceName,
 						ClockType: process.clockType,
 						Time:      time.Now().UnixMilli(),
-						Data:      &event.PTPData{SourceLost: true},
+						Data:      &event.OffsetData{SourceLost: true},
 					}:
 					default:
 					}

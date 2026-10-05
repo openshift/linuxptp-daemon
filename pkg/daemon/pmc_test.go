@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -100,7 +101,7 @@ func (c *countingPMCClient) GetParentDS(cfgName string) (protocol.ParentDataSet,
 	count := c.monitor.pollCount.Add(1)
 	if count > c.monitor.maxPolls {
 		c.monitor.t.Errorf("runaway detected: poll called %d times, orphaned expectWorker spinning", count)
-		c.monitor.pmc.CmdStop()
+		c.monitor.pmc.Stop()
 	}
 	return c.MockClient.GetParentDS(cfgName)
 }
@@ -123,16 +124,16 @@ func TestMonitorExitsViaCmdStop(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
-	proc.CmdRun()
+	proc.Start(context.TODO())
 
 	waitFor(t, 5*time.Second, "poll called at least once", func() bool {
 		return mock.pollCount.Load() > 0
 	})
 
-	proc.CmdStop()
+	proc.Stop()
 
 	waitFor(t, 5*time.Second, "process stopped", func() bool {
 		return proc.Stopped()
@@ -143,10 +144,10 @@ func TestMonitorNoOrphanAfterProcessDeath(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
-	proc.CmdRun()
+	proc.Start(context.TODO())
 
 	waitFor(t, 5*time.Second, "poll called at least once", func() bool {
 		return mock.pollCount.Load() > 0
@@ -171,7 +172,7 @@ func TestMonitorNoOrphanAfterProcessDeath(t *testing.T) {
 			delta, countAfterKill, countFinal)
 	}
 
-	proc.CmdStop()
+	proc.Stop()
 	waitFor(t, 5*time.Second, "process stopped", func() bool {
 		return proc.Stopped()
 	})
@@ -181,42 +182,44 @@ func TestCmdStopIdempotent(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
-	proc.CmdRun()
+	proc.Start(context.TODO())
 
 	waitFor(t, 5*time.Second, "poll called at least once", func() bool {
 		return mock.pollCount.Load() > 0
 	})
 
-	proc.CmdStop()
-	proc.CmdStop()
-	proc.CmdStop()
+	proc.Stop()
+	proc.Stop()
+	proc.Stop()
 
 	waitFor(t, 5*time.Second, "process stopped", func() bool {
 		return proc.Stopped()
 	})
 }
 
-func TestCmdStopBeforeCmdRun(t *testing.T) {
+func TestCmdStopThenStartRuns(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
-	proc.CmdStop()
+	proc.Stop()
 
 	if !proc.Stopped() {
-		t.Error("expected process to be stopped after CmdStop")
+		t.Error("expected process to be stopped after Stop")
 	}
 
-	proc.CmdRun()
-
-	time.Sleep(500 * time.Millisecond)
-
-	if mock.pollCount.Load() > 0 {
-		t.Error("CmdRun should not have started monitoring after CmdStop")
+	if err := proc.Start(context.TODO()); err != nil {
+		t.Fatalf("Start after Stop: %v", err)
 	}
+
+	waitFor(t, 5*time.Second, "poll called after Start from Stopped", func() bool {
+		return mock.pollCount.Load() > 0
+	})
+
+	proc.Stop()
 }
