@@ -1,6 +1,7 @@
 package clock
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
@@ -54,6 +55,18 @@ type BaseClock struct {
 
 // ConfigName ..
 func (c *BaseClock) ConfigName() string { return c.cfgName }
+
+// ConfigNames returns every config name events for this clock may arrive under. A
+// ptp4l-based clock also receives ts2phc events, which arrive under the matching
+// ts2phc.{runID}.config name, so that alias is included. Composite clocks override
+// this to add their members' config names.
+func (c *BaseClock) ConfigNames() []string {
+	names := []string{c.cfgName}
+	if ts2phc := strings.Replace(c.cfgName, "ptp4l.", "ts2phc.", 1); ts2phc != c.cfgName {
+		names = append(names, ts2phc)
+	}
+	return names
+}
 
 // Reset resets the clock state.
 func (c *BaseClock) Reset() {

@@ -31,6 +31,15 @@ var (
 			`\s+freq\s+(?P<freq_adj>[-+]?\d+)` +
 			`\s*(?:delay\s+(?P<delay>[-+]?\d+))?$`,
 	)
+	// HA failover selection, e.g.
+	//   phc2sys[123.4]: [phc2sys.0.config] selecting ens2f0 as domain source clock
+	//   phc2sys[123.4]: [phc2sys.0.config] selecting ens2f2 as out-of-domain source clock
+	// [\w-]+ matches both "domain" and "out-of-domain".
+	selectingPhc2SysRegex = regexp.MustCompile(
+		`^phc2sys\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
+			`\s+selecting\s+(?P<selected_iface>\S+)\s+as\s+[\w-]+\s+source\s+clock$`,
+	)
 )
 
 type phc2sysParsed struct {
@@ -45,6 +54,7 @@ type phc2sysParsed struct {
 	Delay          *float64
 	ServoState     string
 	Source         string
+	SelectedIface  string
 }
 
 // Populate ...
@@ -107,6 +117,8 @@ func (p *phc2sysParsed) Populate(line string, matched, feilds []string) error {
 			p.ServoState = matched[i]
 		case "source":
 			p.Source = matched[i]
+		case "selected_iface":
+			p.SelectedIface = matched[i]
 		}
 	}
 	return nil
@@ -130,6 +142,15 @@ func NewPhc2SysExtractor() *BaseMetricsExtractor[*phc2sysParsed] {
 				Extractor: func(parsed *phc2sysParsed) (*Metrics, *PTPEvent, error) {
 					metric, err := extractRegularPhc2Sys(parsed)
 					return metric, nil, err
+				},
+			},
+			{
+				Regex: selectingPhc2SysRegex,
+				Extractor: func(parsed *phc2sysParsed) (*Metrics, *PTPEvent, error) {
+					if parsed.SelectedIface == "" {
+						return nil, nil, errors.New("failed to find selected source interface")
+					}
+					return nil, &PTPEvent{Iface: parsed.SelectedIface, Raw: parsed.Raw}, nil
 				},
 			},
 		},

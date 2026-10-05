@@ -285,6 +285,21 @@ func (he *HoldoverExpired) String() string {
 	return fmt.Sprintf("Holover Expired: generation=%d", he.Generation)
 }
 
+// SelectedSourceData signals which source interface phc2sys has selected to
+// discipline the system clock — the HA failover selection. It is emitted by the
+// phc2sys processor from the "selecting X as [out-of-domain] source clock" log
+// line and consumed by the HA clock to track its active member. IFace is the
+// selected interface.
+type SelectedSourceData struct {
+	IFace string
+}
+
+func (*SelectedSourceData) eventData() {}
+
+func (d *SelectedSourceData) String() string {
+	return fmt.Sprintf("selected source %s", d.IFace)
+}
+
 // ProcessStatusData is process up/down. Status is 0 (down) or 1 (up).
 type ProcessStatusData struct {
 	Status int64
@@ -350,6 +365,9 @@ const (
 	TBC ClockType = "T-BC"
 	// OC ...
 	OC ClockType = "OC"
+	// HA is a High Availability clock: a composite of multiple BC instances with a
+	// single phc2sys that fails over between them to discipline the system clock.
+	HA ClockType = "HA"
 	// SysClock only the system clock not a PTP Clock (this is updated by another clock)
 	SysClock ClockType = "SysClock"
 	// ClockUnset ...

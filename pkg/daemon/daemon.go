@@ -295,6 +295,7 @@ func New(
 		eventsOut: handlerEvents,
 		clockMgr:  clockmgr.Init(nodeName, handlerEvents, Offset, ClockState, ClockClassMetrics, cache),
 	}
+	pm.clockMgr.SetHAMetric(PTPHAMetrics)
 	tracker.processManager = pm
 	go ipc.NewLink(ipcSocket, cache).Run(context.TODO())
 

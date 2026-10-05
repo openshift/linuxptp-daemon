@@ -216,6 +216,10 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 
 // processParsedEvent handles PTP events extracted by the parser
 func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
+	if process.name == phc2sysProcessName {
+		processPhc2sysSelectedSource(process, ptpEvent)
+		return
+	}
 	if process.name != ptp4lProcessName {
 		return
 	}
@@ -268,6 +272,31 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 				slaveIface.set(configName, "")
 			}
 		}
+	}
+}
+
+// processPhc2sysSelectedSource forwards an HA phc2sys source-selection
+// ("selecting X as [out-of-domain] source clock") to the clock pipeline as a
+// SelectedSourceData event. The HA clock consumes it to track its active member.
+func processPhc2sysSelectedSource(process *ptpProcess, ptpEvent *parser.PTPEvent) {
+	if ptpEvent.Iface == "" {
+		return
+	}
+	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
+	configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
+	if configName == "" {
+		return
+	}
+	select {
+	case process.eventCh <- event.Event{
+		Source:    event.PHC2SYS,
+		CfgName:   configName,
+		IFace:     ptpEvent.Iface,
+		ClockType: process.clockType,
+		Time:      time.Now().UnixMilli(),
+		Data:      &event.SelectedSourceData{IFace: ptpEvent.Iface},
+	}:
+	default:
 	}
 }
 
