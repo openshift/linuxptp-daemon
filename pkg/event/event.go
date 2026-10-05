@@ -177,6 +177,8 @@ type DPLLData struct {
 	InSyncConditionTimes     uint64
 	ToFreeRunThreshold       uint64
 	MaxInSpecOffset          uint64
+	// HoldoverDisabled is true when the DPLL's LocalHoldoverTimeout is 0.
+	HoldoverDisabled bool
 }
 
 func (*DPLLData) eventData() {}

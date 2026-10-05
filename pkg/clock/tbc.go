@@ -42,6 +42,7 @@ type LeadingClockParams struct {
 	inSyncConditionTimes     int
 	toFreeRunThreshold       int
 	MaxInSpecOffset          uint64
+	holdoverDisabled         bool
 	lastInSpec               bool
 	inSyncThresholdCounter   int
 	clockID                  string
@@ -239,10 +240,16 @@ func (c *TBC) updateState() bool {
 			glog.Info("BC FSM: LOCKED to FREERUN")
 			updateDownstreamData = true
 		} else if c.isSourceLostBC() {
-			c.syncState.State = event.PTP_HOLDOVER
-			c.syncState.ClockClass = fbprotocol.ClockClass(135)
-			glog.Info("BC FSM: LOCKED to HOLDOVER")
-			c.leadingClockData.lastInSpec = true
+			if c.leadingClockData.holdoverDisabled {
+				c.syncState.State = event.PTP_FREERUN
+				c.syncState.ClockClass = protocol.ClockClassFreerun
+				glog.Info("BC FSM: LOCKED to FREERUN")
+			} else {
+				c.syncState.State = event.PTP_HOLDOVER
+				c.syncState.ClockClass = fbprotocol.ClockClass(135)
+				glog.Info("BC FSM: LOCKED to HOLDOVER")
+				c.leadingClockData.lastInSpec = true
+			}
 			updateDownstreamData = true
 		} else {
 			if *c.leadingClockData.upstreamTimeProperties != *c.leadingClockData.downstreamTimeProperties {
@@ -767,6 +774,10 @@ func (c *TBC) updateLeadingClockData(ev event.Event) {
 		}
 		if data.LeadingSource {
 			c.leadingClockData.leadingInterface = ev.IFace
+		}
+		// The leading DPLL may be fed by PPS, so match by interface rather than LeadingSource.
+		if ev.IFace == c.getLeadingInterfaceBC() {
+			c.leadingClockData.holdoverDisabled = data.HoldoverDisabled
 		}
 		if data.InSyncConditionThreshold != 0 {
 			c.leadingClockData.inSyncConditionThreshold = int(data.InSyncConditionThreshold)

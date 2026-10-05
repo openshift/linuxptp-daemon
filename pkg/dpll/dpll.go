@@ -849,6 +849,7 @@ func (d *DpllConfig) sendDpllEvent() {
 		InSyncConditionTimes:     d.inSyncConditionTimes,
 		ToFreeRunThreshold:       d.LocalMaxHoldoverOffSet,
 		MaxInSpecOffset:          d.MaxInSpecOffset,
+		HoldoverDisabled:         d.LocalHoldoverTimeout == 0,
 	}
 	if !d.hasFlag(FlagNoFreqencyStatus) {
 		dpllData.FrequencyStatus = event.Int64Ptr(d.frequencyStatus)
