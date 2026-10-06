@@ -340,3 +340,24 @@ func TestClockManager_PHC2SYS_RemoveAllClocksResetsData(t *testing.T) {
 		assert.NotEqual(t, event.PHC2SYS, d.ProcessName, "stale PHC2SYS data must be cleared on Reset")
 	}
 }
+
+func TestConvertToFloat(t *testing.T) {
+	got, ok := convertToFloat(int64(6))
+	require.True(t, ok)
+	assert.Equal(t, 6.0, got)
+
+	got, ok = convertToFloat(1.5)
+	require.True(t, ok)
+	assert.Equal(t, 1.5, got)
+
+	got, ok = convertToFloat(true)
+	require.True(t, ok)
+	assert.Equal(t, 1.0, got)
+
+	got, ok = convertToFloat(false)
+	require.True(t, ok)
+	assert.Equal(t, 0.0, got)
+
+	_, ok = convertToFloat("true")
+	assert.False(t, ok)
+}
