@@ -783,17 +783,18 @@ func TestEvalActions_FailOverStart(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pm.processEvents(ctx)
 
 	pm.StartProcesses(ctx)
-	assert.Equal(t, phc2sys.starts, 0, "phc2sys should start")
+	assert.Equal(t, 0, phc2sys.Starts(), "phc2sys should not start before GNSS recovered")
 	inbound <- event.PluginEvent("ntpfailover", generic.GnssRecoveredEventName)
 	select {
 	case <-handler:
 	case <-time.After(2 * time.Second):
 		t.Fatal("failover event was not forwarded")
 	}
-	assert.Equal(t, phc2sys.starts, 1, "phc2sys should start")
+	require.Eventually(t, func() bool {
+		return phc2sys.Starts() == 1
+	}, 2*time.Second, 10*time.Millisecond, "phc2sys should start after GNSS recovered")
 }
 
 func TestEvalActions_FullFailoverFlow(t *testing.T) {

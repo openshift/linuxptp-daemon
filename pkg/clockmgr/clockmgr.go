@@ -342,6 +342,24 @@ func (m *ClockManager) updateClockClassMetrics(cfgName string, clockClass fbprot
 		processLabel: "ptp4l", nodeLabel: m.nodeName, "config": profile}).Set(float64(clockClass))
 }
 
+// convertToFloat converts an event field to float64.
+// Bool values map to 1 (true) and 0 (false).
+func convertToFloat(value interface{}) (float64, bool) {
+	switch val := value.(type) {
+	case int64:
+		return float64(val), true
+	case float64:
+		return val, true
+	case bool:
+		if val {
+			return 1, true
+		}
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
 // updateMetrics extracts numeric values from PTP events and updates Prometheus metrics.
 // Metrics are cached by (cfgName, process, iface, dataType) to avoid re-registering.
 func (m *ClockManager) updateMetrics(ev event.Event) {
@@ -380,13 +398,8 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 	}
 
 	for dataType, value := range processData {
-		var dataValue float64
-		switch val := value.(type) {
-		case int64:
-			dataValue = float64(val)
-		case float64:
-			dataValue = val
-		default:
+		dataValue, ok := convertToFloat(value)
+		if !ok {
 			continue
 		}
 
@@ -415,7 +428,7 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 
 			if dataType == event.OFFSET {
 				gauge = m.offsetMetric
-			} else if existing, ok := m.registeredGauges[metricName]; ok {
+			} else if existing, exists := m.registeredGauges[metricName]; exists {
 				gauge = existing
 			} else {
 				gauge = prometheus.NewGaugeVec(
