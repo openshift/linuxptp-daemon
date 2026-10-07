@@ -1,6 +1,7 @@
 package intel
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
@@ -30,6 +31,63 @@ func setupMockPinConfig() (*mockPinConfig, func()) {
 	origPinConfig := pinConfig
 	pinConfig = &mockPins
 	return &mockPins, func() { pinConfig = origPinConfig }
+}
+
+func assertPinParentState(t *testing.T, commands []dpll.PinParentDeviceCtl, pinID, parentID, expected uint32) {
+	t.Helper()
+	for _, command := range commands {
+		if command.ID != pinID {
+			continue
+		}
+		for _, control := range command.PinParentCtl {
+			if control.PinParentID == parentID && control.State != nil {
+				assert.Equal(t, expected, *control.State)
+				return
+			}
+		}
+	}
+	assert.Fail(t, fmt.Sprintf("no state command for pin %d parent %d", pinID, parentID))
+}
+
+func assertPinParentNotConfigured(t *testing.T, commands []dpll.PinParentDeviceCtl, pinID, parentID uint32) {
+	t.Helper()
+	for _, command := range commands {
+		if command.ID != pinID {
+			continue
+		}
+		for _, control := range command.PinParentCtl {
+			assert.NotEqual(t, parentID, control.PinParentID)
+		}
+	}
+}
+
+func Test_populateDpllDevicesRefreshesInventory(t *testing.T) {
+	originalGetAllDpllDevices := getAllDpllDevices
+	defer func() { getAllDpllDevices = originalGetAllDpllDevices }()
+
+	calls := 0
+	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
+		calls++
+		return testDpllDevices(), nil
+	}
+
+	data := E825PluginData{}
+	assert.NoError(t, data.populateDpllDevices())
+	assert.NoError(t, data.populateDpllDevices())
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, testDpllDevices(), data.dpllDevices)
+}
+
+func Test_populateDpllDevicesRejectsNilInventory(t *testing.T) {
+	originalGetAllDpllDevices := getAllDpllDevices
+	defer func() { getAllDpllDevices = originalGetAllDpllDevices }()
+	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) { return nil, nil }
+
+	data := E825PluginData{}
+	err := data.populateDpllDevices()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "DPLL device dump returned a nil inventory")
+	assert.Nil(t, data.dpllDevices)
 }
 
 func Test_E825(t *testing.T) {
@@ -287,8 +345,9 @@ func makeRefPins(ref0p, ref0n bool) []*dpll.PinInfo {
 			ID: 0, ClockID: testClockID, PackageLabel: "REF0P", BoardLabel: "ETH01_SDP_TIMESYNC_2",
 			Capabilities: dpll.PinCapState,
 			ParentDevice: []dpll.PinParentDevice{
-				{ParentID: 1, Direction: dpll.PinDirectionInput},
 				{ParentID: 2, Direction: dpll.PinDirectionInput},
+				{ParentID: 3, Direction: dpll.PinDirectionInput},
+				{ParentID: 1, Direction: dpll.PinDirectionInput},
 			},
 		})
 	}
@@ -297,8 +356,9 @@ func makeRefPins(ref0p, ref0n bool) []*dpll.PinInfo {
 			ID: 1, ClockID: testClockID, PackageLabel: "REF0N", BoardLabel: "ETH01_SDP_TIMESYNC_0",
 			Capabilities: dpll.PinCapState,
 			ParentDevice: []dpll.PinParentDevice{
-				{ParentID: 1, Direction: dpll.PinDirectionInput},
 				{ParentID: 2, Direction: dpll.PinDirectionInput},
+				{ParentID: 3, Direction: dpll.PinDirectionInput},
+				{ParentID: 1, Direction: dpll.PinDirectionInput},
 			},
 		})
 	}
@@ -308,25 +368,25 @@ func makeRefPins(ref0p, ref0n bool) []*dpll.PinInfo {
 func Test_setupDpllInputPins(t *testing.T) {
 	defaultDevices := testDpllDevices()
 	tcs := []struct {
-		name             string
-		dpllPins         []*dpll.PinInfo
-		dpllDevices      []*dpll.DoDeviceGetReply
-		expectedCmdCount int
-		expectPPSOnly    bool
+		name              string
+		dpllPins          []*dpll.PinInfo
+		dpllDevices       []*dpll.DoDeviceGetReply
+		expectedCmdCount  int
+		expectBothParents bool
 	}{
 		{
-			name:             "Both REF0P and REF0N present",
-			dpllPins:         makeRefPins(true, true),
-			dpllDevices:      defaultDevices,
-			expectedCmdCount: 2,
-			expectPPSOnly:    true,
+			name:              "Both REF0P and REF0N present",
+			dpllPins:          makeRefPins(true, true),
+			dpllDevices:       defaultDevices,
+			expectedCmdCount:  2,
+			expectBothParents: true,
 		},
 		{
-			name:             "Only REF0P present",
-			dpllPins:         makeRefPins(true, false),
-			dpllDevices:      defaultDevices,
-			expectedCmdCount: 1,
-			expectPPSOnly:    true,
+			name:              "Only REF0P present",
+			dpllPins:          makeRefPins(true, false),
+			dpllDevices:       defaultDevices,
+			expectedCmdCount:  1,
+			expectBothParents: true,
 		},
 		{
 			name: "No matching pins",
@@ -385,6 +445,12 @@ func Test_setupDpllInputPins(t *testing.T) {
 			expectedCmdCount: 0,
 		},
 		{
+			name:             "No EEC device in devices list",
+			dpllPins:         makeRefPins(true, false),
+			dpllDevices:      []*dpll.DoDeviceGetReply{{ID: 2, ClockID: testClockID, Type: dpll.DpllTypePPS}},
+			expectedCmdCount: 0,
+		},
+		{
 			name: "ClockID mismatch between pin and device",
 			dpllPins: []*dpll.PinInfo{
 				{
@@ -422,10 +488,16 @@ func Test_setupDpllInputPins(t *testing.T) {
 			err := data.setupDpllInputPins()
 			assert.NoError(tt, err)
 			assert.Equal(tt, tc.expectedCmdCount, len(mockPinSet.commands))
-			if tc.expectPPSOnly {
+			if tc.expectBothParents {
 				for _, cmd := range mockPinSet.commands {
-					assert.Len(tt, cmd.PinParentCtl, 1, "must target PPS parent only")
-					assert.Equal(tt, uint32(dpll.PinStateSelectable), *cmd.PinParentCtl[0].State)
+					assert.Len(tt, cmd.PinParentCtl, 2)
+					states := make(map[uint32]uint32, len(cmd.PinParentCtl))
+					for _, control := range cmd.PinParentCtl {
+						states[control.PinParentID] = *control.State
+					}
+					assert.Equal(tt, uint32(dpll.PinStateDisconnected), states[1], "EEC parent")
+					assert.Equal(tt, uint32(dpll.PinStateSelectable), states[2], "PPS parent")
+					assert.NotContains(tt, states, uint32(3), "unrelated parent")
 				}
 			}
 		})
@@ -437,6 +509,7 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 		name             string
 		profile          string
 		editProfile      func(*ptpv1.PtpProfile)
+		disableGNSS      bool
 		expectError      bool
 		expectedPinSets  int
 		expectedPinFrqs  int
@@ -445,6 +518,13 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 		{
 			name:             "TGM Profile",
 			profile:          "./testdata/e825-tgm.yaml",
+			expectedPinSets:  2,
+			expectedDpllCmds: 1,
+		},
+		{
+			name:             "TGM Profile with GNSS disabled",
+			profile:          "./testdata/e825-tgm.yaml",
+			disableGNSS:      true,
 			expectedPinSets:  2,
 			expectedDpllCmds: 1,
 		},
@@ -480,11 +560,35 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 				tc.editProfile(profile)
 			}
 			assert.NoError(tt, err)
+			if tc.disableGNSS {
+				var e825Opts map[string]interface{}
+				assert.NoError(tt, json.Unmarshal(profile.Plugins[pluginNameE825].Raw, &e825Opts))
+				e825Opts["gnss"] = map[string]interface{}{"disabled": true}
+				pluginOpts, marshalErr := json.Marshal(e825Opts)
+				assert.NoError(tt, marshalErr)
+				profile.Plugins[pluginNameE825].Raw = pluginOpts
+			}
 			p, d := E825("e825")
 			data := (*d).(*E825PluginData)
 			mockDpllPinset, restoreDpllPins := setupGNSSMocks(data)
 			defer restoreDpllPins()
+			devices := getAllDpllDevices
+			deviceDumps := 0
+			getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
+				deviceDumps++
+				return devices()
+			}
+			defer func() { getAllDpllDevices = devices }()
+			pins := getAllDpllPins
+			pinDumps := 0
+			getAllDpllPins = func() ([]*dpll.PinInfo, error) {
+				pinDumps++
+				return pins()
+			}
+			defer func() { getAllDpllPins = pins }()
 			err = p.OnPTPConfigChange(d, profile)
+			assert.Equal(tt, 1, deviceDumps)
+			assert.Equal(tt, 1, pinDumps)
 			if tc.expectError {
 				assert.Error(tt, err)
 			} else {
@@ -492,7 +596,47 @@ func Test_OnPTPConfigChangeE825(t *testing.T) {
 				assert.Equal(tt, tc.expectedPinSets, mockPins.actualPinSetCount)
 				assert.Equal(tt, tc.expectedPinFrqs, mockPins.actualPinFrqCount)
 				assert.Equal(tt, tc.expectedDpllCmds, len(mockDpllPinset.commands))
+				if tc.name == "TBC Profile" {
+					for _, pinID := range []uint32{10, 11} {
+						assertPinParentState(tt, mockDpllPinset.commands, pinID, 1, uint32(dpll.PinStateDisconnected))
+						assertPinParentState(tt, mockDpllPinset.commands, pinID, 2, uint32(dpll.PinStateSelectable))
+						assertPinParentNotConfigured(tt, mockDpllPinset.commands, pinID, 3)
+					}
+				}
 			}
 		})
 	}
+}
+
+func Test_OnPTPConfigChangeE825FailsBeforeConfigurationWhenDpllInventoryFails(t *testing.T) {
+	mockPins, restorePins := setupMockPinConfig()
+	defer restorePins()
+	profile, err := loadProfile("./testdata/e825-tbc.yaml")
+	assert.NoError(t, err)
+	p, d := E825("e825")
+	data := (*d).(*E825PluginData)
+	mockDpllPinset, restoreDpllPins := setupGNSSMocks(data)
+	defer restoreDpllPins()
+	data.dpllDevices = nil
+
+	originalGetAllDpllDevices := getAllDpllDevices
+	defer func() { getAllDpllDevices = originalGetAllDpllDevices }()
+	deviceDumps := 0
+	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
+		deviceDumps++
+		return nil, fmt.Errorf("device dump failed")
+	}
+	pinDumps := 0
+	getAllDpllPins = func() ([]*dpll.PinInfo, error) {
+		pinDumps++
+		return data.dpllPins, nil
+	}
+
+	err = p.OnPTPConfigChange(d, profile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to initialize E825 DPLL device inventory")
+	assert.Equal(t, 1, deviceDumps)
+	assert.Zero(t, pinDumps, "pin inventory should not be queried after device initialization fails")
+	assert.Zero(t, mockPins.actualPinSetCount)
+	assert.Empty(t, mockDpllPinset.commands)
 }

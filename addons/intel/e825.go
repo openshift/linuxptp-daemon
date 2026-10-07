@@ -16,7 +16,7 @@ import (
 
 var pluginNameE825 = "e825"
 
-// Hard-coded pin configuration to enforce when T-BC is initializing or loses sync
+// Hard-coded pin configuration to enforce during E825 initialization or T-BC holdover.
 var bcDpllPinReset = pinSet{
 	// Disable SDP0
 	"SDP0": "0 0",
@@ -57,6 +57,15 @@ type E825PluginData struct {
 	dpllDevices []*dpll_netlink.DoDeviceGetReply
 }
 
+var getAllDpllPins = func() ([]*dpll_netlink.PinInfo, error) {
+	conn, err := dpll_netlink.Dial(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	return conn.DumpPinGet()
+}
+
 func tbcConfigured(nodeProfile *ptpv1.PtpProfile) bool {
 	return nodeProfile.PtpSettings["clockType"] == "T-BC"
 }
@@ -95,7 +104,8 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 		(*nodeProfile).PtpSettings = make(map[string]string)
 	}
 
-	if tbcConfigured(nodeProfile) {
+	isTBC := tbcConfigured(nodeProfile)
+	if isTBC {
 		// For T-BC, default to GNSS=disabled, but allow manual override in the user-speciifed config
 		e825Opts.Gnss.Disabled = true
 	}
@@ -112,10 +122,17 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			allDevices := e825Opts.allDevices()
 			glog.Infof("Initializing e825 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
 
+			if err = pluginData.populateDpllDevices(); err != nil {
+				return fmt.Errorf("failed to initialize E825 DPLL device inventory: %w", err)
+			}
+			if err = pluginData.populateDpllPins(); err != nil {
+				return fmt.Errorf("failed to initialize E825 DPLL pin inventory: %w", err)
+			}
+
 			// Setup clockID (prefer ZL3073x module clock ID for e825)
-			zlClockID, zlErr := getClockIDByModule("zl3073x")
+			zlClockID, zlErr := getClockIDByModule("zl3073x", pluginData.dpllDevices)
 			if zlErr != nil {
-				glog.Errorf("e825: failed to resolve ZL3073x DPLL clock ID via netlink: %v", zlErr)
+				glog.Errorf("e825: failed to resolve ZL3073x DPLL clock ID: %v", zlErr)
 			}
 			for _, device := range allDevices {
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
@@ -167,12 +184,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 
 			updateLeapManagerSources(e825Opts.Gnss.LeapSources)
 
-			if !e825Opts.Gnss.Disabled {
-				applyNicPinReset(leadingInterfaceForPinReset(nodeProfile, allDevices))
-			}
-
-			// BC sanity check and pin setup
-			if tbcConfigured(nodeProfile) {
+			if isTBC {
 				if _, ok := nodeProfile.PtpSettings["upstreamPort"]; !ok {
 					return errors.New("GNR-D T-BC must set upstreamPort")
 				}
@@ -184,27 +196,36 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				if inputPinErr := pluginData.setupDpllInputPins(); inputPinErr != nil {
 					glog.Errorf("Could not enable DPLL input pins for T-BC: %s", inputPinErr)
 				}
+			} else {
+				applyNicPinReset(leadingInterfaceForPinReset(nodeProfile, allDevices))
 			}
 		}
 	}
 	return nil
 }
 
-// populateDpllPins creates a list of all known DPLL pins and caches DPLL devices
+// populateDpllPins creates a list of all known DPLL pins.
 func (d *E825PluginData) populateDpllPins() error {
-	conn, err := dpll_netlink.Dial(nil)
-	if err != nil {
-		return fmt.Errorf("failed to dial DPLL: %w", err)
-	}
-	defer conn.Close()
-	d.dpllPins, err = conn.DumpPinGet()
+	pins, err := getAllDpllPins()
 	if err != nil {
 		return fmt.Errorf("failed to dump DPLL pins: %w", err)
 	}
-	d.dpllDevices, err = getAllDpllDevices()
+	if pins == nil {
+		return errors.New("DPLL pin dump returned a nil inventory")
+	}
+	d.dpllPins = pins
+	return nil
+}
+
+func (d *E825PluginData) populateDpllDevices() error {
+	devices, err := getAllDpllDevices()
 	if err != nil {
 		return fmt.Errorf("failed to dump DPLL devices: %w", err)
 	}
+	if devices == nil {
+		return errors.New("DPLL device dump returned a nil inventory")
+	}
+	d.dpllDevices = devices
 	return nil
 }
 
@@ -227,37 +248,43 @@ func pinCmdSetState(pin *dpll_netlink.PinInfo, connectable bool) dpll_netlink.Pi
 	return command
 }
 
-// pinCmdSetStatePPS constructs a command to set the PPS parent device state only,
-// resolving the PPS parent dynamically by matching device type and ClockID.
-func pinCmdSetStatePPS(pin *dpll_netlink.PinInfo, state uint32, devices []*dpll_netlink.DoDeviceGetReply) (dpll_netlink.PinParentDeviceCtl, bool) {
+// pinCmdSetInputStates sets only the EEC and PPS input parents by matching device type and clock ID.
+func pinCmdSetInputStates(pin *dpll_netlink.PinInfo, devices []*dpll_netlink.DoDeviceGetReply) (dpll_netlink.PinParentDeviceCtl, bool) {
+	eecState := uint32(dpll_netlink.PinStateDisconnected)
+	ppsState := uint32(dpll_netlink.PinStateSelectable)
+	var eecFound, ppsFound bool
+	command := dpll_netlink.PinParentDeviceCtl{ID: pin.ID}
 	for _, p := range pin.ParentDevice {
 		if p.Direction != dpll_netlink.PinDirectionInput {
 			continue
 		}
 		for _, dev := range devices {
-			if dev.ID == p.ParentID && dev.ClockID == pin.ClockID && dpll_netlink.GetDpllType(dev.Type) == "pps" {
-				return dpll_netlink.PinParentDeviceCtl{
-					ID: pin.ID,
-					PinParentCtl: []dpll_netlink.PinControl{
-						{
-							PinParentID: p.ParentID,
-							State:       &state,
-						},
-					},
-				}, true
+			if dev.ID != p.ParentID || dev.ClockID != pin.ClockID {
+				continue
 			}
+			var state *uint32
+			switch dev.Type {
+			case dpll_netlink.DpllTypeEEC:
+				state, eecFound = &eecState, true
+			case dpll_netlink.DpllTypePPS:
+				state, ppsFound = &ppsState, true
+			}
+			if state != nil {
+				command.PinParentCtl = append(command.PinParentCtl, dpll_netlink.PinControl{
+					PinParentID: p.ParentID,
+					State:       state,
+				})
+			}
+			break
 		}
 	}
-	return dpll_netlink.PinParentDeviceCtl{}, false
+	return command, eecFound && ppsFound
 }
 
 // setupGnss configures the GNSS-to-DPLL binding
 func (d *E825PluginData) setupGnss(gnss GnssOptions) error {
-	if len(d.dpllPins) == 0 {
-		err := d.populateDpllPins()
-		if err != nil {
-			return fmt.Errorf("could not detect any DPLL pins: %w", err)
-		}
+	if d.dpllPins == nil {
+		return errors.New("DPLL pin inventory has not been initialized")
 	}
 	commands := []dpll_netlink.PinParentDeviceCtl{}
 	affectedPins := []string{}
@@ -282,13 +309,10 @@ func (d *E825PluginData) setupGnss(gnss GnssOptions) error {
 	return BatchPinSet(commands)
 }
 
-// setupDpllInputPins enables DPLL input pins for T-BC by setting their PPS parent to selectable
+// setupDpllInputPins disconnects EEC parents and enables PPS parents for T-BC input pins.
 func (d *E825PluginData) setupDpllInputPins() error {
-	if len(d.dpllPins) == 0 {
-		err := d.populateDpllPins()
-		if err != nil {
-			return fmt.Errorf("could not detect any DPLL pins: %w", err)
-		}
+	if d.dpllPins == nil || d.dpllDevices == nil {
+		return errors.New("DPLL inventory has not been initialized")
 	}
 	commands := []dpll_netlink.PinParentDeviceCtl{}
 	affectedPins := []string{}
@@ -302,10 +326,9 @@ func (d *E825PluginData) setupDpllInputPins() error {
 				glog.Warningf("DPLL input pin %s (id=%d) lacks state-change capability, skipping", packageLabel, pin.ID)
 				continue
 			}
-			state := uint32(dpll_netlink.PinStateSelectable)
-			cmd, ok := pinCmdSetStatePPS(pin, state, d.dpllDevices)
+			cmd, ok := pinCmdSetInputStates(pin, d.dpllDevices)
 			if !ok {
-				glog.Warningf("DPLL input pin %s (id=%d) has no valid PPS input parent, skipping", packageLabel, pin.ID)
+				glog.Warningf("DPLL input pin %s (id=%d) lacks valid EEC/PPS input parents, skipping", packageLabel, pin.ID)
 				continue
 			}
 			commands = append(commands, cmd)
@@ -317,10 +340,10 @@ func (d *E825PluginData) setupDpllInputPins() error {
 		}
 	}
 	if len(commands) == 0 {
-		glog.Warningf("No DPLL input pins found to enable for T-BC (looked for %v)", bcDpllInputPins)
+		glog.Warningf("No DPLL input pins found to initialize for T-BC (looked for %v)", bcDpllInputPins)
 		return nil
 	}
-	glog.Infof("Will enable %d DPLL input pins for T-BC (PPS parent only): %v", len(commands), affectedPins)
+	glog.Infof("Will initialize %d DPLL input pins for T-BC (EEC disconnected, PPS selectable): %v", len(commands), affectedPins)
 	return BatchPinSet(commands)
 }
 
