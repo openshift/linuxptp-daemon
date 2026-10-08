@@ -1,22 +1,23 @@
-# HardwareConfig v2 GNSS device selection
+# HardwareConfig v2 device selection
 
 This document describes how GNSS device detection works and how HardwareConfig v2
-selectors identify USB devices, serial controllers, and the legacy Ethernet
-interface field.
+selectors identify Ethernet, serial, and USB devices.
 
 ## GNSS matcher
 
-`GNSSConfig.Match` supports one of:
+`GNSSConfig.Match` currently supports exactly one of:
 
 - `ttyDevice`
 - `serialDevice`
-- `ethernetInterface` (legacy)
+- `ethernetDevice`
 - `usbDevice`
 
-`ttyDevice` is returned as supplied. The legacy `ethernetInterface` selector
-looks up the GNSS device beneath the named network interface. Serial and USB
-lookup must resolve to one usable GNSS tty; no match or multiple matching tty
-devices is an error.
+Hardware-oriented Ethernet and USB lookup must resolve to exactly one usable
+GNSS tty; no match or multiple matching tty devices is an error. `ttyDevice` is
+returned as supplied. A name-only Ethernet lookup directly reads that
+interface's `device/gnss/` directory; if that directory contains multiple GNSS
+entries, the current implementation logs a warning and chooses the
+lexicographically first entry. This is a legacy exception to strict uniqueness.
 
 ### Direct tty selection
 
@@ -24,12 +25,73 @@ When `ttyDevice` is specified, it is returned as provided. This is the most
 explicit option, but paths such as `/dev/ttyACM0` can change after reboot or
 hotplug events.
 
-### Legacy Ethernet-interface selection
+### Ethernet-device selection
 
-`ethernetInterface` selects a GNSS device through a Linux network interface
-name. The daemon reads `/sys/class/net/<name>/device/gnss/`. If that directory
-contains multiple GNSS entries, the current implementation logs a warning and
-chooses the lexicographically first entry. This is a legacy name-based selector.
+`ethernetDevice` selects the Ethernet interface associated with the GNSS receiver.
+It supports any Linux interface name, a PCI function address, a permanent MAC
+address, a firmware-reported PCI slot ID, and PCI vendor/device IDs. For example,
+a Westport Channel (E810) setup can select a NIC by its interface name:
+
+```yaml
+match:
+  ethernetDevice:
+    name: ens2f0
+```
+
+The name may be any current Linux interface name, including names such as
+`eno8703`, `enp2s0`, and `ens2f0`. For hardware-oriented selection, use
+`pciAddress`, `permanentMACAddress`, `slot`, `vendorID`, or `deviceID`:
+
+```yaml
+match:
+  ethernetDevice:
+    pciAddress: "0000:86:00.0"
+    permanentMACAddress: "00:11:22:aa:bb:cc"
+    slot: "2"
+    vendorID: "8086"
+    deviceID: "159B"
+```
+
+The fields mean:
+
+- `pciAddress` is a PCI bus:device.function address (BDF), for example
+  `0000:86:00.0`. A short address such as `86:00.0` is normalized to the full
+  domain form. It identifies a PCI function, not a chassis slot.
+- `permanentMACAddress` is the permanent hardware MAC address, in colon-separated
+  form such as `00:11:22:aa:bb:cc`. The daemon reads it using `ethtool -P`;
+  it does not use the possibly overridden current MAC address.
+- `slot` is the decimal firmware-reported PCI slot ID used in systemd slot-based
+  interface names. In `ens2f0`, the slot component is `2`; it is not the PCI
+  bus number. Multiple PCI functions in one physical slot can share the slot ID.
+- `vendorID` and `deviceID` are hexadecimal PCI IDs. `vendorID: "8086"` and
+  `deviceID: "159B"` identify an Intel E810 Westport Channel NIC. Either ID may
+  be used alone, or both may be combined; each supplied value is matched against
+  the NIC's PCI `vendor` and `device` sysfs attributes.
+
+The Intel E810 behavior profile uses `vendorID: "8086"` and `deviceID: "159B"`
+by default for GNSS selection. A single matching card is selected automatically.
+If multiple cards match, the error lists each interface and its PCI slot when
+available; add the desired `slot` to the selector to disambiguate. User-supplied
+Ethernet selector fields are combined with the E810 template defaults, so adding
+only `slot` retains the `vendorID` and `deviceID` criteria.
+
+Every supplied selector is combined with the others using AND semantics. A
+name-only selector takes the direct `/sys/class/net/<name>/device/gnss/` lookup
+path; when a name is combined with hardware selectors, those selectors are
+checked against that named interface as well. Vendor/device IDs may identify a
+card model shared by multiple cards, so combine them with `slot` when more than
+one matching card is present.
+
+For hardware-oriented selector lookup, the daemon enumerates `/sys/class/net`,
+resolves each interface's `device` symlink, and checks all requested criteria:
+PCI address, permanent MAC, slot, vendor ID, and device ID. PCI IDs are read
+from the device's `vendor` and `device` attributes. For `slot`, it first checks
+the firmware `_SUN` value exposed through `firmware_node/sun`, then falls back
+to PCI slot address mappings under `/sys/bus/pci/slots`. The matching
+interface's `device/gnss/` directory is used to resolve the GNSS device node.
+A selector with no matching GNSS device returns an error. If multiple GNSS
+devices match, the error lists their interfaces and slots when available so a
+`slot` can be added to select one.
 
 ### ACPI serial-device selection
 
@@ -170,9 +232,16 @@ The USB attributes are located at the `1-4` device node:
 ```
 
 The result is `/dev/ttyACM0`. The device has multiple USB interfaces, but only
-one currently produces a tty. If multiple identical receivers are connected,
-the optional `path` narrows the match to the receiver on that bus-port chain. If
-the selected receiver itself exposes multiple matching tty nodes, resolution
-still fails with an ambiguity error; the topology path does not select between
-interfaces of one USB device. Ambiguity errors and logs list the matched USB
-topology paths to help identify a `path` value to add to the HardwareConfig.
+one currently produces a tty.
+If multiple identical receivers are connected, the optional `path` narrows the
+match to the receiver on that bus-port chain. If the selected receiver itself
+exposes multiple matching tty nodes, resolution still fails with an ambiguity
+error; the topology path does not select between interfaces of one USB device.
+Ambiguity errors and logs list the matched USB topology paths to help identify a
+`path` value to add to the HardwareConfig.
+
+## References
+
+- HPE EL140 UART advisory:
+  [a00157521en_us](https://support.hpe.com/hpesc/public/docDisplay?docId=a00157521en_us&docLocale=en_US)
+- HardwareConfig v2 API: `../ptp-operator/api/v2alpha1/hardwareconfig_types.go`

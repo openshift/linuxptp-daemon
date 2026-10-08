@@ -74,7 +74,7 @@ func (hcm *HardwareConfigManager) findGNSSSource(nodeProfile *ptpv1.PtpProfile) 
 // If matcher specifies a TTYDevice, it is returned directly.
 // If matcher specifies a SerialDevice, the tty is looked up by its stable
 // platform hardware identity through sysfs.
-// If matcher specifies an EthernetInterface, the device is looked up via sysfs.
+// If matcher specifies an EthernetDevice, the device is looked up via sysfs.
 // If matcher specifies a USBDevice, the tty exposed by the matching USB device
 // is looked up via sysfs.
 // If matcher is nil, returns empty string (caller should auto-detect).
@@ -91,11 +91,18 @@ func FindGNSSDevice(matcher *ptpv2alpha1.GNSSMatcher) (string, error) {
 			matcher.SerialDevice.ACPI.UID,
 		)
 	}
-	if matcher.EthernetInterface != "" {
-		return ublox.GNSSDeviceFromInterface(matcher.EthernetInterface)
+	if matcher.EthernetDevice != nil {
+		return ublox.GNSSDeviceFromEthernetDevice(
+			matcher.EthernetDevice.Name,
+			matcher.EthernetDevice.PCIAddress,
+			matcher.EthernetDevice.PermanentMACAddress,
+			matcher.EthernetDevice.Slot,
+			matcher.EthernetDevice.VendorID,
+			matcher.EthernetDevice.DeviceID,
+		)
 	}
 	if matcher.USBDevice != nil {
 		return ublox.GNSSDeviceFromUSB(matcher.USBDevice.Vendor, matcher.USBDevice.Product, matcher.USBDevice.Path)
 	}
-	return "", fmt.Errorf("GNSSMatcher has neither ttyDevice, serialDevice, ethernetInterface, nor usbDevice set")
+	return "", fmt.Errorf("GNSSMatcher has neither ttyDevice, serialDevice, ethernetDevice, nor usbDevice set")
 }

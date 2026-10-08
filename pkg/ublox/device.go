@@ -2,8 +2,11 @@ package ublox
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,9 +23,31 @@ const (
 	ttyClassSysfsPath = "/sys/class/tty"
 )
 
-// ReadDir is the function used to read sysfs directories.
-// Replace in tests to mock filesystem access.
-var ReadDir = os.ReadDir
+var (
+	pciAddressPattern = regexp.MustCompile(`^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$`)
+
+	// netClassSysfsPath contains the sysfs class entries for network devices.
+	netClassSysfsPath = "/sys/class/net"
+
+	// pciSlotsSysfsPath contains firmware-reported PCI hotplug slot mappings.
+	pciSlotsSysfsPath = "/sys/bus/pci/slots"
+
+	// ReadDir wraps OS calls, and readFile and evalSymlinks allow sysfs access
+	// to be controlled in tests.
+	ReadDir      = os.ReadDir
+	readFile     = os.ReadFile
+	evalSymlinks = filepath.EvalSymlinks
+
+	// commandOutput wraps command execution so ethtool behavior can be tested
+	// without requiring a physical NIC.
+	commandOutput = func(name string, args ...string) ([]byte, error) {
+		return exec.Command(name, args...).Output()
+	}
+
+	// getPermanentMACAddress returns the permanent hardware address reported
+	// by ethtool. Replace in tests to avoid requiring a physical NIC.
+	getPermanentMACAddress = readPermanentMACAddress
+)
 
 // GNSSDeviceFromInterface resolves the GNSS TTY device path for a given
 // network interface by reading the sysfs directory
@@ -47,6 +72,215 @@ func GNSSDeviceFromInterface(iface string) (string, error) {
 	result := fmt.Sprintf("/dev/%s", entries[0].Name())
 	glog.Infof("Detected GNSS device %s", result)
 	return result, nil
+}
+
+// GNSSDeviceFromEthernetDevice resolves a GNSS device attached to an Ethernet
+// device. Every supplied selector is applied as an AND criterion. A name-only
+// selector uses a direct interface lookup; selectors that identify hardware
+// are resolved against the interface's sysfs device information.
+func GNSSDeviceFromEthernetDevice(name, pciAddress, permanentMAC, slot, vendorID, deviceID string) (string, error) {
+	if name == "" && pciAddress == "" && permanentMAC == "" && slot == "" && vendorID == "" && deviceID == "" {
+		return "", fmt.Errorf("EthernetDevice has no selection criteria")
+	}
+
+	if pciAddress != "" {
+		var err error
+		pciAddress, err = normalizePCIAddress(pciAddress)
+		if err != nil {
+			return "", err
+		}
+	}
+	if permanentMAC != "" {
+		address, err := net.ParseMAC(strings.TrimSpace(permanentMAC))
+		if err != nil || len(address) != 6 {
+			return "", fmt.Errorf("invalid permanent MAC address %q", permanentMAC)
+		}
+		permanentMAC = strings.ToLower(address.String())
+	}
+	if slot != "" {
+		normalized, err := normalizePCIPosition(slot)
+		if err != nil {
+			return "", fmt.Errorf("invalid PCI slot ID %q: %w", slot, err)
+		}
+		slot = normalized
+	}
+	if vendorID != "" {
+		rawVendorID := vendorID
+		var err error
+		vendorID, err = normalizePCIID(vendorID)
+		if err != nil {
+			return "", fmt.Errorf("invalid PCI vendor ID %q: %w", rawVendorID, err)
+		}
+	}
+	if deviceID != "" {
+		rawDeviceID := deviceID
+		var err error
+		deviceID, err = normalizePCIID(deviceID)
+		if err != nil {
+			return "", fmt.Errorf("invalid PCI device ID %q: %w", rawDeviceID, err)
+		}
+	}
+
+	if name != "" && pciAddress == "" && permanentMAC == "" && slot == "" && vendorID == "" && deviceID == "" {
+		return GNSSDeviceFromInterface(name)
+	}
+
+	entries, err := ReadDir(netClassSysfsPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot enumerate Ethernet devices: %w", err)
+	}
+	interfaces := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if ethernetInterfaceMatches(entry.Name(), name, pciAddress, permanentMAC, slot, vendorID, deviceID) {
+			interfaces = append(interfaces, entry.Name())
+		}
+	}
+	return gnssDeviceFromEthernetInterfaces(interfaces)
+}
+
+func ethernetInterfaceMatches(iface, name, pciAddress, permanentMAC, slot, vendorID, deviceID string) bool {
+	if name != "" && iface != name {
+		return false
+	}
+	if pciAddress == "" && permanentMAC == "" && slot == "" && vendorID == "" && deviceID == "" {
+		return true
+	}
+
+	devicePath, err := evalSymlinks(filepath.Join(netClassSysfsPath, iface, "device"))
+	if err != nil {
+		return false
+	}
+	if pciAddress != "" && !strings.EqualFold(filepath.Base(devicePath), pciAddress) {
+		return false
+	}
+	if permanentMAC != "" {
+		actual, macErr := getPermanentMACAddress(iface)
+		if macErr != nil || !strings.EqualFold(actual, permanentMAC) {
+			return false
+		}
+	}
+	if slot != "" {
+		actualSlot, slotErr := pciSlotID(devicePath)
+		if slotErr != nil || actualSlot != slot {
+			return false
+		}
+	}
+	if vendorID != "" && !pciIDMatches(devicePath, "vendor", vendorID) {
+		return false
+	}
+	if deviceID != "" && !pciIDMatches(devicePath, "device", deviceID) {
+		return false
+	}
+	return true
+}
+
+func pciIDMatches(devicePath, attribute, expected string) bool {
+	actual, err := readFile(filepath.Join(devicePath, attribute))
+	return err == nil && strings.EqualFold(strings.TrimSpace(string(actual)), "0x"+expected)
+}
+
+func readPermanentMACAddress(iface string) (string, error) {
+	output, err := commandOutput("ethtool", "-P", iface)
+	if err != nil {
+		return "", fmt.Errorf("cannot read permanent MAC address for %s: %w", iface, err)
+	}
+	const prefix = "Permanent address:"
+	for _, line := range strings.Split(string(output), "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), prefix); ok {
+			address, parseErr := net.ParseMAC(strings.TrimSpace(value))
+			if parseErr != nil || len(address) != 6 {
+				return "", fmt.Errorf("invalid permanent MAC address reported for %s", iface)
+			}
+			return strings.ToLower(address.String()), nil
+		}
+	}
+	return "", fmt.Errorf("ethtool returned no permanent MAC address for %s", iface)
+}
+
+// pciSlotID returns the slot number used by systemd's PCI slot-based naming.
+// Newer systems expose the ACPI _SUN value through firmware_node/sun. Older
+// systems expose slot-to-device mappings below /sys/bus/pci/slots.
+func pciSlotID(devicePath string) (string, error) {
+	for path := devicePath; path != "." && path != string(filepath.Separator); path = filepath.Dir(path) {
+		if value, readErr := readFile(filepath.Join(path, "firmware_node", "sun")); readErr == nil {
+			if slot, parseErr := normalizePCIPosition(string(value)); parseErr == nil {
+				return slot, nil
+			}
+		}
+
+		pciAddress := filepath.Base(path)
+		if !strings.Contains(pciAddress, ":") || !strings.Contains(pciAddress, ".") {
+			continue
+		}
+		entries, err := ReadDir(pciSlotsSysfsPath)
+		if err != nil {
+			continue
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+		for _, entry := range entries {
+			address, readErr := readFile(filepath.Join(pciSlotsSysfsPath, entry.Name(), "address"))
+			if readErr != nil {
+				continue
+			}
+			slotAddress := strings.TrimSpace(string(address))
+			if strings.Count(slotAddress, ":") == 1 {
+				slotAddress = "0000:" + slotAddress
+			}
+			if slotAddress != "" && strings.HasPrefix(pciAddress, slotAddress) {
+				if slot, parseErr := normalizePCIPosition(entry.Name()); parseErr == nil {
+					return slot, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("no firmware-reported PCI slot for %s", filepath.Base(devicePath))
+}
+
+// normalizePCIPosition canonicalizes a decimal PCI slot or function number.
+func normalizePCIPosition(position string) (string, error) {
+	value, err := strconv.ParseUint(strings.TrimSpace(position), 10, 32)
+	if err != nil {
+		return "", fmt.Errorf("must be a non-negative decimal number")
+	}
+	return strconv.FormatUint(value, 10), nil
+}
+
+type ethernetGNSSCandidate struct {
+	iface  string
+	device string
+	slot   string
+}
+
+func gnssDeviceFromEthernetInterfaces(interfaces []string) (string, error) {
+	sort.Strings(interfaces)
+	var candidates []ethernetGNSSCandidate
+	for _, iface := range interfaces {
+		device, err := GNSSDeviceFromInterface(iface)
+		if err != nil {
+			continue
+		}
+		candidate := ethernetGNSSCandidate{iface: iface, device: device, slot: "unknown"}
+		if devicePath, symlinkErr := evalSymlinks(filepath.Join(netClassSysfsPath, iface, "device")); symlinkErr == nil {
+			if slot, slotErr := pciSlotID(devicePath); slotErr == nil {
+				candidate.slot = slot
+			}
+		}
+		candidates = append(candidates, candidate)
+	}
+
+	switch len(candidates) {
+	case 0:
+		return "", fmt.Errorf("no GNSS device found for EthernetDevice")
+	case 1:
+		return candidates[0].device, nil
+	default:
+		matches := make([]string, 0, len(candidates))
+		for _, candidate := range candidates {
+			matches = append(matches, fmt.Sprintf("%s (interface %s, slot %s)", candidate.device, candidate.iface, candidate.slot))
+		}
+		return "", fmt.Errorf("multiple GNSS devices found for EthernetDevice: %s; specify slot to disambiguate",
+			strings.Join(matches, ", "))
+	}
 }
 
 // GNSSDeviceFromACPIDevice resolves the tty exposed by an ACPI-enumerated
@@ -76,7 +310,7 @@ func findTTYFromACPIDevice(ttyClassPath, hid, uid string) (string, error) {
 	var candidates []string
 	for _, entry := range entries {
 		devicePath := filepath.Join(ttyClassPath, entry.Name(), "device")
-		resolvedDevicePath, symlinkErr := filepath.EvalSymlinks(devicePath)
+		resolvedDevicePath, symlinkErr := evalSymlinks(devicePath)
 		if symlinkErr != nil {
 			// Virtual tty devices and stale class entries may not have a
 			// resolvable device path.
@@ -150,7 +384,7 @@ func findTTYFromUSBDevice(ttyClassPath, vendor, product, topologyPath string) (s
 	matchedPathSet := make(map[string]struct{})
 	for _, entry := range entries {
 		devicePath := filepath.Join(ttyClassPath, entry.Name(), "device")
-		resolvedDevicePath, symlinkErr := filepath.EvalSymlinks(devicePath)
+		resolvedDevicePath, symlinkErr := evalSymlinks(devicePath)
 		if symlinkErr != nil {
 			// Virtual tty devices and stale class entries may not have a
 			// resolvable device path.
@@ -187,14 +421,14 @@ func findTTYFromUSBDevice(ttyClassPath, vendor, product, topologyPath string) (s
 // It returns the matched USB topology path for diagnostic output.
 func usbDeviceMatchPath(devicePath, vendor, product, topologyPath string) (string, bool) {
 	for sysfsPath := devicePath; sysfsPath != "." && sysfsPath != string(filepath.Separator); sysfsPath = filepath.Dir(sysfsPath) {
-		subsystemPath, err := filepath.EvalSymlinks(filepath.Join(sysfsPath, "subsystem"))
+		subsystemPath, err := evalSymlinks(filepath.Join(sysfsPath, "subsystem"))
 		if err == nil && filepath.Base(subsystemPath) == "usb" {
 			matchedPath := filepath.Base(sysfsPath)
 			if topologyPath != "" && matchedPath != topologyPath {
 				continue
 			}
-			actualVendor, vendorErr := os.ReadFile(filepath.Join(sysfsPath, "idVendor"))
-			actualProduct, productErr := os.ReadFile(filepath.Join(sysfsPath, "idProduct"))
+			actualVendor, vendorErr := readFile(filepath.Join(sysfsPath, "idVendor"))
+			actualProduct, productErr := readFile(filepath.Join(sysfsPath, "idProduct"))
 			if vendorErr == nil && productErr == nil &&
 				strings.EqualFold(strings.TrimSpace(string(actualVendor)), vendor) &&
 				strings.EqualFold(strings.TrimSpace(string(actualProduct)), product) {
@@ -231,6 +465,24 @@ func decimalUSBPathComponent(value string) bool {
 }
 
 func normalizeUSBID(id string) (string, error) {
+	return normalizePCIID(id)
+}
+
+func normalizePCIAddress(address string) (string, error) {
+	address = strings.TrimSpace(address)
+	if filepath.Base(address) != address || address == "." || address == ".." {
+		return "", fmt.Errorf("invalid PCI address %q", address)
+	}
+	if strings.Count(address, ":") == 1 {
+		address = "0000:" + address
+	}
+	if !pciAddressPattern.MatchString(address) {
+		return "", fmt.Errorf("invalid PCI address %q", address)
+	}
+	return address, nil
+}
+
+func normalizePCIID(id string) (string, error) {
 	id = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(id), "0x"))
 	if id == "" || len(id) > 4 {
 		return "", fmt.Errorf("must be one to four hexadecimal digits")

@@ -1184,7 +1184,7 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 												},
 											},
 											Match: &ptpv2alpha1.GNSSMatcher{
-												EthernetInterface: testIfaceEno8703,
+												EthernetDevice: &ptpv2alpha1.EthernetDevice{Name: testIfaceEno8703},
 											},
 										},
 									},
@@ -1205,12 +1205,12 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 					},
 				},
 				Match: &ptpv2alpha1.GNSSMatcher{
-					EthernetInterface: testIfaceEno8703,
+					EthernetDevice: &ptpv2alpha1.EthernetDevice{Name: testIfaceEno8703},
 				},
 			},
 		},
 		{
-			name: "User override of init only (no default matcher)",
+			name: "User override of init retains default PCI ID matcher",
 			// User provides only gnssConfig on the GNSS source — the template
 			// provides the DPLL pin details and conditions.
 			hwConfig: &ptpv2alpha1.HardwareConfig{
@@ -1262,11 +1262,16 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 						Accuracy:        5,
 					},
 				},
-				Match: nil,
+				Match: &ptpv2alpha1.GNSSMatcher{
+					EthernetDevice: &ptpv2alpha1.EthernetDevice{
+						VendorID: "8086",
+						DeviceID: "159B",
+					},
+				},
 			},
 		},
 		{
-			name: "Full user override (no default matcher)",
+			name: "Full user matcher retains default PCI IDs",
 			// User provides only gnssConfig on the GNSS source — the template
 			// provides the DPLL pin details and conditions.
 			hwConfig: &ptpv2alpha1.HardwareConfig{
@@ -1301,7 +1306,7 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 												},
 											},
 											Match: &ptpv2alpha1.GNSSMatcher{
-												EthernetInterface: testIfaceEno8703,
+												EthernetDevice: &ptpv2alpha1.EthernetDevice{Name: testIfaceEno8703},
 											},
 										},
 									},
@@ -1322,7 +1327,11 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 					},
 				},
 				Match: &ptpv2alpha1.GNSSMatcher{
-					EthernetInterface: testIfaceEno8703,
+					EthernetDevice: &ptpv2alpha1.EthernetDevice{
+						Name:     testIfaceEno8703,
+						VendorID: "8086",
+						DeviceID: "159B",
+					},
 				},
 			},
 		},

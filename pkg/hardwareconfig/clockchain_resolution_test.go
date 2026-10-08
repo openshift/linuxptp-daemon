@@ -1046,6 +1046,37 @@ func Test_mergeSourceConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "user Ethernet slot further constrains template PCI IDs",
+			tpl: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						EthernetDevice: &ptpv2alpha1.EthernetDevice{
+							VendorID: "8086",
+							DeviceID: "159B",
+						},
+					},
+				},
+			},
+			user: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						EthernetDevice: &ptpv2alpha1.EthernetDevice{Slot: "3"},
+					},
+				},
+			},
+			expected: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						EthernetDevice: &ptpv2alpha1.EthernetDevice{
+							Slot:     "3",
+							VendorID: "8086",
+							DeviceID: "159B",
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "user GNSS config set with no match, tpl GNSS config set with no match",
 			tpl: &ptpv2alpha1.SourceConfig{
 				GNSSConfig: &ptpv2alpha1.GNSSConfig{},

@@ -17,7 +17,9 @@ being used to keep the clock synchronized.
 For HardwareConfig v2 GNSS matcher behavior and selector examples, see
 [`doc/hardwareconfig-v2-device-selection.md`](doc/hardwareconfig-v2-device-selection.md).
 When USB matching is ambiguous, daemon logs include the matching topology paths
-that can be used to narrow the selector.
+that can be used to narrow the selector. Ethernet GNSS matchers can combine PCI
+vendor/device IDs with interface name, PCI address, permanent MAC, and slot; an
+ambiguous match reports the candidate interfaces and slots.
 
 ## Quick Start
 

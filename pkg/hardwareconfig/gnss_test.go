@@ -71,7 +71,7 @@ func TestFindGNSSDevice(t *testing.T) {
 		assert.Equal(t, testACM0, device)
 	})
 
-	t.Run("ethernetInterface resolves via sysfs", func(t *testing.T) {
+	t.Run("ethernetDevice name resolves via sysfs", func(t *testing.T) {
 		restoreDir := setupReadDirMock(
 			map[string][]os.DirEntry{
 				"/sys/class/net/eno8703/device/gnss": {&mockDirEntry{name: "gnss0"}},
@@ -81,13 +81,13 @@ func TestFindGNSSDevice(t *testing.T) {
 		defer restoreDir()
 
 		device, err := FindGNSSDevice(&ptpv2alpha1.GNSSMatcher{
-			EthernetInterface: testIfaceEno8703,
+			EthernetDevice: &ptpv2alpha1.EthernetDevice{Name: testIfaceEno8703},
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "/dev/gnss0", device)
 	})
 
-	t.Run("ethernetInterface with no gnss device", func(t *testing.T) {
+	t.Run("ethernetDevice name with no gnss device", func(t *testing.T) {
 		restoreDir := setupReadDirMock(
 			nil,
 			map[string]error{
@@ -97,7 +97,7 @@ func TestFindGNSSDevice(t *testing.T) {
 		defer restoreDir()
 
 		_, err := FindGNSSDevice(&ptpv2alpha1.GNSSMatcher{
-			EthernetInterface: testIfaceEno8703,
+			EthernetDevice: &ptpv2alpha1.EthernetDevice{Name: testIfaceEno8703},
 		})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no GNSS device found")
@@ -303,7 +303,7 @@ func TestGetGNSSSerialPort(t *testing.T) {
 		assert.Empty(t, port)
 	})
 
-	t.Run("resolves ethernetInterface via sysfs", func(t *testing.T) {
+	t.Run("resolves EthernetDevice name via sysfs", func(t *testing.T) {
 		restoreDir := setupReadDirMock(
 			map[string][]os.DirEntry{
 				"/sys/class/net/eno8703/device/gnss": {&mockDirEntry{name: "gnss0"}},
@@ -323,7 +323,7 @@ func TestGetGNSSSerialPort(t *testing.T) {
 									SourceType: ptpv2alpha1.SourceTypeGNSS,
 									GNSSConfig: &ptpv2alpha1.GNSSConfig{
 										Init:  ptpv2alpha1.GNSSInit{},
-										Match: &ptpv2alpha1.GNSSMatcher{EthernetInterface: testIfaceEno8703},
+										Match: &ptpv2alpha1.GNSSMatcher{EthernetDevice: &ptpv2alpha1.EthernetDevice{Name: testIfaceEno8703}},
 									},
 								},
 							},
