@@ -188,15 +188,13 @@ func normalizeReportedOutput(output string) string {
 	return strings.Join(nonEmpty, "\n")
 }
 
-// NewUblox creates and initializes a new Ublox monitoring object.
-// Optional extraCmds are run after the default initialization commands
-// but before SAVE (e.g., GNSS configuration from HardwareConfig).
-// Returns an error if initialization fails. The returned UBlox may be non-nil
-// on initialization failure and can contain recorded results from commands that
-// requested output recording.
-func NewUblox(extraCmds ...Command) (*UBlox, error) {
+// NewUblox creates and initializes a new Ublox monitoring object. The GNSS
+// configuration is converted to version-specific commands after the receiver
+// protocol version is detected and before SAVE.
+// Returns an error if the underlying gps channel is not available or the protocol version could not be detected.
+func NewUblox(config *InitConfig) (*UBlox, error) {
 	u := UBlox{broker: newMessageBroker()}
-	if err := u.Init(extraCmds...); err != nil {
+	if err := u.Init(config); err != nil {
 		return &u, err
 	}
 	return &u, nil
@@ -212,10 +210,10 @@ func (u *UBlox) Subscribe(ctx context.Context, types ...MessageType) *Subscripti
 	return u.broker.Subscribe(ctx, types...)
 }
 
-// Init detects the protocol version and sets up the core message types
-// required for both GNSS monitoring and ts2phc. Optional extraCmds are run
-// after the defaults but before the final SAVE.
-func (u *UBlox) Init(extraCmds ...Command) error {
+// Init detects the protocol version, builds the version-specific GNSS
+// initialization commands, and sets up the core message types required for
+// both GNSS monitoring and ts2phc.
+func (u *UBlox) Init(config *InitConfig) error {
 	runner, err := NewCommandRunner()
 	if err != nil {
 		return fmt.Errorf("no version detected: %w", err)
@@ -228,10 +226,10 @@ func (u *UBlox) Init(extraCmds ...Command) error {
 	// are available through the broker.
 	u.UbloxPollInit()
 
-	// Build the full init sequence: defaults → extras → MON-HW → SAVE
+	// Build the full init sequence: defaults → GNSS config → MON-HW → SAVE
 	var cmds CommandList
 	cmds = append(cmds, defaultUblxCmds()...)
-	cmds = append(cmds, extraCmds...)
+	cmds = append(cmds, BuildInitCommands(u.protoVersion, config)...)
 	cmds = append(cmds, monHW, SaveCommand)
 
 	var errs []error

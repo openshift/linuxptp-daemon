@@ -54,7 +54,7 @@ type GPSD struct {
 	gmInterface          string
 	messageTag           string
 	ublxTool             *ublox.UBlox
-	gnssInitCmds         ublox.CommandList      // optional HardwareConfig GNSS init commands
+	gnssInitConfig       *ublox.InitConfig      // optional HardwareConfig GNSS configuration
 	gnssResultsFn        func(results []string) // callback to store GNSS init results
 	gpsdSession          *gpsdlib.Session
 	gpsdDoneCh           chan bool
@@ -72,7 +72,7 @@ type GPSD struct {
 }
 
 // NewGpsdProcess creates a new GPSD process instance.
-func NewGpsdProcess(serialPort string, gmInterface string, messageTag string, gnssInitCmds ublox.CommandList, gnssResultsFn func(results []string), nodeProfile *ptpv1.PtpProfile, eventCh chan event.Event, processCfg config.ProcessConfig) process.Process {
+func NewGpsdProcess(serialPort string, gmInterface string, messageTag string, gnssInitConfig *ublox.InitConfig, gnssResultsFn func(results []string), nodeProfile *ptpv1.PtpProfile, eventCh chan event.Event, processCfg config.ProcessConfig) process.Process {
 	monitorCtx, monitorCancel := context.WithCancel(context.Background())
 
 	cmdLine := fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -N %s", GPSD_PROCESSNAME, serialPort)
@@ -84,23 +84,23 @@ func NewGpsdProcess(serialPort string, gmInterface string, messageTag string, gn
 	}
 
 	return &GPSD{
-		name:          GPSD_PROCESSNAME,
-		cmdLine:       cmdLine,
-		cmd:           NewExecCmd(exec.Command(args[0], args[1:]...)),
-		serialPort:    serialPort,
-		gmInterface:   gmInterface,
-		stopped:       false,
-		messageTag:    messageTag,
-		ublxTool:      nil,
-		gnssInitCmds:  gnssInitCmds,
-		gnssResultsFn: gnssResultsFn,
-		cmdRunner:     exec.CommandContext,
-		monitorCtx:    monitorCtx,
-		monitorCancel: monitorCancel,
-		eventCh:       eventCh,
-		processConfig: processCfg,
-		profile:       nodeProfile,
-		conditions:    map[process.Action]process.Condition{},
+		name:           GPSD_PROCESSNAME,
+		cmdLine:        cmdLine,
+		cmd:            NewExecCmd(exec.Command(args[0], args[1:]...)),
+		serialPort:     serialPort,
+		gmInterface:    gmInterface,
+		stopped:        false,
+		messageTag:     messageTag,
+		ublxTool:       nil,
+		gnssInitConfig: gnssInitConfig,
+		gnssResultsFn:  gnssResultsFn,
+		cmdRunner:      exec.CommandContext,
+		monitorCtx:     monitorCtx,
+		monitorCancel:  monitorCancel,
+		eventCh:        eventCh,
+		processConfig:  processCfg,
+		profile:        nodeProfile,
+		conditions:     map[process.Action]process.Condition{},
 	}
 }
 
@@ -342,7 +342,7 @@ func (g *GPSD) monitorGNSSEventsWithUblox() {
 		})
 
 		for {
-			ublx, err := ublox.NewUblox(g.gnssInitCmds...)
+			ublx, err := ublox.NewUblox(g.gnssInitConfig)
 			if ublx != nil && len(ublx.InitResults()) > 0 && g.gnssResultsFn != nil {
 				g.gnssResultsFn(ublx.InitResults())
 			}
