@@ -779,7 +779,7 @@ func defaultResolveSysFSPtpDevice(interfacePath string) ([]string, error) {
 			// Check if the target file exists and is writable
 			if info, statErr := os.Stat(fullPath); statErr == nil && !info.IsDir() {
 				// Try to open the file for writing to check if it's writable
-				if file, openErr := os.OpenFile(fullPath, os.O_WRONLY, 0); openErr == nil {
+				if file, openErr := openFileForWrite(fullPath, os.O_WRONLY, 0); openErr == nil {
 					_ = file.Close()
 					resolvedPaths = append(resolvedPaths, fullPath)
 				}
@@ -798,6 +798,7 @@ func defaultResolveSysFSPtpDevice(interfacePath string) ([]string, error) {
 var (
 	defaultPtpDeviceResolver PtpDeviceResolver = defaultResolveSysFSPtpDevice
 	ptpDeviceResolver                          = defaultPtpDeviceResolver
+	openFileForWrite                           = os.OpenFile
 )
 
 // SetPtpDeviceResolver allows injection of a mock PTP device resolver for testing
