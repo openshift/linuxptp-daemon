@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	configLabel  = "config"
 	nodeLabel    = "node"
 	processLabel = "process"
 )
@@ -36,6 +37,7 @@ type ClockManager struct {
 	offsetMetric      *prometheus.GaugeVec
 	clockMetric       *prometheus.GaugeVec
 	clockClassMetric  *prometheus.GaugeVec
+	haMetric          *prometheus.GaugeVec
 	clocks            map[string]clock.Clock // cfgName → Clock
 	osClock           clock.OsClock
 	ipcCache          *ipc.Cache
@@ -57,6 +59,13 @@ type metricKey struct {
 type metricEntry struct {
 	gauge  *prometheus.GaugeVec
 	labels prometheus.Labels
+}
+
+// SetHAMetric injects the openshift_ptp_ha_profile_status gauge. It is set
+// separately from Init because the gauge is created and registered by the daemon
+// package, which clockmgr cannot import.
+func (m *ClockManager) SetHAMetric(g *prometheus.GaugeVec) {
+	m.haMetric = g
 }
 
 // SetApplying marks whether a PTP profile apply is in progress.
@@ -106,16 +115,15 @@ func (m *ClockManager) AddClock(clk clock.Clock) error {
 	clk.SetEventLoopbackFunc(m.sendEvent)
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
-	if prev, exists := m.clocks[clk.ConfigName()]; exists {
-		glog.Warningf("AddClock: replacing existing %s clock for config %s", prev.ClockType(), clk.ConfigName())
-	}
 	clk.SetOsClock(&m.osClock)
-	m.clocks[clk.ConfigName()] = clk
-	// BC/OC events may arrive with ts2phc.{runID}.config as cfgName,
-	// so register under that key too.
-	if clk.ClockType() == event.BC || clk.ClockType() == event.TBC || clk.ClockType() == event.OC || clk.ClockType() == event.GM {
-		ts2phcName := strings.Replace(clk.ConfigName(), "ptp4l.", "ts2phc.", 1)
-		m.clocks[ts2phcName] = clk
+	// Register the clock under every config name its events may arrive under. For a
+	// ptp4l-based clock this includes the ts2phc alias; for a composite HA clock it
+	// includes each member's config.
+	for _, cfg := range clk.ConfigNames() {
+		if prev, exists := m.clocks[cfg]; exists {
+			glog.Warningf("AddClock: replacing existing %s clock for config %s", prev.ClockType(), cfg)
+		}
+		m.clocks[cfg] = clk
 	}
 	glog.Infof("AddClock: registered %s clock for config %s", clk.ClockType(), clk.ConfigName())
 	return nil
@@ -237,10 +245,20 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 				continue
 			}
 
-			if ev.Source == event.PHC2SYS || ev.Source == event.CHRONYD {
+			// phc2sys/chronyd offset samples drive the OS clock. A phc2sys HA source
+			// selection (SelectedSourceData) is not an OS-clock sample — it is routed
+			// to its clock (the HA clock) by config name, so let it fall through.
+			if ev.Source == event.CHRONYD {
 				m.handleOSClockEvent(ev)
 				m.clockManagementMu.Unlock()
 				continue
+			}
+			if ev.Source == event.PHC2SYS {
+				if _, isSelection := ev.Data.(*event.SelectedSourceData); !isSelection {
+					m.handleOSClockEvent(ev)
+					m.clockManagementMu.Unlock()
+					continue
+				}
 			}
 
 			// TODO: Move to better identifiers? Having to do this translation here is odd
@@ -273,14 +291,24 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 			}
 			if clockState.LeadingIFace != "" && clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
 				// BC/OC clock_state is scraped as process="ptp4l" (ptp4l is the
-				// servo), whereas GM/T-BC report under their clock-type label.
+				// servo), whereas GM/T-BC report under their clock-type label. The
+				// event's clock type is checked too: an HA clock is a composite whose
+				// member events carry ClockType=BC, and those must still report as
+				// ptp4l like a standalone BC follower.
 				process := string(ev.ClockType)
-				if clk.ClockType() == event.BC || clk.ClockType() == event.OC {
+				if clk.ClockType() == event.BC || clk.ClockType() == event.OC ||
+					ev.ClockType == event.BC || ev.ClockType == event.OC {
 					process = string(event.PTP4l)
 				}
 				m.updateClockStateMetrics(clockState.State, process, alias.GetAlias(clockState.LeadingIFace))
 			}
-			m.updateClockClassMetrics(lookupName, clk.ClockClass())
+			// Use the clock class from the event's returned state, not clk.ClockClass().
+			// For a composite HA clock, clk.ClockClass() is the active member's class,
+			// but the metric is keyed per member config (lookupName), so each member
+			// must report its own class. For GM/TBC/BC the returned state carries the
+			// same class clk.ClockClass() would, so this is equivalent for them.
+			m.updateClockClassMetrics(lookupName, clockState.ClockClass)
+			m.updateHAProfileMetrics(clockState.HAProfileStatus)
 			m.updateMetrics(ev)
 			m.clockManagementMu.Unlock()
 
@@ -326,6 +354,25 @@ func (m *ClockManager) updateClockStateMetrics(state event.PTPState, process, iF
 	}
 }
 
+// updateHAProfileMetrics sets the openshift_ptp_ha_profile_status gauge for each
+// HA member profile (1 = ACTIVE, 0 = INACTIVE). status is nil for every non-HA
+// clock, in which case this is a no-op. The label set matches the legacy metric:
+// process="phc2sys", node, profile.
+func (m *ClockManager) updateHAProfileMetrics(status map[string]bool) {
+	if m.haMetric == nil || status == nil {
+		return
+	}
+	for profile, active := range status {
+		value := 0.0
+		if active {
+			value = 1.0
+		}
+		m.haMetric.With(prometheus.Labels{
+			processLabel: string(event.PHC2SYS), nodeLabel: m.nodeName, "profile": profile,
+		}).Set(value)
+	}
+}
+
 // updateClockClassMetrics updates the clock class gauge for a config. The class
 // is emitted under the ptp4l config name and process (matching downstream
 // consumers regardless of the source event); an uninitialized (0) class is
@@ -339,7 +386,7 @@ func (m *ClockManager) updateClockClassMetrics(cfgName string, clockClass fbprot
 	}
 	profile := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
 	m.clockClassMetric.With(prometheus.Labels{
-		processLabel: "ptp4l", nodeLabel: m.nodeName, "config": profile}).Set(float64(clockClass))
+		processLabel: "ptp4l", nodeLabel: m.nodeName, configLabel: profile}).Set(float64(clockClass))
 }
 
 // convertToFloat converts an event field to float64.
@@ -437,7 +484,7 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 						Subsystem: event.PTPSubsystem,
 						Name:      metricName,
 						Help:      event.ValueTypeHelpTxt[dataType],
-					}, []string{"from", "node", processLabel, "iface"})
+					}, []string{"from", nodeLabel, processLabel, "iface"})
 				glog.Infof("trying to register metrics %s for %s", metricName, dataType)
 				registerMetrics(gauge)
 				m.registeredGauges[metricName] = gauge

@@ -102,3 +102,50 @@ func TestPhc2SysParser(t *testing.T) {
 		})
 	}
 }
+
+func TestPhc2SysParser_SelectedSource(t *testing.T) {
+	tests := []struct {
+		name          string
+		logLine       string
+		expectIface   string
+		expectEvent   bool
+		expectedError bool
+	}{
+		{
+			name:        "out-of-domain selection",
+			logLine:     "phc2sys[123.4]: [phc2sys.0.config] selecting ens2f2 as out-of-domain source clock",
+			expectIface: "ens2f2",
+			expectEvent: true,
+		},
+		{
+			name:        "in-domain selection",
+			logLine:     "phc2sys[123.4]: [phc2sys.0.config] selecting ens2f0 as domain source clock",
+			expectIface: "ens2f0",
+			expectEvent: true,
+		},
+		{
+			name:        "offset line is not a selection",
+			logLine:     "phc2sys[10522413.392]: [ptp4l.0.config:6] CLOCK_REALTIME phc offset 8 s2 freq -6990 delay 502",
+			expectEvent: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metric, ptpEvent, err := parser.NewPhc2SysExtractor().Extract(tt.logLine)
+			if tt.expectedError {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			if tt.expectEvent {
+				assert.Nil(t, metric, "selection line must not produce a metric")
+				if assert.NotNil(t, ptpEvent) {
+					assert.Equal(t, tt.expectIface, ptpEvent.Iface)
+				}
+			} else {
+				assert.Nil(t, ptpEvent, "non-selection line must not produce a selection event")
+			}
+		})
+	}
+}

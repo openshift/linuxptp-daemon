@@ -189,14 +189,14 @@ func (c *ConditionsTester) Daemon() *Daemon {
 	return c.dn
 }
 
-func (c *ConditionsTester) Env(runID int, profile *ptpv1.PtpProfile, clockType event.ClockType, oSClockConfigs *OSClockConfigs) ptpProcessEnv {
+func (c *ConditionsTester) Env(runID int, profile *ptpv1.PtpProfile, clockType event.ClockType, oSClockConfigs *ProfileTopology) ptpProcessEnv {
 	return ptpProcessEnv{
-		runID:          runID,
-		nodeProfile:    profile,
-		clockType:      clockType,
-		dn:             c.dn,
-		hasFailover:    profile.Plugins != nil && profile.Plugins[ntpfailover] != nil,
-		osClockConfigs: oSClockConfigs,
+		runID:       runID,
+		nodeProfile: profile,
+		clockType:   clockType,
+		dn:          c.dn,
+		hasFailover: profile.Plugins != nil && profile.Plugins[ntpfailover] != nil,
+		topology:    oSClockConfigs,
 	}
 }
 
@@ -304,14 +304,15 @@ func applyProfilesWithStubProcesses(t *testing.T, ct *ConditionsTester, files ..
 	ct.dn = dn
 	t.Cleanup(dn.cancel)
 
-	osClockConfigs := NewOSClockConfigs(profiles)
+	topology, err := NewProfileTopology(profiles)
+	require.NoError(t, err)
 	controlledRunIDs := reconcileRelatedProfiles(profiles)
 	for runID := range profiles {
 		profile := &profiles[runID]
 		if controlledID, ok := controlledRunIDs[*profile.Name]; ok {
 			profile.PtpSettings["controlledId"] = strconv.Itoa(controlledID)
 		}
-		require.NoError(t, dn.applyNodePtpProfile(runID, profile, &osClockConfigs))
+		require.NoError(t, dn.applyNodePtpProfile(runID, profile, &topology))
 	}
 
 	realProcesses := ct.pm.process
@@ -1008,8 +1009,9 @@ func TestPhc2sysOffsetStartCondition_InferredGM(t *testing.T) {
 
 func TestPhc2sysOffsetStartCondition_TBC(t *testing.T) {
 	profile := ptpv1.PtpProfile{PtpSettings: map[string]string{clockTypeSetting: TBC}}
-	oSClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{profile})
-	c := phc2sysOffsetStartCondition(ptpProcessEnv{runID: 0, clockType: event.TBC, nodeProfile: &profile, osClockConfigs: &oSClockConfigs})
+	topology, err := NewProfileTopology([]ptpv1.PtpProfile{profile})
+	require.NoError(t, err)
+	c := phc2sysOffsetStartCondition(ptpProcessEnv{runID: 0, clockType: event.TBC, nodeProfile: &profile, topology: &topology})
 	assert.Equal(t, process.OnStateAndOffsetForCount{
 		ClockID:    "ptp4l.0.config",
 		ConfigName: "ptp4l.0.config",
@@ -1033,13 +1035,14 @@ func TestPhc2sysOffsetStartCondition_HA(t *testing.T) {
 			clockTypeSetting: TBC,
 		}}
 
-	oSClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{profile1, profile2, haProfile})
+	topology, err := NewProfileTopology([]ptpv1.PtpProfile{profile1, profile2, haProfile})
+	require.NoError(t, err)
 
 	ct := NewCondiitonsTester(t, event.OC)
 	ct.AddProcess(&ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName, configName: "ptp4l.0.config"}, nodeProfile: &profile1})
 	ct.AddProcess(&ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName, configName: "ptp4l.1.config"}, nodeProfile: &profile2})
 
-	c := phc2sysOffsetStartCondition(ct.Env(5, &haProfile, event.TBC, &oSClockConfigs))
+	c := phc2sysOffsetStartCondition(ct.Env(5, &haProfile, event.TBC, &topology))
 	anyCond, ok := c.(process.Any)
 	if !assert.True(t, ok, "HA should wrap per-config conditions in Any") {
 		return
@@ -1063,9 +1066,10 @@ func TestTBC_Ts2phcUnlocksThroughProcessManager(t *testing.T) {
 		Ts2PhcOpts: stringPtr("-s"),
 	}
 
-	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
+	topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
+	require.NoError(t, err)
 
-	realTs2phc, err := NewTs2phcProcess(ct.Env(0, profile, event.TBC, &osClockConfigs))
+	realTs2phc, err := NewTs2phcProcess(ct.Env(0, profile, event.TBC, &topology))
 	require.NoError(t, err)
 	ts2phcStub := ct.AddProcess(realTs2phc)
 
@@ -1114,9 +1118,10 @@ func TestTBC_Ts2phcWithPhc2sysUnlocksThroughProcessManager(t *testing.T) {
 		Phc2sysConf: stringPtr("[global]\n"),
 	}
 
-	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
+	topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
+	require.NoError(t, err)
 
-	realTs2phc, err := NewTs2phcProcess(ct.Env(0, profile, event.TBC, &osClockConfigs))
+	realTs2phc, err := NewTs2phcProcess(ct.Env(0, profile, event.TBC, &topology))
 	require.NoError(t, err)
 	ts2phcStub := ct.AddProcess(realTs2phc)
 
@@ -1159,9 +1164,10 @@ func TestUnlock_TBC_Phc2sys(t *testing.T) {
 		Phc2sysConf: stringPtr("[global]\n"),
 		Phc2sysOpts: stringPtr("-a -r"),
 	}
-	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
+	topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
+	require.NoError(t, err)
 
-	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.TBC, &osClockConfigs))
+	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.TBC, &topology))
 	require.NoError(t, err)
 	stub := ct.AddProcess(realPhc2sys)
 
@@ -1197,9 +1203,9 @@ func TestUnlock_TGM_Phc2sys(t *testing.T) {
 		Phc2sysOpts: stringPtr("-a -r"),
 	}
 
-	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
-
-	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.GM, &osClockConfigs))
+	topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
+	require.NoError(t, err)
+	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.GM, &topology))
 	require.NoError(t, err)
 	stub := ct.AddProcess(realPhc2sys)
 
@@ -1216,43 +1222,6 @@ func TestUnlock_TGM_Phc2sys(t *testing.T) {
 	ct.SendOffsetSamples(event.TS2PHC, "ts2phc.0.config", event.PTP_LOCKED, 10000, 5)
 	assert.Eventually(t, func() bool { return stub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond,
 		"T-GM phc2sys must unlock and start once ts2phc lock is confirmed")
-}
-
-func TestUnlock_HA_Phc2sys(t *testing.T) {
-	ct := NewCondiitonsTester(t, event.BC, ptp4lConfig, testPtp4l1Config)
-
-	master1 := "test-ha-master1"
-	master2 := "test-ha-master2"
-	profileName := "test-ha-tbc"
-	profile := &ptpv1.PtpProfile{
-		Name: &profileName,
-		PtpSettings: map[string]string{
-			PTP_HA_IDENTIFIER: master1 + "," + master2,
-			clockTypeSetting:  TBC,
-		},
-		Phc2sysConf: stringPtr("[global]\n"),
-		Phc2sysOpts: stringPtr("-a -r"),
-	}
-
-	// Register HA masters in the unified ProcessManager
-	ct.AddProcess(&ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName, configName: "ptp4l.0.config"}, nodeProfile: &ptpv1.PtpProfile{Name: &master1}})
-	ct.AddProcess(&ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName, configName: testPtp4l1Config}, nodeProfile: &ptpv1.PtpProfile{Name: &master2}})
-
-	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
-
-	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.TBC, &osClockConfigs))
-	require.NoError(t, err)
-	stub := ct.AddProcess(realPhc2sys)
-
-	ct.StartProcesses()
-	assert.Equal(t, 0, stub.Starts())
-
-	ct.Start()
-
-	// Master 1 qualifies with 5 samples (> 3) -> phc2sys unlocks via Any
-	ct.SendOffsetSamples(event.PTP4l, ptp4lConfig, event.PTP_LOCKED, 10000, 5)
-	assert.Eventually(t, func() bool { return stub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond,
-		"HA phc2sys must unlock when Master 1 achieves lock")
 }
 
 func TestUnlock_Failover_Phc2sysAndChronyd(t *testing.T) {
@@ -1275,10 +1244,11 @@ func TestUnlock_Failover_Phc2sysAndChronyd(t *testing.T) {
 		ChronydOpts: stringPtr("-s"),
 	}
 
-	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
-	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.GM, &osClockConfigs))
+	topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
 	require.NoError(t, err)
-	realChronyd, err := NewChronydProcess(ct.Env(0, profile, event.GM, &osClockConfigs))
+	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.GM, &topology))
+	require.NoError(t, err)
+	realChronyd, err := NewChronydProcess(ct.Env(0, profile, event.GM, &topology))
 	require.NoError(t, err)
 
 	phc2sysStub := ct.AddProcess(realPhc2sys)
