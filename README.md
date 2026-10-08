@@ -9,6 +9,11 @@ linuxptp-daemon runs as a Kubernetes DaemonSet and manages linuxptp processes (p
 It mounts `linuxptp-configmap` which contains aggregated ptp configurations and applies specific config for each node.
 Both linuxptp-daemon and linuxptp-configmap are created in the `openshift-ptp` namespace.
 
+When monitoring u-blox GNSS receivers, the daemon also evaluates the receiver's
+`UBX-NAV-STATUS` spoofing detector. A reported spoofing or multiple-spoofing
+state marks the GNSS source as lost, preventing a plausible but forged fix from
+being used to keep the clock synchronized.
+
 ## Quick Start
 
 ### Create namespace and ServiceAccount

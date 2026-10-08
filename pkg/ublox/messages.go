@@ -72,6 +72,23 @@ type NavStatus struct {
 	MSSS    uint32
 }
 
+// NAV-STATUS flags2 spoofing detector states. The detector state is reported
+// for the current navigation epoch by u-blox receivers.
+const (
+	SpoofDetectionUnknown  uint8 = 0x00
+	SpoofDetectionNone     uint8 = 0x08
+	SpoofDetectionSpoofing uint8 = 0x10
+	SpoofDetectionMultiple uint8 = 0x18
+	spoofDetectionMask     uint8 = 0x18
+)
+
+// SpoofingDetected reports whether the receiver detected spoofing during this
+// navigation epoch. Unknown/deactivated and no-spoofing states are safe.
+func (s NavStatus) SpoofingDetected() bool {
+	state := s.Flags2 & spoofDetectionMask
+	return state == SpoofDetectionSpoofing || state == SpoofDetectionMultiple
+}
+
 // messageType identifies the UBX type represented by a NavStatus payload.
 func (NavStatus) messageType() MessageType { return NavStatusType }
 

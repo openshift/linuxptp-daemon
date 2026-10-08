@@ -65,6 +65,7 @@ func Test_BatchEnableNavMsgsAtRate(t *testing.T) {
 	}
 }
 
+// TestParserParsesCapturedUbxtoolStream checks typed parsing of a captured timestamped stream.
 func TestParserParsesCapturedUbxtoolStream(t *testing.T) {
 	file, err := os.Open("testdata/ubxtool.log")
 	require.NoError(t, err)
@@ -92,6 +93,7 @@ func TestParserParsesCapturedUbxtoolStream(t *testing.T) {
 	assert.Equal(t, MessageType("UBX-TIM-SVIN"), last.Type)
 }
 
+// TestParserParsesCapturedUbxtoolStreamWithoutTimestamps checks parsing without timestamp lines.
 func TestParserParsesCapturedUbxtoolStreamWithoutTimestamps(t *testing.T) {
 	file, err := os.Open("testdata/ubxtool_no_timestamp.log")
 	require.NoError(t, err)
@@ -117,6 +119,7 @@ func TestParserParsesCapturedUbxtoolStreamWithoutTimestamps(t *testing.T) {
 	assert.Equal(t, uint32(462982000), status.ITOW)
 }
 
+// TestParserDecodesTypedMessages verifies decoding of status, clock, and unknown message payloads.
 func TestParserDecodesTypedMessages(t *testing.T) {
 	parser := newParser()
 	var messages []Message
@@ -141,6 +144,7 @@ func TestParserDecodesTypedMessages(t *testing.T) {
 		assert.Equal(t, uint8(0xdd), status.Flags)
 		assert.Equal(t, uint8(0x0), status.FixStat)
 		assert.Equal(t, uint8(0x8), status.Flags2)
+		assert.False(t, status.SpoofingDetected())
 		assert.Equal(t, uint32(565), status.TTFF)
 		assert.Equal(t, uint32(807626316), status.MSSS)
 
@@ -158,6 +162,7 @@ func TestParserDecodesTypedMessages(t *testing.T) {
 	}
 }
 
+// TestParserDecodesRealWorldTimeLs verifies the fields in a representative TIMELS message.
 func TestParserDecodesRealWorldTimeLs(t *testing.T) {
 	parser := newParser()
 	for _, line := range []string{
@@ -184,6 +189,7 @@ func TestParserDecodesRealWorldTimeLs(t *testing.T) {
 	assert.Equal(t, uint8(3), leapSeconds.Valid)
 }
 
+// TestParserPublishesFinalAckWhenBodyEnds verifies complete ACK messages are published immediately.
 func TestParserPublishesFinalAckWhenBodyEnds(t *testing.T) {
 	parser := newParser()
 	messages := parser.feed("UBX-ACK-ACK:\n")
@@ -194,6 +200,7 @@ func TestParserPublishesFinalAckWhenBodyEnds(t *testing.T) {
 	assert.Equal(t, AckAckType, messages[0].Type)
 }
 
+// TestParserDecodesAckMessages verifies typed decoding of positive and negative ACK messages.
 func TestParserDecodesAckMessages(t *testing.T) {
 	parser := newParser()
 	var messages []Message
@@ -222,6 +229,7 @@ func TestParserDecodesAckMessages(t *testing.T) {
 	}
 }
 
+// TestParserHandlesMalformedNavFields verifies malformed navigation fields use safe fallbacks.
 func TestParserHandlesMalformedNavFields(t *testing.T) {
 	parser := newParser()
 	for _, line := range []string{

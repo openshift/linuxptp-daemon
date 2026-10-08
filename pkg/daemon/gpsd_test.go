@@ -124,6 +124,7 @@ func TestResetSerialPortPassesCorrectArgs(t *testing.T) {
 	assert.Equal(t, []string{"-F", device, "sane"}, capturedArgs)
 }
 
+// TestProcessGNSSMessageCorrelatesLatestStatusAndClock verifies messages are matched by navigation epoch.
 func TestProcessGNSSMessageCorrelatesLatestStatusAndClock(t *testing.T) {
 	eventCh := make(chan event.Event, 1)
 	g := &GPSD{
@@ -161,6 +162,37 @@ func TestProcessGNSSMessageCorrelatesLatestStatusAndClock(t *testing.T) {
 	assert.Equal(t, int64(10), gnssData.Offset)
 }
 
+// TestParsedSpoofingStatusMarksNavigationAsSourceLost verifies spoofing status survives parsing and causes daemon source loss.
+func TestParsedSpoofingStatusMarksNavigationAsSourceLost(t *testing.T) {
+	eventCh := make(chan event.Event, 1)
+	g := &GPSD{
+		processConfig: config.ProcessConfig{
+			EventChannel: eventCh,
+			GMThreshold:  config.Threshold{Max: 100},
+		},
+	}
+	messages := ublox.ParseMessages([]string{
+		"UBX-NAV-STATUS:\n",
+		"  iTOW 100 gpsFix 3 flags 0xdd fixStat 0x0 flags2 0x10\n",
+		"UBX-NAV-CLOCK:\n",
+		"  iTOW 100 clkB 42 clkD 0 tAcc 10 fAcc 0\n",
+	})
+	require.Len(t, messages, 2)
+	status, ok := messages[0].Payload.(ublox.NavStatus)
+	require.True(t, ok)
+	assert.Equal(t, ublox.SpoofDetectionSpoofing, status.Flags2)
+
+	for _, message := range messages {
+		g.processGNSSMessage(message)
+	}
+
+	eventValue := <-eventCh
+	gnssData, ok := eventValue.Data.(*event.GNSSData)
+	require.True(t, ok)
+	assert.True(t, gnssData.SourceLost)
+}
+
+// TestProcessGNSSMessageCorrelatesClockBeforeStatus verifies correlation when the clock arrives first.
 func TestProcessGNSSMessageCorrelatesClockBeforeStatus(t *testing.T) {
 	eventCh := make(chan event.Event, 1)
 	g := &GPSD{
@@ -191,6 +223,7 @@ func TestProcessGNSSMessageCorrelatesClockBeforeStatus(t *testing.T) {
 	assert.Equal(t, int64(10), gnssData.Offset)
 }
 
+// TestProcessGNSSMessageRejectsClockWithoutMatchingStatus verifies consumed status cannot be reused.
 func TestProcessGNSSMessageRejectsClockWithoutMatchingStatus(t *testing.T) {
 	eventCh := make(chan event.Event, 1)
 	g := &GPSD{
@@ -224,6 +257,7 @@ func TestProcessGNSSMessageRejectsClockWithoutMatchingStatus(t *testing.T) {
 	assert.Empty(t, eventCh)
 }
 
+// TestNewGpsdProcessStoresProcessConfig verifies constructor configuration is retained.
 func TestNewGpsdProcessStoresProcessConfig(t *testing.T) {
 	eventCh := make(chan event.Event, 1)
 	cfg := config.ProcessConfig{
@@ -238,6 +272,7 @@ func TestNewGpsdProcessStoresProcessConfig(t *testing.T) {
 	assert.True(t, g.isOffsetInRange(), "offset 9 must be in range when Max is 100")
 }
 
+// TestProcessConfigForCopiesThresholds verifies process thresholds are copied to the config.
 func TestProcessConfigForCopiesThresholds(t *testing.T) {
 	ch := make(chan event.Event, 1)
 	p := &ptpProcess{
