@@ -50,6 +50,78 @@ const (
 	labelProcess        = "process"
 )
 
+func TestStartCmdDoesNotStartStoppedProcess(t *testing.T) {
+	p := &ptpProcess{stopped: true}
+	cmd := exec.Command("true")
+
+	started, err := p.startCmd(cmd)
+
+	assert.NoError(t, err)
+	assert.False(t, started)
+	assert.Nil(t, cmd.Process)
+}
+
+func TestStartCmdPublishesStartedProcess(t *testing.T) {
+	p := &ptpProcess{}
+	cmd := exec.Command("true")
+
+	started, err := p.startCmd(cmd)
+
+	assert.NoError(t, err)
+	assert.True(t, started)
+	assert.NotNil(t, cmd.Process)
+	assert.NoError(t, cmd.Wait())
+}
+
+func TestStopCmdMarksProcessStoppedOnce(t *testing.T) {
+	expectedCmd := exec.Command("true")
+	p := &ptpProcess{cmd: expectedCmd}
+
+	cmd, stopping := p.stopCmd()
+	assert.Same(t, expectedCmd, cmd)
+	assert.True(t, stopping)
+
+	_, stopping = p.stopCmd()
+	assert.False(t, stopping)
+}
+
+func TestCmdRunRetriesAfterStartError(t *testing.T) {
+	firstCmd := exec.Command("/does-not-exist")
+	p := &ptpProcess{
+		name:    "test",
+		cmd:     firstCmd,
+		exitCh:  make(chan bool),
+		stopped: true,
+	}
+	done := make(chan struct{})
+	go func() {
+		p.cmdRun(false, nil)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		p.execMutex.Lock()
+		retried := p.cmd != firstCmd
+		p.execMutex.Unlock()
+		if retried {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	p.execMutex.Lock()
+	retried := p.cmd != firstCmd
+	p.execMutex.Unlock()
+	assert.True(t, retried)
+
+	go p.cmdStop()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cmdRun did not stop after a failed start")
+	}
+}
+
 // vendor defaults are embedded; no filesystem setup needed
 
 // NewDaemonForTests creates a Daemon instance for testing
