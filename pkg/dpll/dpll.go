@@ -758,6 +758,7 @@ func (d *DpllConfig) sendDpllEvent() {
 				event.InSyncConditionTimes:     d.inSyncConditionTimes,
 				event.ToFreeRunThreshold:       d.LocalMaxHoldoverOffSet,
 				event.MaxInSpecOffset:          d.MaxInSpecOffset,
+				event.LocalHoldoverTimeout:     d.LocalHoldoverTimeout,
 			},
 			OutOfSpec:          !d.inSpec,
 			SourceLost:         d.sourceLost, // Here source lost is either GNSS or PPS , nmea string lost is captured by ts2phc
