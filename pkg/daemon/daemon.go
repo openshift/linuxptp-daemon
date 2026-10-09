@@ -164,6 +164,11 @@ func (dn *Daemon) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.HardwareConfig) e
 	return dn.hardwareConfigManager.UpdateHardwareConfig(hwConfigs)
 }
 
+// SetGNSSStatusChangedHandler installs a callback for GNSS match status updates.
+func (dn *Daemon) SetGNSSStatusChangedHandler(handler func()) {
+	dn.hardwareConfigManager.SetGNSSStatusChangedHandler(handler)
+}
+
 // GetCurrentHardwareConfigs implements controller.HardwareConfigUpdateHandler.
 // Returns the currently applied hardware configurations from the HardwareConfigManager.
 // This is used at startup to initialize lastAppliedConfigs and avoid unnecessary restarts.

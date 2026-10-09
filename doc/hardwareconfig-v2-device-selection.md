@@ -19,6 +19,16 @@ interface's `device/gnss/` directory; if that directory contains multiple GNSS
 entries, the current implementation logs a warning and chooses the
 lexicographically first entry. This is a legacy exception to strict uniqueness.
 
+After attempting a configured GNSS match, the daemon reports the result in the
+HardwareConfig status `sources` array. A successful match sets the source's
+`gnss.ttyDevice` and `gnss.matchResult` to an English description of the
+selection method and its input selectors (for example, `Matched GNSS tty exposed
+by USB device 1546:01a9`). A failed match leaves `gnss.ttyDevice` empty and sets
+`gnss.matchResult` to an English explanation of the error. Ambiguous Ethernet
+matches include the matching interfaces and PCI slots when available and recommend adding a `slot`
+selector. The controller persists these values through the HardwareConfig
+status subresource; unrelated status fields are preserved.
+
 ### Direct tty selection
 
 When `ttyDevice` is specified, it is returned as provided. This is the most
