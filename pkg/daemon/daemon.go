@@ -338,10 +338,24 @@ func (p *ptpProcess) getAndSetStopped(val bool) bool {
 	return ret
 }
 
-func (p *ptpProcess) setStopped(val bool) {
+func (p *ptpProcess) startCmd(cmd *exec.Cmd) (bool, error) {
 	p.execMutex.Lock()
-	p.stopped = val
-	p.execMutex.Unlock()
+	defer p.execMutex.Unlock()
+	if p.stopped {
+		return false, nil
+	}
+	p.cmd = cmd
+	return true, cmd.Start()
+}
+
+func (p *ptpProcess) stopCmd() (*exec.Cmd, bool) {
+	p.execMutex.Lock()
+	defer p.execMutex.Unlock()
+	if p.cmd == nil || p.stopped {
+		return p.cmd, false
+	}
+	p.stopped = true
+	return p.cmd, true
 }
 
 // Daemon is the main structure for linuxptp instance.
@@ -1613,33 +1627,33 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 		// don't discard process stderr output
 		cmd.Stderr = cmd.Stdout
 
-		if !stdoutToSocket {
-			go p.runScanner(cmdReader, doneCh, pm, profileClockType)
-		} else {
-			go p.runSocketReader(cmdReader, doneCh, pm, profileClockType)
-		}
 		// Don't restart after termination
-		if !p.Stopped() {
+		startAttempted, startErr := p.startCmd(cmd)
+		if startAttempted {
 			glog.Infof("starting %s...", p.name)
-			p.cmd = cmd
-			err = cmd.Start() // this is asynchronous call,
-			if err != nil {
-				glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
-			}
-
-			<-doneCh // goroutine is done
-			err = cmd.Wait()
-
-			glog.Infof("done waiting for %s...", p.name)
-			if err != nil {
-				glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
-			}
-			if stdoutToSocket && p.c != nil {
-				processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
+			if startErr != nil {
+				glog.Errorf("CmdRun() error starting %s, will retry: %v", p.name, startErr)
 			} else {
-				processStatus(nil, p.name, p.messageTag, PtpProcessDown)
+				if !stdoutToSocket {
+					go p.runScanner(cmdReader, doneCh, pm, profileClockType)
+				} else {
+					go p.runSocketReader(cmdReader, doneCh, pm, profileClockType)
+				}
+
+				<-doneCh // goroutine is done
+				err = cmd.Wait()
+
+				glog.Infof("done waiting for %s...", p.name)
+				if err != nil {
+					glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
+				}
+				if stdoutToSocket && p.c != nil {
+					processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
+				} else {
+					processStatus(nil, p.name, p.messageTag, PtpProcessDown)
+				}
+				p.updateGMStatusOnProcessDown(p.name)
 			}
-			p.updateGMStatusOnProcessDown(p.name)
 		}
 
 		if profileClockType == TBC && p.name == ptp4lProcessName {
@@ -1706,18 +1720,17 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 // cmdStop stops ptpProcess launched by cmdRun
 func (p *ptpProcess) cmdStop() {
 	glog.Infof("stopping %s...", p.name)
-	cmd := p.cmd
+	cmd, stopping := p.stopCmd()
 	if cmd == nil {
 		glog.Infof("cmdStop is nil %s", p.name)
 		return
 	}
-	if p.Stopped() {
+	if !stopping {
 		glog.Infof("%s is already stopped", p.name)
 		return
 	}
 	glog.Infof("%s setStopped true", p.name)
 
-	p.setStopped(true)
 	if cmd.Process != nil {
 		glog.Infof("Sending TERM to (%s) PID: %d", p.name, cmd.Process.Pid)
 		err := cmd.Process.Signal(syscall.SIGTERM)
