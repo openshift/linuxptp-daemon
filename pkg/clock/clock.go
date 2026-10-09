@@ -13,6 +13,10 @@ type Clock interface {
 	SystemClockUpdate()
 	Reset()
 	ConfigName() string
+	// ConfigNames returns every config name events for this clock may arrive
+	// under, so the clock manager can route them all here. It always includes
+	// ConfigName.
+	ConfigNames() []string
 	ClockType() event.ClockType
 	ClockClass() fbprotocol.ClockClass
 	SetIPC(func(message ipc.Message))
@@ -32,6 +36,11 @@ type SyncState struct {
 	LeadingIFace   string
 	ClockAccuracy  fbprotocol.ClockAccuracy
 	ClockOffset    int64
+	// HAProfileStatus maps each HA member profile name to whether it is the
+	// currently selected (active) source. Exactly one member is active at a time
+	// (phc2sys disciplines the system clock from a single source). It is nil for
+	// every non-HA clock
+	HAProfileStatus map[string]bool
 }
 
 func emitOverallSyncStateIfChanged(sendIPC func(ipc.Message), overallSyncState *event.PTPState, clockState, osClockState event.PTPState, profile string) {

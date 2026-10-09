@@ -11,6 +11,8 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,6 +30,79 @@ func (m *ClockManager) GetPTPState(source event.EventSource, cfgName string) eve
 		return event.PTP_UNKNOWN
 	}
 	return d.State
+}
+
+func TestClockManager_AddHAClock(t *testing.T) {
+	cm := Init("test-node", make(chan event.Event), nil, nil, nil, nil)
+	th := event.PtpClockThreshold{MaxOffsetThreshold: 100, MinOffsetThreshold: -100}
+	bc1, err := clock.NewBC("ptp4l.0.config", false, th)
+	require.NoError(t, err)
+	bc2, err := clock.NewBC("ptp4l.1.config", false, th)
+	require.NoError(t, err)
+	ha, err := clock.NewHA("phc2sys.2.config",
+		clock.HAMember{Profile: "bc1", Clock: bc1},
+		clock.HAMember{Profile: "bc2", Clock: bc2})
+	require.NoError(t, err)
+	require.NoError(t, cm.AddClock(ha))
+
+	// The HA clock is reachable under its own config (source-selection events) and
+	// under each member config (member ptp4l events).
+	for _, cfg := range []string{"phc2sys.2.config", "ptp4l.0.config", "ptp4l.1.config"} {
+		clk := cm.GetClock(cfg)
+		require.NotNil(t, clk, "expected HA clock registered under %s", cfg)
+		assert.Equal(t, event.HA, clk.ClockType())
+	}
+}
+
+func TestClockManager_HAClockClassPerMember(t *testing.T) {
+	// Regression: clock_class is keyed per member config, so a composite HA clock
+	// must report each member's own class — not the active member's. Previously
+	// clockmgr used clk.ClockClass() (the active member), so a freerun member (248)
+	// was wrongly reported with the locked active member's class (6).
+	clockClassMetric := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Namespace: "openshift", Subsystem: "ptp", Name: "clock_class"},
+		[]string{"process", nodeLabel, configLabel})
+
+	evCh := make(chan event.Event, 10)
+	cm := Init("test-node", evCh, nil, nil, clockClassMetric, nil)
+
+	th := event.PtpClockThreshold{MaxOffsetThreshold: 100, MinOffsetThreshold: -100}
+	bc1, err := clock.NewBC("ptp4l.0.config", false, th)
+	require.NoError(t, err)
+	bc2, err := clock.NewBC("ptp4l.1.config", false, th)
+	require.NoError(t, err)
+	ha, err := clock.NewHA("phc2sys.2.config",
+		clock.HAMember{Profile: "bc1", Clock: bc1},
+		clock.HAMember{Profile: "bc2", Clock: bc2})
+	require.NoError(t, err)
+	require.NoError(t, cm.AddClock(ha))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go cm.ProcessEvents(ctx)
+
+	// Member 1 locks to GM class 6 and becomes the active (phc2sys-selected) source.
+	evCh <- event.Event{Source: event.PMC, CfgName: "ptp4l.0.config",
+		Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}}}
+	evCh <- event.Event{Source: event.PTP4l, CfgName: "ptp4l.0.config", IFace: "eth0",
+		ClockType: event.BC, Data: &event.OffsetData{Offset: 10}}
+	evCh <- event.Event{Source: event.PHC2SYS, CfgName: "phc2sys.2.config", IFace: "eth0",
+		Data: &event.SelectedSourceData{IFace: "eth0"}}
+	// Member 2 is freerun with class 248.
+	evCh <- event.Event{Source: event.PMC, CfgName: "ptp4l.1.config",
+		Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 248}}}
+
+	member2Gauge := clockClassMetric.With(prometheus.Labels{
+		"process": "ptp4l", nodeLabel: "test-node", configLabel: "ptp4l.1.config"})
+	assert.Eventually(t, func() bool {
+		return testutil.ToFloat64(member2Gauge) == 248
+	}, 2*time.Second, 10*time.Millisecond,
+		"member 2 clock_class must be its own (248), not the active member's (6)")
+
+	// Sanity: the active member reports its own class too.
+	member1Gauge := clockClassMetric.With(prometheus.Labels{
+		"process": "ptp4l", nodeLabel: "test-node", configLabel: "ptp4l.0.config"})
+	assert.Equal(t, float64(6), testutil.ToFloat64(member1Gauge))
 }
 
 func TestClockManager_GetDataAndPTPState(t *testing.T) {
@@ -339,4 +414,25 @@ func TestClockManager_PHC2SYS_RemoveAllClocksResetsData(t *testing.T) {
 	for _, d := range newClk.ProcessData() {
 		assert.NotEqual(t, event.PHC2SYS, d.ProcessName, "stale PHC2SYS data must be cleared on Reset")
 	}
+}
+
+func TestConvertToFloat(t *testing.T) {
+	got, ok := convertToFloat(int64(6))
+	require.True(t, ok)
+	assert.Equal(t, 6.0, got)
+
+	got, ok = convertToFloat(1.5)
+	require.True(t, ok)
+	assert.Equal(t, 1.5, got)
+
+	got, ok = convertToFloat(true)
+	require.True(t, ok)
+	assert.Equal(t, 1.0, got)
+
+	got, ok = convertToFloat(false)
+	require.True(t, ok)
+	assert.Equal(t, 0.0, got)
+
+	_, ok = convertToFloat("true")
+	assert.False(t, ok)
 }

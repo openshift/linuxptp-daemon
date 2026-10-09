@@ -56,14 +56,29 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   git stash --quiet
   STASHED=true
 fi
+restore_branch() {
+  git checkout "${CURRENT_BRANCH}" --quiet
+  if [ "${STASHED}" = true ]; then
+    git stash pop --quiet
+    STASHED=false
+  fi
+}
 git checkout "${BASE_REF}" --quiet
+set +e
 bash "${TMPTEST}"
+BASE_TEST_STATUS=$?
+set -e
 rm -f "${TMPTEST}"
-BASE_COV=$(go tool cover -func=coverage.out | grep ^total | awk '{print $3}' | tr -d '%')
-git checkout "${CURRENT_BRANCH}" --quiet
-if [ "${STASHED}" = true ]; then
-  git stash pop --quiet
+if [ ! -f coverage.out ]; then
+  restore_branch
+  echo "Base tests produced no coverage.out (exit ${BASE_TEST_STATUS})"
+  exit 1
 fi
+if [ "${BASE_TEST_STATUS}" -ne 0 ]; then
+  echo "WARNING: tests failed on base ref '${BASE_REF}' (exit ${BASE_TEST_STATUS}); comparing coverage anyway"
+fi
+BASE_COV=$(go tool cover -func=coverage.out | grep ^total | awk '{print $3}' | tr -d '%')
+restore_branch
 
 DIFF=$(echo "${CURRENT_COV} - ${BASE_COV}" | bc)
 echo ""

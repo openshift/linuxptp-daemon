@@ -54,7 +54,7 @@ type GPSD struct {
 	gmInterface          string
 	messageTag           string
 	ublxTool             *ublox.UBlox
-	gnssInitCmds         ublox.CommandList      // optional HardwareConfig GNSS init commands
+	gnssInitConfig       *ublox.InitConfig      // optional HardwareConfig GNSS configuration
 	gnssResultsFn        func(results []string) // callback to store GNSS init results
 	gpsdSession          *gpsdlib.Session
 	gpsdDoneCh           chan bool
@@ -72,7 +72,7 @@ type GPSD struct {
 }
 
 // NewGpsdProcess creates a new GPSD process instance.
-func NewGpsdProcess(serialPort string, gmInterface string, messageTag string, gnssInitCmds ublox.CommandList, gnssResultsFn func(results []string), nodeProfile *ptpv1.PtpProfile, eventCh chan event.Event, processCfg config.ProcessConfig) process.Process {
+func NewGpsdProcess(serialPort string, gmInterface string, messageTag string, gnssInitConfig *ublox.InitConfig, gnssResultsFn func(results []string), nodeProfile *ptpv1.PtpProfile, eventCh chan event.Event, processCfg config.ProcessConfig) process.Process {
 	monitorCtx, monitorCancel := context.WithCancel(context.Background())
 
 	cmdLine := fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -N %s", GPSD_PROCESSNAME, serialPort)
@@ -84,27 +84,27 @@ func NewGpsdProcess(serialPort string, gmInterface string, messageTag string, gn
 	}
 
 	return &GPSD{
-		name:          GPSD_PROCESSNAME,
-		cmdLine:       cmdLine,
-		cmd:           NewExecCmd(exec.Command(args[0], args[1:]...)),
-		serialPort:    serialPort,
-		gmInterface:   gmInterface,
-		stopped:       false,
-		messageTag:    messageTag,
-		ublxTool:      nil,
-		gnssInitCmds:  gnssInitCmds,
-		gnssResultsFn: gnssResultsFn,
-		cmdRunner:     exec.CommandContext,
-		monitorCtx:    monitorCtx,
-		monitorCancel: monitorCancel,
-		eventCh:       eventCh,
-		processConfig: processCfg,
-		profile:       nodeProfile,
-		conditions:    map[process.Action]process.Condition{},
+		name:           GPSD_PROCESSNAME,
+		cmdLine:        cmdLine,
+		cmd:            NewExecCmd(exec.Command(args[0], args[1:]...)),
+		serialPort:     serialPort,
+		gmInterface:    gmInterface,
+		stopped:        false,
+		messageTag:     messageTag,
+		ublxTool:       nil,
+		gnssInitConfig: gnssInitConfig,
+		gnssResultsFn:  gnssResultsFn,
+		cmdRunner:      exec.CommandContext,
+		monitorCtx:     monitorCtx,
+		monitorCancel:  monitorCancel,
+		eventCh:        eventCh,
+		processConfig:  processCfg,
+		profile:        nodeProfile,
+		conditions:     map[process.Action]process.Condition{},
 	}
 }
 
-// Name ... Process name
+// Name returns the process name.
 func (g *GPSD) Name() string {
 	return g.name
 }
@@ -124,14 +124,15 @@ func (g *GPSD) SerialPort() string {
 	return g.serialPort
 }
 
-// ConfigName ...
+// ConfigName returns the configuration name associated with this GPSD process.
 func (g *GPSD) ConfigName() string {
 	return g.processConfig.ConfigName
 }
 
-// SyncInitialState ...
+// SyncInitialState is a no-op because GPSD has no initial state to synchronize.
 func (g *GPSD) SyncInitialState() {}
 
+// gnssClockType returns the configured GNSS clock type, defaulting to GM.
 func (g *GPSD) gnssClockType() event.ClockType {
 	if g.processConfig.ClockType != "" {
 		return g.processConfig.ClockType
@@ -139,6 +140,7 @@ func (g *GPSD) gnssClockType() event.ClockType {
 	return event.GM
 }
 
+// sendGNSSEvent forwards a GNSS event without blocking the monitoring loop.
 func (g *GPSD) sendGNSSEvent(ev event.Event) {
 	var ch chan<- event.Event = g.eventCh
 	if ch == nil {
@@ -168,13 +170,14 @@ func (g *GPSD) State() process.State {
 	return g.state
 }
 
+// setState updates the process state while holding the state mutex.
 func (g *GPSD) setState(s process.State) {
 	g.execMutex.Lock()
 	g.state = s
 	g.execMutex.Unlock()
 }
 
-// CmdStop .... stop
+// Stop terminates GPSD and waits for its monitoring goroutines to exit.
 func (g *GPSD) Stop() error {
 	glog.Infof("stopping %s...", g.name)
 	g.execMutex.Lock()
@@ -235,11 +238,12 @@ func (g *GPSD) resetSerialPort(ctx context.Context) error {
 	return nil
 }
 
-// ProcessStatus ...
+// ProcessStatus reports the GPSD process status through the configured message tag.
 func (g *GPSD) ProcessStatus(status int64) {
 	processStatus(g.name, g.messageTag, status)
 }
 
+// run starts GPSD and waits for the child process to exit in a worker goroutine.
 func (g *GPSD) run() {
 	g.wg.Add(1)
 	go func() {
@@ -338,7 +342,7 @@ func (g *GPSD) monitorGNSSEventsWithUblox() {
 		})
 
 		for {
-			ublx, err := ublox.NewUblox(g.gnssInitCmds...)
+			ublx, err := ublox.NewUblox(g.gnssInitConfig)
 			if ublx != nil && len(ublx.InitResults()) > 0 && g.gnssResultsFn != nil {
 				g.gnssResultsFn(ublx.InitResults())
 			}
@@ -429,6 +433,7 @@ func (g *GPSD) processGNSSMessage(message ublox.Message) bool {
 	return g.checkForiTOWCorrelation()
 }
 
+// processTimeLs forwards leap-second data to the leap manager when available.
 func processTimeLs(timels ublox.TimeLs) {
 	if leap.LeapMgr != nil {
 		select {
@@ -439,6 +444,7 @@ func processTimeLs(timels ublox.TimeLs) {
 	}
 }
 
+// resetiTOWMatch clears NAV-STATUS and NAV-CLOCK candidates for epoch correlation.
 func (g *GPSD) resetiTOWMatch() {
 	g.lastNavStatus = nil
 	g.lastNavClock = nil
@@ -455,7 +461,10 @@ func (g *GPSD) checkForiTOWCorrelation() bool {
 	g.resetiTOWMatch()
 
 	g.offset = clock.Offset
-	g.sourceLost = status.GPSFix < 3 || !g.isOffsetInRange()
+	// A spoofed navigation solution can retain a valid-looking fix and clock
+	// offset. Treat the receiver's spoofing detector as a lost GNSS source so
+	// the clock cannot remain locked to potentially forged time.
+	g.sourceLost = status.GPSFix < 3 || status.SpoofingDetected() || !g.isOffsetInRange()
 	g.sendGNSSEvent(event.Event{
 		Source:     event.GNSS,
 		CfgName:    g.ConfigName(),

@@ -473,3 +473,60 @@ func TestNewCommandRunner(t *testing.T) {
 	assert.Equal(t, testProtoVersion, runner.protoVersion)
 	assert.Equal(t, 1, len(mock.calls))
 }
+
+func TestBuildInitCommandsInitialConfig(t *testing.T) {
+	t.Run("nil config", func(t *testing.T) {
+		assert.Nil(t, BuildInitCommands(testProtoVersion, nil))
+	})
+
+	t.Run("all configured settings", func(t *testing.T) {
+		config := &InitConfig{
+			AntennaVoltage: true,
+			Constellations: []Constellation{
+				ConstellationGPS,
+				ConstellationGalileo,
+				ConstellationGLONASS,
+				ConstellationBeiDou,
+				ConstellationSBAS,
+			},
+			SurveyIn: &SurveyInConfig{ObservationTime: 600, AccuracyMeters: 5},
+			ExtraCommands: CommandList{
+				{Args: []string{"-p", "MON-RF"}, ReportOutput: true},
+			},
+		}
+		assert.Equal(t, CommandList{
+			{Args: []string{"-z", "CFG-HW-ANT_CFG_VOLTCTRL,1"}},
+			{Args: []string{
+				"-z", "CFG-SIGNAL-GPS_ENA,1",
+				"-z", "CFG-SIGNAL-GAL_ENA,1",
+				"-z", "CFG-SIGNAL-GLO_ENA,1",
+				"-z", "CFG-SIGNAL-BDS_ENA,1",
+				"-z", "CFG-SIGNAL-SBAS_ENA,1",
+				"-z", "CFG-SIGNAL-QZSS_ENA,0",
+				"-z", "CFG-SIGNAL-NAVIC_ENA,0",
+			}},
+			{Args: []string{
+				"-z", "CFG-TMODE-SVIN_MIN_DUR,600",
+				"-z", "CFG-TMODE-SVIN_ACC_LIMIT,50000",
+				"-z", surveyInModeCommand,
+			}},
+			{Args: []string{"-p", surveyInPollType}, ReportOutput: true},
+			{Args: []string{"-p", "MON-RF"}, ReportOutput: true},
+		}, BuildInitCommands(testProtoVersion, config))
+	})
+
+	t.Run("empty settings disable all constellations", func(t *testing.T) {
+		assert.Equal(t, CommandList{
+			{Args: []string{"-z", "CFG-HW-ANT_CFG_VOLTCTRL,0"}},
+			{Args: []string{
+				"-z", "CFG-SIGNAL-GPS_ENA,1",
+				"-z", "CFG-SIGNAL-QZSS_ENA,1",
+				"-z", "CFG-SIGNAL-GAL_ENA,1",
+				"-z", "CFG-SIGNAL-GLO_ENA,0",
+				"-z", "CFG-SIGNAL-BDS_ENA,0",
+				"-z", "CFG-SIGNAL-SBAS_ENA,0",
+				"-z", "CFG-SIGNAL-NAVIC_ENA,0",
+			}},
+		}, BuildInitCommands(testProtoVersion, &InitConfig{}))
+	})
+}

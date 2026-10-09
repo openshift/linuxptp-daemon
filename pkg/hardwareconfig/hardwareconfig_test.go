@@ -972,6 +972,18 @@ func TestResolveSysFSPtpDevice(t *testing.T) {
 		t.Fatalf("Failed to create read-only test file: %v", err)
 	}
 
+	// Mock the write probe for the read-only file. Root can open a regular
+	// 0444 file, so relying on the host user's privileges would make this
+	// test fail in root containers.
+	originalOpenFileForWrite := openFileForWrite
+	openFileForWrite = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		if name == readOnlyFile {
+			return nil, os.ErrPermission
+		}
+		return originalOpenFileForWrite(name, flag, perm)
+	}
+	defer func() { openFileForWrite = originalOpenFileForWrite }()
+
 	// Create HardwareConfigManager for testing
 	hcm := &HardwareConfigManager{
 		hardwareConfigs: make([]enrichedHardwareConfig, 0),

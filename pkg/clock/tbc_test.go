@@ -928,6 +928,74 @@ func TestUpdateBCState(t *testing.T) {
 	})
 }
 
+func TestUpdateBCStateHoldoverDisabled(t *testing.T) {
+	dpllEvent := func(iface string, leading, holdoverDisabled bool) event.Event {
+		offset := int64(10)
+		return event.Event{
+			Source:    event.DPLL,
+			IFace:     iface,
+			CfgName:   testPTP4lCfg,
+			ClockType: event.BC,
+			Time:      time.Now().UnixMilli(),
+			Data: &event.DPLLData{
+				State:            event.PTP_LOCKED,
+				LeadingSource:    leading,
+				Offset:           &offset,
+				HoldoverDisabled: holdoverDisabled,
+			},
+		}
+	}
+
+	tests := []struct {
+		name             string
+		ppsFedLeader     bool
+		leaderDisabled   bool
+		follower         bool
+		followerDisabled bool
+		wantState        event.PTPState
+		wantClass        fbprotocol.ClockClass
+	}{
+		{"disabled", false, true, false, false, event.PTP_FREERUN, protocol.ClockClassFreerun},
+		{"enabled", false, false, false, false, event.PTP_HOLDOVER, 135},
+		// On GNR-D the leading DPLL is fed by PPS: its events are not marked
+		// LeadingSource and the leading interface comes from the profile.
+		{"disabled, PPS-fed leader", true, true, false, false, event.PTP_FREERUN, protocol.ClockClassFreerun},
+		{"follower cannot disable holdover", false, false, true, true, event.PTP_HOLDOVER, 135},
+		{"follower cannot enable holdover", false, true, true, false, event.PTP_FREERUN, protocol.ClockClassFreerun},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bc, rec := newLockedTBCClock()
+			if tt.ppsFedLeader {
+				bc.leadingClockData.leadingInterface = ""
+				bc.SetConfiguredLeadingInterface(testTBCIface)
+			}
+			bc.AddEvent(dpllEvent(testTBCIface, !tt.ppsFedLeader, tt.leaderDisabled))
+			if tt.follower {
+				bc.AddEvent(dpllEvent(testEth1, false, tt.followerDisabled))
+			}
+			rec.messages = nil
+
+			// Upstream lost while the cached leading DPLL is still locked with a small offset.
+			result := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+			assert.Equal(t, tt.wantState, result.State)
+			assert.Equal(t, tt.wantClass, result.ClockClass)
+
+			if tt.wantState == event.PTP_FREERUN {
+				for _, msg := range rec.messages {
+					if state, ok := msg.Values.(ipc.StateValue); ok {
+						assert.NotEqual(t, ipc.StateHoldover, state.State)
+					}
+					if class, ok := msg.Values.(ipc.ClockClassValue); ok {
+						assert.NotEqual(t, uint8(135), class.ClockClass)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestProcessSyncE(t *testing.T) {
 	t.Run("state event emits synce_state IPC", func(t *testing.T) {
 		rio := &ipcRecorder{}

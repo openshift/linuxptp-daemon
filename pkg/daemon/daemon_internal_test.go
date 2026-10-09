@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -283,8 +284,9 @@ func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 	assert.NotNil(t, dn)
 	// Signal that no hardware configs are expected for this test
 	_ = dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
-	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
-	err := dn.applyNodePtpProfile(0, profile, &osClockConfigs)
+	topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
+	require.NoError(t, err)
+	err = dn.applyNodePtpProfile(0, profile, &topology)
 	assert.NoError(t, err)
 }
 
@@ -385,8 +387,9 @@ func Test_applyProfile_TBC(t *testing.T) {
 		profile, err := loadProfile(test.dataFile)
 		assert.NoError(t, err)
 		// Will assert inside in case of error:
-		osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
-		err = dn.applyNodePtpProfile(0, profile, &osClockConfigs)
+		topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
+		require.NoError(t, err)
+		err = dn.applyNodePtpProfile(0, profile, &topology)
 		assert.NoError(t, err)
 
 		// Ensure for T-BC that phc2sys has a non-Immediate start condition (delayed start)
@@ -429,11 +432,12 @@ func Test_applyProfile_DualNICBCHAClockType(t *testing.T) {
 
 	dn := NewDaemonForTests(&ReadyTracker{}, ct.pm)
 	t.Cleanup(dn.cancel)
-	osClockConfigs := NewOSClockConfigs(profiles)
+	dn.ptpUpdate = &LinuxPTPConfUpdate{NodeProfiles: profiles}
+	topology, err := NewProfileTopology(profiles)
+	require.NoError(t, err)
 
-	for i := range profiles {
-		require.NoError(t, dn.applyNodePtpProfile(i, &profiles[i], &osClockConfigs))
-	}
+	require.NoError(t, dn.assembleHAClock("ha", []string{"bc1", "bc2"}, &topology))
+	dn.populateHAInterfaces(&topology)
 
 	clockTypes := map[string]event.ClockType{}
 	for _, proc := range dn.processManager.process {
@@ -444,6 +448,19 @@ func Test_applyProfile_DualNICBCHAClockType(t *testing.T) {
 	assert.Equal(t, event.BC, clockTypes["bc1"])
 	assert.Equal(t, event.BC, clockTypes["bc2"])
 	assert.Equal(t, event.SysClock, clockTypes["ha"], "CI omits Phc2sysConf; HA profile must still be detected")
+
+	// The composite HA clock must own both members: it is registered under the HA
+	// phc2sys config and routes each member's ptp4l config to the same clock.
+	haCfg := fmt.Sprintf("phc2sys.%d.config", topology.profileRunID["ha"])
+	haClk := dn.processManager.clockMgr.GetClock(haCfg)
+	require.NotNil(t, haClk, "HA clock should be registered under %s", haCfg)
+	assert.Equal(t, event.HA, haClk.ClockType())
+	for _, member := range []string{"bc1", "bc2"} {
+		memberCfg := fmt.Sprintf("ptp4l.%d.config", topology.profileRunID[member])
+		assert.Contains(t, haClk.ConfigNames(), memberCfg, "HA clock should compose member %s", member)
+		assert.Same(t, haClk, dn.processManager.clockMgr.GetClock(memberCfg), "member %s events should route to the HA clock", member)
+	}
+
 	for _, proc := range dn.processManager.process {
 		if ptpProc, ok := proc.(*ptpProcess); ok && ptpProc.Name() == phc2sysProcessName {
 			assert.Equal(t, string(event.SysClock), reportedClockType(ptpProc))
@@ -488,8 +505,9 @@ func Test_applyProfile_TGM(t *testing.T) {
 
 	profile, err := loadProfile("testdata/profile-tgm.yaml")
 	assert.NoError(t, err)
-	osClockConfigs := NewOSClockConfigs([]ptpv1.PtpProfile{*profile})
-	err = dn.applyNodePtpProfile(0, profile, &osClockConfigs)
+	topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
+	require.NoError(t, err)
+	err = dn.applyNodePtpProfile(0, profile, &topology)
 	assert.NoError(t, err)
 
 	var ts2phcProc *ptpProcess
@@ -808,6 +826,73 @@ func TestReconcileRelatedProfiles(t *testing.T) {
 // Helper function to create string pointers
 func stringPointer(s string) *string {
 	return &s
+}
+
+func TestNewProfileTopology(t *testing.T) {
+	phc2sysOpts := "-a -r -m -l 7 -n 24 "
+
+	t.Run("normal behavior without HA", func(t *testing.T) {
+		profiles := []ptpv1.PtpProfile{
+			{Name: stringPointer("bc1"), Phc2sysOpts: &phc2sysOpts,
+				Plugins: map[string]*apiextensions.JSON{
+					"ntpfailover": {Raw: []byte("{}")},
+				}},
+		}
+
+		topology, err := NewProfileTopology(profiles)
+		require.NoError(t, err)
+
+		assert.Empty(t, topology.haProfile, "no HA profile expected")
+		assert.Empty(t, topology.haMembers)
+		assert.Equal(t, map[string]int{"bc1": 0}, topology.profileRunID)
+		assert.ElementsMatch(t, []string{"bc1"}, topology.phc2sysProfiles)
+		assert.ElementsMatch(t, []string{"bc1"}, topology.ntpFailOverProfileNames,
+			"profile with ntpfailover plugin should be tracked")
+	})
+
+	t.Run("valid HA profile with members", func(t *testing.T) {
+		profiles := []ptpv1.PtpProfile{
+			{Name: stringPointer("bc1")},
+			{Name: stringPointer("bc2")},
+			{Name: stringPointer("ha"), Phc2sysOpts: &phc2sysOpts,
+				PtpSettings: map[string]string{PTP_HA_IDENTIFIER: "bc1,bc2"}},
+		}
+
+		topology, err := NewProfileTopology(profiles)
+		require.NoError(t, err)
+
+		assert.Equal(t, "ha", topology.haProfile)
+		assert.ElementsMatch(t, []string{"bc1", "bc2"}, topology.haMembers)
+		assert.Equal(t, 2, topology.profileRunID["ha"])
+		assert.True(t, topology.isHAProfile("ha"))
+		assert.True(t, topology.isHAMember("bc1"))
+		assert.True(t, topology.isHAMember("bc2"))
+	})
+	t.Run("HA profile referencing a missing member fails", func(t *testing.T) {
+		profiles := []ptpv1.PtpProfile{
+			{Name: stringPointer("bc1")},
+			{Name: stringPointer("ha"), Phc2sysOpts: &phc2sysOpts,
+				PtpSettings: map[string]string{PTP_HA_IDENTIFIER: "bc1,bc2"}},
+		}
+
+		_, err := NewProfileTopology(profiles)
+		require.Error(t, err)
+	})
+	t.Run("Multiple HA profiles fails", func(t *testing.T) {
+		profiles := []ptpv1.PtpProfile{
+			{Name: stringPointer("bc1")},
+			{Name: stringPointer("bc2")},
+			{Name: stringPointer("bc3")},
+			{Name: stringPointer("bc4")},
+			{Name: stringPointer("ha1"), Phc2sysOpts: &phc2sysOpts,
+				PtpSettings: map[string]string{PTP_HA_IDENTIFIER: "bc1,bc2"}},
+			{Name: stringPointer("ha2"), Phc2sysOpts: &phc2sysOpts,
+				PtpSettings: map[string]string{PTP_HA_IDENTIFIER: "bc3,bc4"}},
+		}
+
+		_, err := NewProfileTopology(profiles)
+		require.Error(t, err)
+	})
 }
 
 // TestTBCTransitionCheck_HardwareConfigPath tests the hardware config path of tBCTransitionCheck
@@ -2863,15 +2948,15 @@ func TestDaemon_PopulateHAInterfaces(t *testing.T) {
 	phc2sysProc.haProfile = make(map[string][]string)
 
 	// Create OSClockConfigs to simulate the HA configuration
-	osClockConfigs := OSClockConfigs{
-		haProfileNames:       []string{"ha_profile1"},
-		haReferencedProfiles: []string{"profile1", "profile2"},
-		profileRunID:         map[string]int{"profile1": 0, "profile2": 1},
+	topology := ProfileTopology{
+		haProfile:    "ha_profile1",
+		haMembers:    []string{"profile1", "profile2"},
+		profileRunID: map[string]int{"profile1": 0, "profile2": 1},
 	}
 
 	// Create daemon and call populateHAInterfaces
 	dd := NewDaemonForTests(&ReadyTracker{}, processManager)
-	dd.populateHAInterfaces(&osClockConfigs)
+	dd.populateHAInterfaces(&topology)
 
 	// Verify that haProfile was populated correctly
 	require.NotNil(t, phc2sysProc.haProfile, "haProfile should not be nil")
@@ -2889,15 +2974,15 @@ func TestPhc2sysProcess_HASocketOptions(t *testing.T) {
 		t.Skip("BC PTP-HA is not supported")
 	}
 
-	// Create OSClockConfigs to simulate HA configuration with two ptp4l profiles
-	osClockConfigs := OSClockConfigs{
-		haProfileNames:       []string{"ha_profile1"},
-		haReferencedProfiles: []string{"profile1", "profile2"},
-		profileRunID:         map[string]int{"profile1": 0, "profile2": 1},
+	// Create ProfileTopology to simulate HA configuration with two ptp4l profiles
+	topology := ProfileTopology{
+		haProfile:    "ha_profile1",
+		haMembers:    []string{"profile1", "profile2"},
+		profileRunID: map[string]int{"profile1": 0, "profile2": 1},
 	}
 
 	// Call haSocketOpts which should generate socket options for both referenced profiles
-	socketOpts := haSocketOpts(&osClockConfigs)
+	socketOpts := haSocketOpts(&topology)
 
 	// Should contain socket options for both referenced profiles
 	assert.NotEmpty(t, socketOpts, "socketOpts should not be empty")

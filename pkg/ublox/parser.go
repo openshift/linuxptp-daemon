@@ -17,6 +17,17 @@ type parser struct {
 	lines            []string
 }
 
+// ParseMessages parses a complete sequence of ubxtool output lines into typed UBX messages.
+// Lines may include trailing newlines; any final message is flushed before returning.
+func ParseMessages(lines []string) []Message {
+	p := newParser()
+	var messages []Message
+	for _, line := range lines {
+		messages = append(messages, p.feed(line)...)
+	}
+	return append(messages, p.flush()...)
+}
+
 // newParser returns a parser for one ubxtool output stream.
 func newParser() *parser {
 	return &parser{}
