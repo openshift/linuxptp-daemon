@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"cmp"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -1519,9 +1520,65 @@ func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.Plugin
 	})
 }
 
+func (p *ptpProcess) processOutput(output string, pm *plugin.PluginManager, profileClockType string, c net.Conn) string {
+	if p.name == chronydProcessName {
+		output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
+	}
+	output = pm.ProcessLog(p.name, output)
+	output = p.replaceClockID(output)
+	printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
+	p.processPTPMetrics(output)
+	if p.name == ptp4lProcessName {
+		if profileClockType == TBC {
+			p.tBCTransitionCheck(output, pm)
+		}
+	} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
+		p.announceHAFailOver(c, output)
+	}
+	return output
+}
+
+func (p *ptpProcess) runScanner(cmdReader io.Reader, doneCh chan<- struct{}, pm *plugin.PluginManager, profileClockType string) {
+	scanner := bufio.NewScanner(cmdReader)
+	processStatus(nil, p.name, p.messageTag, PtpProcessUp)
+	for scanner.Scan() {
+		p.processOutput(scanner.Text(), pm, profileClockType, nil)
+	}
+	doneCh <- struct{}{}
+}
+
+func (p *ptpProcess) runSocketReader(cmdReader io.Reader, doneCh chan<- struct{}, pm *plugin.PluginManager, profileClockType string) {
+connect:
+	select {
+	case <-p.exitCh:
+		doneCh <- struct{}{}
+	default:
+		var err error
+		p.c, err = dialSocket()
+		if err != nil {
+			goto connect
+		}
+	}
+	scanner := bufio.NewScanner(cmdReader)
+	processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
+	for _, d := range p.depProcess {
+		if d != nil {
+			d.ProcessStatus(p.c, PtpProcessUp)
+		}
+	}
+
+	for scanner.Scan() {
+		output := p.processOutput(scanner.Text(), pm, profileClockType, p.c)
+		line := removeMessageSuffix(output) + "\n"
+		if _, err := p.c.Write([]byte(line)); err != nil {
+			glog.Errorf("Write %s error %s:", output, err)
+			goto connect
+		}
+	}
+	doneCh <- struct{}{}
+}
+
 // cmdRun runs given ptpProcess and restarts on errors
-//
-//nolint:gocyclo // complexity is acceptable for this function
 func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 	cmd := p.cmd
 	stopped := p.getAndSetStopped(false)
@@ -1557,77 +1614,9 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 		cmd.Stderr = cmd.Stdout
 
 		if !stdoutToSocket {
-			scanner := bufio.NewScanner(cmdReader)
-			processStatus(nil, p.name, p.messageTag, PtpProcessUp)
-			go func() {
-				for scanner.Scan() {
-					output := scanner.Text()
-					if p.name == chronydProcessName {
-						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
-					}
-					output = pm.ProcessLog(p.name, output)
-					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface
-					output = p.replaceClockID(output)
-					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
-					p.processPTPMetrics(output)
-					if p.name == ptp4lProcessName {
-						if profileClockType == TBC {
-							p.tBCTransitionCheck(output, pm)
-						}
-					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-						p.announceHAFailOver(nil, output) // do not use go routine since order of execution is important here
-					}
-				}
-				doneCh <- struct{}{}
-			}()
+			go p.runScanner(cmdReader, doneCh, pm, profileClockType)
 		} else {
-			go func() {
-			connect:
-				select {
-				case <-p.exitCh:
-					doneCh <- struct{}{}
-				default:
-					p.c, err = dialSocket()
-					if err != nil {
-						goto connect
-					}
-				}
-				scanner := bufio.NewScanner(cmdReader)
-				processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
-				for _, d := range p.depProcess {
-					if d != nil {
-						d.ProcessStatus(p.c, PtpProcessUp)
-					}
-				}
-
-				for scanner.Scan() {
-					output := scanner.Text()
-					if p.name == chronydProcessName {
-						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
-					}
-					output = pm.ProcessLog(p.name, output)
-					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface
-					output = p.replaceClockID(output)
-					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
-
-					// for ts2phc, we need to extract metrics to identify GM state
-					p.processPTPMetrics(output)
-					if p.name == ptp4lProcessName {
-						if profileClockType == TBC {
-							p.tBCTransitionCheck(output, pm)
-						}
-					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
-						p.announceHAFailOver(p.c, output) // do not use go routine since order of execution is important here
-					}
-					line := removeMessageSuffix(output) + "\n"
-					_, err2 := p.c.Write([]byte(line))
-					if err2 != nil {
-						glog.Errorf("Write %s error %s:", output, err2)
-						goto connect
-					}
-				}
-				doneCh <- struct{}{}
-			}()
+			go p.runSocketReader(cmdReader, doneCh, pm, profileClockType)
 		}
 		// Don't restart after termination
 		if !p.Stopped() {
