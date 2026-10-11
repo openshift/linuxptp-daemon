@@ -62,11 +62,10 @@ func onPTPConfigChange(_ *interface{}, profile *ptpv1.PtpProfile) error {
 	if err != nil {
 		return logFailure(profile, err)
 	}
-	phc, err := sharedPHC(ifaces)
+	// ptp4l measures the time-receiver (upstream) ports, while phc_ctl operates
+	// on the PHC of the leading interface's NIC.
+	phc, err := leadingPHC(profile)
 	if err != nil {
-		return logFailure(profile, err)
-	}
-	if err = validateE825PHC(profile, phc); err != nil {
 		return logFailure(profile, err)
 	}
 	glog.Infof("phc-first-step resolved: profile=%s interfaces=%v PHC=%s", name, ifaces, phc)
@@ -109,47 +108,52 @@ func timeReceiverInterfaces(profile *ptpv1.PtpProfile) []string {
 	return interfaces
 }
 
-func validateE825PHC(profile *ptpv1.PtpProfile, trPHC string) error {
-	if profile == nil || profile.Plugins == nil {
-		return fmt.Errorf("profile has no e825 plugin configuration for TR PHC %s", trPHC)
+// leadingInterface returns the leading interface on the NIC whose PHC the
+// plugin sets. It is supplied by the e825 plugin via
+// PtpSettings["leadingInterface"] (falling back to the first configured e825
+// device) or resolved from HardwareConfig.
+func leadingInterface(profile *ptpv1.PtpProfile) string {
+	if profile == nil {
+		return ""
 	}
-	raw, ok := profile.Plugins["e825"]
-	if !ok || raw == nil {
-		return fmt.Errorf("profile e825 plugin configuration is required for TR PHC %s", trPHC)
+	if profile.PtpSettings != nil {
+		if leading := profile.PtpSettings["leadingInterface"]; leading != "" {
+			return leading
+		}
+	}
+	if devices := e825Devices(profile); len(devices) > 0 {
+		return devices[0]
+	}
+	return ""
+}
+
+func leadingPHC(profile *ptpv1.PtpProfile) (string, error) {
+	leading := leadingInterface(profile)
+	if leading == "" {
+		return "", fmt.Errorf("profile %s has no leading interface configured", profileName(profile))
+	}
+	phc := phcIDForIface(leading)
+	if phc == "" {
+		return "", fmt.Errorf("could not determine PHC device for leading interface %q", leading)
+	}
+	return phc, nil
+}
+
+func e825Devices(profile *ptpv1.PtpProfile) []string {
+	if profile == nil || profile.Plugins == nil {
+		return nil
+	}
+	raw := profile.Plugins["e825"]
+	if raw == nil || len(raw.Raw) == 0 {
+		return nil
 	}
 	var opts struct {
 		Devices []string `json:"devices"`
 	}
 	if err := json.Unmarshal(raw.Raw, &opts); err != nil {
-		return fmt.Errorf("decode e825 devices for profile %s: %w", profileName(profile), err)
+		return nil
 	}
-	for _, device := range opts.Devices {
-		if phcIDForIface(device) == trPHC {
-			return nil
-		}
-	}
-	return fmt.Errorf("no profile e825.devices entry exposes the TR PHC %s", trPHC)
-}
-
-func sharedPHC(interfaces []string) (string, error) {
-	var shared string
-	for _, iface := range interfaces {
-		phc := phcIDForIface(iface)
-		if phc == "" {
-			return "", fmt.Errorf("could not determine PHC device for TR interface %q", iface)
-		}
-		if shared == "" {
-			shared = phc
-			continue
-		}
-		if phc != shared {
-			return "", fmt.Errorf("TR interfaces resolve to different PHCs: %s and %s", shared, phc)
-		}
-	}
-	if shared == "" {
-		return "", fmt.Errorf("no TR interfaces provided for PHC discovery")
-	}
-	return shared, nil
+	return opts.Devices
 }
 
 func measurementTimeout(profile *ptpv1.PtpProfile) (time.Duration, error) {
@@ -483,8 +487,9 @@ func New(name string) (*plugin.Plugin, *interface{}) {
 		return nil, nil
 	}
 	pluginObject := plugin.Plugin{
-		Name:              pluginName,
-		OnPTPConfigChange: onPTPConfigChange,
+		Name:                   pluginName,
+		RunsWithHardwareConfig: true,
+		OnPTPConfigChange:      onPTPConfigChange,
 	}
 	var data interface{}
 	return &pluginObject, &data

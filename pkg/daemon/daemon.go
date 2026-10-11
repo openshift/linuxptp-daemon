@@ -1062,10 +1062,14 @@ func (dn *Daemon) initHardware(nodeProfile *ptpv1.PtpProfile, pluginErrors []err
 		glog.Infof("Using hardware configs for PTP profile %s instead of plugins", *nodeProfile.Name)
 		if err := dn.hardwareConfigManager.ApplyHardwareConfigsForProfile(nodeProfile); err != nil {
 			glog.Errorf("Failed to apply hardware configs for profile %s: %v", *nodeProfile.Name, err)
-			// Fall back to plugins
-			errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
+			// Hardware-specific plugins are used only as a fallback.
+			errs := dn.pluginManager.OnPTPConfigChangeWithoutHardwareConfig(nodeProfile)
 			pluginErrors = append(pluginErrors, errs...)
 		}
+		// Hardware-independent plugins, such as phc-first-step, still run
+		// after HardwareConfig has supplied the resolved interfaces.
+		errs := dn.pluginManager.OnPTPConfigChangeWithHardwareConfig(nodeProfile)
+		pluginErrors = append(pluginErrors, errs...)
 	} else {
 		glog.Infof("No hardware configs found for PTP profile %s, using plugins", *nodeProfile.Name)
 		errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)

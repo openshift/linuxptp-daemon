@@ -5,15 +5,16 @@ time-receiver profile before normal daemon profile application continues.
 The operator enables the plugin by default, but a profile runs it only when
 its `plugins` map contains `phc-first-step`.
 
-The plugin identifies each TR interface from a `ptp4lConf` interface section
-with `masterOnly 0`. All selected interfaces must resolve to one PHC, and at
-least one device in the same profile's `e825.devices` must expose that PHC. Its
-name may differ from the TR interface name. The plugin runs free-running
-`ptp4l` until it receives one valid master-offset sample with non-zero path
-delay. It then reads the shared PHC and sets it to the current PHC time minus
-that offset. After the initial step, it measures again and applies one
-additional correction if the residual offset exceeds one second in magnitude.
-A successful `phc_ctl set` exit is completion; the PHC is not read back.
+The plugin runs free-running `ptp4l` over the profile's time-receiver
+(upstream) ports, taken from the `ptp4lConf` interface sections with
+`masterOnly 0`, until it receives one valid master-offset sample with non-zero
+path delay. It then reads and sets the PHC of the leading interface's NIC. The
+leading interface is provided by the `e825` plugin (`leadingInterface`, or its
+first configured device) or resolved by HardwareConfig, so HardwareConfig
+requires no `e825` plugin configuration. After the initial step, it measures
+again and applies one additional correction if the residual offset exceeds one
+second in magnitude. A successful `phc_ctl set` exit is completion; the PHC is
+not read back.
 
 ```yaml
 spec:
