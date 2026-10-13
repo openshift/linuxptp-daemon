@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +13,45 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type blockingStartCmd struct {
+	*MockCmd
+	startCalled  chan struct{}
+	startRelease chan struct{}
+	started      atomic.Bool
+	calledEarly  atomic.Bool
+}
+
+func newBlockingStartCmd() *blockingStartCmd {
+	return &blockingStartCmd{
+		MockCmd:      NewMockCmd(),
+		startCalled:  make(chan struct{}),
+		startRelease: make(chan struct{}),
+	}
+}
+
+func (c *blockingStartCmd) Start() error {
+	close(c.startCalled)
+	<-c.startRelease
+	c.started.Store(true)
+	return nil
+}
+
+func (c *blockingStartCmd) Pid() int {
+	if !c.started.Load() {
+		c.calledEarly.Store(true)
+	}
+	return c.MockCmd.Pid()
+}
+
+func (c *blockingStartCmd) Signal(sig os.Signal) error {
+	if !c.started.Load() {
+		c.calledEarly.Store(true)
+	}
+	return c.MockCmd.Signal(sig)
+}
+
+func (c *blockingStartCmd) Clone() ProcessCmd { return c }
 
 const (
 	ptp4lConfig = "ptp4l.0.config"
@@ -103,6 +144,45 @@ func TestPtpProcessStartStopRestart(t *testing.T) {
 
 	require.NoError(t, p.Stop())
 	waitProcessState(t, p, process.Stopped)
+}
+
+func TestPtpProcessStopWaitsForStart(t *testing.T) {
+	cmd := newBlockingStartCmd()
+	p := newTestPtpProcess(cmd, make(chan event.Event, 4))
+
+	require.NoError(t, p.Start(context.Background()))
+	<-cmd.startCalled
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- p.Stop() }()
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+		t.Fatal("Stop returned before Start completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.False(t, cmd.calledEarly.Load())
+
+	close(cmd.startRelease)
+	require.NoError(t, <-stopDone)
+	waitProcessState(t, p, process.Stopped)
+	require.False(t, cmd.calledEarly.Load())
+}
+
+func TestPtpProcessStopBeforeCmdStart(t *testing.T) {
+	cmd := newBlockingStartCmd()
+	p := newTestPtpProcess(cmd, nil)
+	p.state = process.Starting
+	p.stopCh = make(chan struct{})
+
+	require.NoError(t, p.Stop())
+	require.Equal(t, process.Stopping, p.State())
+	require.False(t, cmd.calledEarly.Load())
+	select {
+	case <-p.stopCh:
+	default:
+		t.Fatal("stopCh should be closed")
+	}
 }
 
 func TestPtpProcessCrashDead(t *testing.T) {

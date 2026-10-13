@@ -406,20 +406,21 @@ func (p *ptpProcess) run() {
 
 		cmd.RedirectStderrToStdout()
 
-		if err = cmd.Start(); err != nil {
-			glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
-			return
-		}
 		p.execMutex.Lock()
 		if p.state == process.Stopping {
 			p.execMutex.Unlock()
-			_ = cmd.Signal(syscall.SIGTERM)
-		} else {
-			p.state = process.Running
-			p.execMutex.Unlock()
-			processStatus(p.name, p.messageTag, PtpProcessUp)
-			sendProcessStatusEvent(p.eventCh, event.EventSource(p.name), p.configName, p.clockType, "", PtpProcessUp)
+			return
 		}
+		if err = cmd.Start(); err != nil {
+			p.state = process.Dead
+			p.execMutex.Unlock()
+			glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
+			return
+		}
+		p.state = process.Running
+		p.execMutex.Unlock()
+		processStatus(p.name, p.messageTag, PtpProcessUp)
+		sendProcessStatusEvent(p.eventCh, event.EventSource(p.name), p.configName, p.clockType, "", PtpProcessUp)
 
 		p.runScanner(cmdReader)
 
@@ -486,8 +487,15 @@ func (p *ptpProcess) Stop() error {
 		return nil
 	}
 	p.state = process.Stopping
-	cmd := p.cmd
 	stopCh := p.stopCh
+	if st == process.Starting {
+		p.execMutex.Unlock()
+		if stopCh != nil {
+			close(stopCh)
+		}
+		return nil
+	}
+	cmd := p.cmd
 	p.execMutex.Unlock()
 
 	if stopCh != nil {
