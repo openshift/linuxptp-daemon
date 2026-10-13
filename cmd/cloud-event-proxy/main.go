@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"net"
 	"os"
@@ -9,10 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/cep"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
-
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/cep"
 )
 
 var GitCommit = "Undefined"
@@ -50,15 +49,8 @@ func main() {
 
 	glog.Infof("cloud-event-proxy starting, node=%s, socket=%s, commit=%s", nodeName, socket, GitCommit)
 
-	closeCh := make(chan struct{})
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-	go func() {
-		sig := <-sigCh
-		glog.Infof("received signal %s, shutting down", sig)
-		close(closeCh)
-	}()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	defer stop()
 
 	cache := cep.NewEventCache(nodeName)
 	ps := cep.NewPubSub(filepath.Join(storePath, "subscriptions.json"), cep.NewHTTPWriterFunc(2*time.Second))
@@ -70,42 +62,19 @@ func main() {
 	if err := os.MkdirAll(filepath.Dir(socket), 0755); err != nil {
 		glog.Fatalf("failed to create socket directory: %v", err)
 	}
-	os.Remove(socket)
+	// Remove any socket left behind by a previous unclean exit
+	if err = os.Remove(socket); err != nil && !os.IsNotExist(err) {
+		glog.Fatalf("failed to remove stale socket %s: %v", socket, err)
+	}
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		glog.Fatalf("failed to listen on %s: %v", socket, err)
 	}
+	defer ln.Close()
 
-	go func() {
-		for {
-			glog.Infof("waiting for daemon connection on %s", socket)
-			conn, acceptErr := ln.Accept()
-			if acceptErr != nil {
-				select {
-				case <-closeCh:
-					return
-				default:
-				}
-				glog.Errorf("accept error: %v", acceptErr)
-				continue
-			}
-			glog.Info("daemon connected, requesting current state")
-			conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if encodeErr := ipc.Transmit(conn, ipc.Message{Type: ipc.TypeStatusRequest, Version: ipc.Version}); encodeErr != nil {
-				glog.Errorf("failed to send status_request: %v", encodeErr)
-				conn.Close()
-				continue
-			}
-			proxy.Listen(conn)
-			conn.Close()
-			glog.Warning("daemon disconnected")
-		}
-	}()
+	go proxy.AcceptDaemonConnections(ctx, ln)
 
-	go proxy.ListenAndServe(port, tlsCert, tlsKey)
-
-	<-closeCh
-	ln.Close()
-	os.Remove(socket)
-	glog.Info("cloud-event-proxy exiting")
+	if err = proxy.ListenAndServe(ctx, port, tlsCert, tlsKey); err != nil {
+		glog.Fatalf("API server error: %v", err)
+	}
 }

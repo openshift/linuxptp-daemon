@@ -144,6 +144,79 @@ else
     fail "Subscriber received unexpected GNSS event. New lines: $(tail -n +$((LINES_BEFORE+1)) "$CONSUMER_LOG")"
 fi
 
+# ── Step 5: Daemon disconnect — CurrentState still served from cache ──
+echo "Killing ipc-sender (daemon disconnect)..."
+kill "$SENDER_PID" 2>/dev/null || true
+wait "$SENDER_PID" 2>/dev/null || true
+sleep 1
+
+if poll_current_state '"value":"7"'; then
+    pass "CurrentState served stale clock_class=7 from cache while daemon disconnected"
+else
+    echo "Proxy log:"; cat "$TMPDIR/proxy.log"
+    fail "CurrentState not available while daemon disconnected"
+fi
+
+# ── Step 6: Daemon reconnect with event received during downtime ──
+# Restart ipc-sender with clock_class=8 pre-cached (event during outage).
+# On reconnect CEPv2 sends TypeStatusRequest; ipc-sender replays its cache.
+NEW_MESSAGES='[
+  {"message":{"version":1,"type":"clock_class","profile":"ptp4l.0.config","values":{"clock_class":8}}},
+  {"message":{"version":1,"type":"clock_class","profile":"ptp4l.0.config","values":{"clock_class":9}}}
+]'
+
+echo "Restarting ipc-sender with clock_class=8 (event received during disconnect)..."
+"$TMPDIR/ipc-sender" --socket "$SOCKET" --messages "$NEW_MESSAGES" >"$TMPDIR/sender2.log" 2>&1 &
+SENDER_PID=$!
+PIDS+=($SENDER_PID)
+
+if poll_current_state '"value":"8"'; then
+    pass "CurrentState updated to clock_class=8 after daemon reconnect via TypeStatusRequest"
+else
+    echo "Proxy log:"; cat "$TMPDIR/proxy.log"
+    echo "Sender2 log:"; cat "$TMPDIR/sender2.log"
+    fail "CurrentState did not update after daemon reconnect"
+fi
+
+# ── Step 7: CEPv2 restart — subscriptions persist via disk ──
+# Kill and restart the proxy. LoadFromDisk should restore the subscription.
+# The consumer must receive a new event without re-subscribing.
+PROXY_PID="${PIDS[1]}"
+echo "Killing CEPv2 (proxy restart)..."
+kill "$PROXY_PID" 2>/dev/null || true
+wait "$PROXY_PID" 2>/dev/null || true
+sleep 1
+
+NODE_NAME="$NODE_NAME" "$TMPDIR/cloud-event-proxy" \
+    --socket "$SOCKET" \
+    --api-port "$API_PORT" \
+    --store-path "$TMPDIR" >"$TMPDIR/proxy2.log" 2>&1 &
+PIDS+=("$!")
+sleep 1
+
+# Signal ipc-sender to send a live event — subscriber should receive it
+# without having re-subscribed, proving LoadFromDisk restored the subscription.
+LINES_BEFORE=$(wc -l < "$CONSUMER_LOG")
+echo "Signaling clock_class=8 after proxy restart..."
+kill -USR1 "$SENDER_PID"
+
+RECEIVED_AFTER=false
+for ((i=0; i<20; i++)); do
+    if [ "$(wc -l < "$CONSUMER_LOG")" -gt "$LINES_BEFORE" ]; then
+        RECEIVED_AFTER=true
+        break
+    fi
+    sleep 0.5
+done
+
+if $RECEIVED_AFTER; then
+    pass "Subscriber received event after CEPv2 restart (subscription persisted via disk)"
+else
+    echo "Consumer log:"; cat "$CONSUMER_LOG"
+    echo "Proxy2 log:"; cat "$TMPDIR/proxy2.log"
+    fail "Subscriber did not receive event after CEPv2 restart"
+fi
+
 echo ""
 echo "All tests passed."
 exit 0

@@ -27,7 +27,7 @@ func TestEventCache_GetBySource(t *testing.T) {
 		ipc.Transmit(&buf, ipc.Message{
 			Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile, IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked},
 		})
-		proxy.Listen(&buf)
+		proxy.handleIncomingEvents(&buf)
 
 		e, ok := cache.GetBySource(testPTPLockState)
 		require.True(t, ok)

@@ -3,9 +3,11 @@ package cep
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -149,8 +151,8 @@ func NewCloudEventProxy(cache *EventCache, pubsub *PubSub) *CloudEventProxy {
 	return &CloudEventProxy{cache: cache, pubSub: pubsub}
 }
 
-// Listen reads from r, and handles events written to the stream.
-func (l *CloudEventProxy) Listen(r io.Reader) {
+// handleIncomingEvents reads from r until EOF or error.
+func (l *CloudEventProxy) handleIncomingEvents(r io.Reader) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -202,25 +204,62 @@ func (l *CloudEventProxy) Handler() http.Handler {
 	return mux
 }
 
-// ListenAndServe starts the HTTP API server on the given port.
+// AcceptDaemonConnections wait for a new connection on the listener and handles new events
+func (l *CloudEventProxy) AcceptDaemonConnections(ctx context.Context, ln net.Listener) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		glog.Infof("waiting for daemon connection on %s", ln.Addr().String())
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			glog.Errorf("accept error: %v", acceptErr)
+			continue
+		}
+
+		glog.Info("daemon connected, requesting current state")
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if encodeErr := ipc.Transmit(conn, ipc.Message{Type: ipc.TypeStatusRequest, Version: ipc.Version}); encodeErr != nil {
+			glog.Errorf("failed to send status_request: %v", encodeErr)
+			conn.Close()
+			continue
+		}
+		connCtx, cancel := context.WithCancel(ctx)
+		go func() { <-connCtx.Done(); conn.Close() }()
+		l.handleIncomingEvents(conn)
+		cancel()
+		glog.Warning("daemon disconnected")
+	}
+}
+
+// ListenAndServe starts the HTTP API server on the given port and blocks until
+// ctx is cancelled, at which point the server is gracefully shut down.
 // If certFile and keyFile are both non-empty, the server uses TLS.
-func (l *CloudEventProxy) ListenAndServe(port int, certFile, keyFile string) error {
+func (l *CloudEventProxy) ListenAndServe(ctx context.Context, port int, certFile, keyFile string) error {
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
 		ReadHeaderTimeout: 5 * time.Second,
 		Handler:           l.Handler(),
 	}
+	go func() {
+		<-ctx.Done()
+		if err := server.Shutdown(context.Background()); err != nil {
+			glog.Errorf("API server shutdown error: %v", err)
+		}
+	}()
 	if certFile != "" && keyFile != "" {
-		if err := server.ListenAndServeTLS(certFile, keyFile); err != nil {
+		glog.Infof("API server listening on :%d (TLS)", port)
+		if err := server.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 			return err
 		}
-		glog.Infof("TLS enabled")
 	} else {
-		if err := server.ListenAndServe(); err != nil {
+		glog.Infof("API server listening on :%d", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			return err
 		}
 	}
-	glog.Infof("API server listening on :%d", port)
 	return nil
 }
 

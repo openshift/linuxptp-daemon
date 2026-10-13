@@ -177,7 +177,7 @@ func TestListenerResilience(t *testing.T) {
 			cache := NewEventCache("worker-0")
 			listener := NewCloudEventProxy(cache, nil)
 
-			listener.Listen(tt.input())
+			listener.handleIncomingEvents(tt.input())
 
 			_, ok := cache.Get(ipc.TypePTPState)
 			assert.Equal(t, tt.wantCached, ok)
@@ -242,7 +242,7 @@ func TestIntegrationEventDelivery(t *testing.T) {
 		pr, pw := io.Pipe()
 		done := make(chan struct{})
 		go func() {
-			proxy.Listen(pr)
+			proxy.handleIncomingEvents(pr)
 			close(done)
 		}()
 
@@ -460,7 +460,7 @@ func TestIntegrationCurrentState(t *testing.T) {
 	pr, pw := io.Pipe()
 	done := make(chan struct{})
 	go func() {
-		proxy.Listen(pr)
+		proxy.handleIncomingEvents(pr)
 		close(done)
 	}()
 
