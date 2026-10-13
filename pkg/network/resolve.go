@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -147,11 +148,35 @@ func (r *InterfaceResolver) ResolveProfileInterfaces(profile *ptpv1.PtpProfile) 
 	// Config section headers ([interface]) are resolved by Ptp4lConf.ResolveInterfaceNames
 	// after parsing, inside applyNodePtpProfile — not here.
 
+	if profile.Phc2sysOpts != nil {
+		resolvePhc2sysOpts(r, profile.Phc2sysOpts, profileName)
+	}
+
 	if profile.PtpSettings != nil {
 		resolvePtpSettings(r, profile.PtpSettings, profileName)
 	}
 
 	resolvePluginDevices(r, profile, profileName)
+}
+
+var phc2sysFlags = []string{"-s", "-i", "-c"}
+
+func resolvePhc2sysOpts(r *InterfaceResolver, opts *string, profileName string) {
+	args := strings.Fields(*opts)
+	changed := false
+	for i := 0; i+1 < len(args); i++ {
+		if !slices.Contains(phc2sysFlags, args[i]) {
+			continue
+		}
+		if resolved, remapped := r.Resolve(args[i+1]); remapped {
+			glog.Infof("Profile %s: Phc2sysOpts %s %q -> %q", profileName, args[i], args[i+1], resolved)
+			args[i+1] = resolved
+			changed = true
+		}
+	}
+	if changed {
+		*opts = strings.Join(args, " ")
+	}
 }
 
 func resolvePtpSettings(r *InterfaceResolver, settings map[string]string, profileName string) {

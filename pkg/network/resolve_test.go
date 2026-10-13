@@ -99,6 +99,37 @@ func TestResolveProfileInterfaces_InterfaceField(t *testing.T) {
 	}
 }
 
+func TestResolveProfileInterfaces_Phc2sysOpts(t *testing.T) {
+	r := NewInterfaceResolverWithInterfaces([]string{testIfNew, testIf2New})
+	name := testProfile
+	opts := "-r -n 24 -N 8 -R 16 -u 0 -m -s " + testIfOld + " -i " + testIfOld + " -c " + testIf2Old
+	profile := &ptpv1.PtpProfile{
+		Name:        &name,
+		Phc2sysOpts: &opts,
+	}
+	r.ResolveProfileInterfaces(profile)
+
+	expected := "-r -n 24 -N 8 -R 16 -u 0 -m -s " + testIfNew + " -i " + testIfNew + " -c " + testIf2New
+	if *profile.Phc2sysOpts != expected {
+		t.Errorf("expected %q, got %q", expected, *profile.Phc2sysOpts)
+	}
+}
+
+func TestResolveProfileInterfaces_Phc2sysOptsNoChangeWhenNamesExist(t *testing.T) {
+	r := NewInterfaceResolverWithInterfaces([]string{testIfOld})
+	name := testProfile
+	opts := "-r -n 24 -s " + testIfOld
+	profile := &ptpv1.PtpProfile{
+		Name:        &name,
+		Phc2sysOpts: &opts,
+	}
+	r.ResolveProfileInterfaces(profile)
+
+	if *profile.Phc2sysOpts != opts {
+		t.Errorf("expected opts unchanged, got %q", *profile.Phc2sysOpts)
+	}
+}
+
 func TestResolveProfileInterfaces_PtpSettingsValues(t *testing.T) {
 	r := NewInterfaceResolverWithInterfaces([]string{testIfNew, testIf2New})
 	name := testProfile
