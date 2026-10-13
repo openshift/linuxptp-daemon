@@ -279,6 +279,62 @@ func TestGetGNSSInitConfigGPSIncludesQZSS(t *testing.T) {
 	}
 }
 
+func TestHasExplicitGNSSMatcher(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceType ptpv2alpha1.SourceTypeID
+		gnssConfig *ptpv2alpha1.GNSSConfig
+		want       bool
+	}{
+		{
+			name:       "no GNSS source",
+			sourceType: ptpv2alpha1.SourceTypePTP,
+		},
+		{
+			name:       "GNSS source without GNSS config",
+			sourceType: ptpv2alpha1.SourceTypeGNSS,
+		},
+		{
+			name:       "GNSS config without matcher",
+			sourceType: ptpv2alpha1.SourceTypeGNSS,
+			gnssConfig: &ptpv2alpha1.GNSSConfig{},
+		},
+		{
+			name:       "configured matcher",
+			sourceType: ptpv2alpha1.SourceTypeGNSS,
+			gnssConfig: &ptpv2alpha1.GNSSConfig{Match: &ptpv2alpha1.GNSSMatcher{TTYDevice: testACM0}},
+			want:       true,
+		},
+		{
+			name:       "empty matcher is still explicit configuration",
+			sourceType: ptpv2alpha1.SourceTypeGNSS,
+			gnssConfig: &ptpv2alpha1.GNSSConfig{Match: &ptpv2alpha1.GNSSMatcher{}},
+			want:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hwConfig := ptpv2alpha1.HardwareConfig{
+				Spec: ptpv2alpha1.HardwareConfigSpec{
+					RelatedPtpProfileName: testHWConfigName,
+					Profile: ptpv2alpha1.HardwareProfile{
+						ClockChain: &ptpv2alpha1.ClockChain{
+							Behavior: &ptpv2alpha1.Behavior{Sources: []ptpv2alpha1.SourceConfig{{
+								Name:       testSourceGNSS,
+								SourceType: tt.sourceType,
+								GNSSConfig: tt.gnssConfig,
+							}}},
+						},
+					},
+				},
+			}
+			hcm := makeTestHCM(hwConfig)
+			assert.Equal(t, tt.want, hcm.HasExplicitGNSSMatcher(testProfile(testProfileName)))
+		})
+	}
+}
+
 func TestGetGNSSSerialPort(t *testing.T) {
 	t.Run("returns ttyDevice from matcher", func(t *testing.T) {
 		hwConfig := ptpv2alpha1.HardwareConfig{

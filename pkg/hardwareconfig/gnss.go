@@ -34,6 +34,14 @@ func (hcm *HardwareConfigManager) GetGNSSSerialPort(nodeProfile *ptpv1.PtpProfil
 	return ttyDevice, err
 }
 
+// HasExplicitGNSSMatcher reports whether the selected GNSS source has a matcher
+// configured. Callers can use this to distinguish an intentional device
+// selection that failed from legacy configurations that rely on fallback.
+func (hcm *HardwareConfigManager) HasExplicitGNSSMatcher(nodeProfile *ptpv1.PtpProfile) bool {
+	config, _, sourceName := hcm.findGNSSSource(nodeProfile)
+	return sourceName != "" && config != nil && config.Match != nil
+}
+
 func (hcm *HardwareConfigManager) recordGNSSMatchResult(configName, sourceName, ttyDevice string, matcher *ptpv2alpha1.GNSSMatcher, matchErr error) {
 	status := &ptpv2alpha1.GNSSStatus{TTYDevice: ttyDevice}
 	if matchErr != nil {

@@ -1272,6 +1272,37 @@ func setupHardwareConfigForTest(hcm *hardwareconfig.HardwareConfigManager, profi
 	return hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig})
 }
 
+func TestSetupGPSDAndGPSPipeFailsClosedForExplicitGNSSMatcher(t *testing.T) {
+	hardwareconfig.SetDpllPinsGetter(hardwareconfig.CreateMockDpllPinsGetter(nil, nil))
+	defer hardwareconfig.ResetDpllPinsGetter()
+
+	hcm := hardwareconfig.NewHardwareConfigManager(fake.NewClientset(), "default", nil)
+	hwConfig := ptpv2alpha1.HardwareConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gnss-hwconfig"},
+		Spec: ptpv2alpha1.HardwareConfigSpec{
+			RelatedPtpProfileName: "test-profile",
+			Profile: ptpv2alpha1.HardwareProfile{
+				ClockChain: &ptpv2alpha1.ClockChain{
+					Behavior: &ptpv2alpha1.Behavior{Sources: []ptpv2alpha1.SourceConfig{{
+						Name:       "GNSS",
+						SourceType: ptpv2alpha1.SourceTypeGNSS,
+						GNSSConfig: &ptpv2alpha1.GNSSConfig{Match: &ptpv2alpha1.GNSSMatcher{}},
+					}}},
+				},
+			},
+		},
+	}
+	require.NoError(t, hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig}))
+
+	daemon := &Daemon{hardwareConfigManager: hcm}
+	process := &ptpProcess{}
+	err := daemon.setupGPSDAndGPSPipe(&ptpv1.PtpProfile{Name: stringPointer("tgm_test-profile")}, process)
+
+	require.ErrorContains(t, err, "refusing to start GPSD with a fallback device")
+	assert.Empty(t, process.gnssSerialPort, "failed explicit selection must not assign the default GNSS port")
+	assert.Empty(t, process.depProcess, "failed explicit selection must not create GPSD or GPSPipe processes")
+}
+
 // createMockPTPStateDetectorForHardwareConfig creates a mock PTPStateDetector for hardware config testing
 // Creates a hardware config with a PTP source that monitors ens4f0, then initializes the detector
 func createMockPTPStateDetectorForHardwareConfig() *hardwareconfig.PTPStateDetector {

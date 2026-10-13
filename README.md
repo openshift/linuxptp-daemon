@@ -22,7 +22,9 @@ vendor/device IDs with interface name, PCI address, permanent MAC, and slot; an
 ambiguous match reports the candidate interfaces and slots. GNSS detection
 results are also reported in the HardwareConfig `status.sources` field, with the
 detected TTY and a description of the matching inputs on success, or an
-actionable match explanation on failure.
+actionable match explanation on failure. If an explicitly configured matcher
+fails to resolve, profile setup aborts rather than starting GPSD with the default
+`/dev/gnss0` or another fallback device.
 
 ## Quick Start
 
