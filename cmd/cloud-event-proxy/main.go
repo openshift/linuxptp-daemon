@@ -22,13 +22,23 @@ var (
 	port      int
 	storePath string
 	nodeName  string
+	tlsCert   string
+	tlsKey    string
 )
 
 func main() {
 	flag.StringVar(&socket, "socket", "/var/run/ptp/ipc.sock", "Path to daemon IPC Unix socket.")
 	flag.IntVar(&port, "api-port", 9043, "The port the REST API endpoint binds to.")
 	flag.StringVar(&storePath, "store-path", "/var/run/ptp", "Directory for persistent subscription storage.")
+	flag.StringVar(&tlsCert, "tls-cert", "", "Path to TLS certificate file. If set with --tls-key, the server uses TLS.")
+	flag.StringVar(&tlsKey, "tls-key", "", "Path to TLS private key file. If set with --tls-cert, the server uses TLS.")
 	flag.Parse()
+
+	if tlsKey != "" || tlsCert != "" {
+		if tlsKey == "" || tlsCert == "" {
+			glog.Fatal("if one of the two is provided, both --tls-key and --tls-cert must be set")
+		}
+	}
 
 	nodeName = os.Getenv("NODE_NAME")
 	if nodeName == "" {
@@ -92,7 +102,7 @@ func main() {
 		}
 	}()
 
-	go proxy.ListenAndServe(port)
+	go proxy.ListenAndServe(port, tlsCert, tlsKey)
 
 	<-closeCh
 	ln.Close()

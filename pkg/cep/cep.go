@@ -203,16 +203,25 @@ func (l *CloudEventProxy) Handler() http.Handler {
 }
 
 // ListenAndServe starts the HTTP API server on the given port.
-func (l *CloudEventProxy) ListenAndServe(port int) {
+// If certFile and keyFile are both non-empty, the server uses TLS.
+func (l *CloudEventProxy) ListenAndServe(port int, certFile, keyFile string) error {
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
 		ReadHeaderTimeout: 5 * time.Second,
 		Handler:           l.Handler(),
 	}
-	glog.Infof("API server listening on :%d", port)
-	if err := server.ListenAndServe(); err != nil {
-		glog.Errorf("API server error: %v", err)
+	if certFile != "" && keyFile != "" {
+		if err := server.ListenAndServeTLS(certFile, keyFile); err != nil {
+			return err
+		}
+		glog.Infof("TLS enabled")
+	} else {
+		if err := server.ListenAndServe(); err != nil {
+			return err
+		}
 	}
+	glog.Infof("API server listening on :%d", port)
+	return nil
 }
 
 func (l *CloudEventProxy) currentStateHandler(w http.ResponseWriter, r *http.Request) {
