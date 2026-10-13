@@ -10,13 +10,16 @@ import (
 
 // Plugin type
 type Plugin struct {
-	Name               string
-	Options            interface{}
-	OnPTPConfigChange  OnPTPConfigChange
-	AfterRunPTPCommand AfterRunPTPCommand
-	PopulateHwConfig   PopulateHwConfig
-	SetEventChannel    SetEventChannel
-	ProcessLog         ProcessLog
+	Name    string
+	Options interface{}
+	// RunsWithHardwareConfig marks plugins that remain applicable after the
+	// hardware-specific configuration path has been applied.
+	RunsWithHardwareConfig bool
+	OnPTPConfigChange      OnPTPConfigChange
+	AfterRunPTPCommand     AfterRunPTPCommand
+	PopulateHwConfig       PopulateHwConfig
+	SetEventChannel        SetEventChannel
+	ProcessLog             ProcessLog
 }
 
 // PluginManager type
@@ -45,8 +48,31 @@ type ProcessLog func(*interface{}, string, string) string
 
 // OnPTPConfigChange is plugin interface
 func (pm *PluginManager) OnPTPConfigChange(nodeProfile *ptpv1.PtpProfile) []error {
+	return pm.onPTPConfigChange(nodeProfile, nil)
+}
+
+// OnPTPConfigChangeWithHardwareConfig runs only plugins that are compatible
+// with an already-applied HardwareConfig.
+func (pm *PluginManager) OnPTPConfigChangeWithHardwareConfig(nodeProfile *ptpv1.PtpProfile) []error {
+	return pm.onPTPConfigChange(nodeProfile, func(pluginObject *Plugin) bool {
+		return pluginObject.RunsWithHardwareConfig
+	})
+}
+
+// OnPTPConfigChangeWithoutHardwareConfig runs only plugins that provide the
+// legacy hardware configuration path.
+func (pm *PluginManager) OnPTPConfigChangeWithoutHardwareConfig(nodeProfile *ptpv1.PtpProfile) []error {
+	return pm.onPTPConfigChange(nodeProfile, func(pluginObject *Plugin) bool {
+		return !pluginObject.RunsWithHardwareConfig
+	})
+}
+
+func (pm *PluginManager) onPTPConfigChange(nodeProfile *ptpv1.PtpProfile, selected func(*Plugin) bool) []error {
 	var errs []error
 	for pluginName, pluginObject := range pm.Plugins {
+		if selected != nil && !selected(pluginObject) {
+			continue
+		}
 		pluginFunc := pluginObject.OnPTPConfigChange
 		if pluginFunc != nil {
 			if err := pluginFunc(pm.Data[pluginName], nodeProfile); err != nil {
