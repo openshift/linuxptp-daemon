@@ -18,22 +18,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25'
-
-    - name: Check out code into the Go module directory
-      uses: actions/checkout@v2
+        go-version-file: go.mod
 
     - name: fmt
       run: make fmt
   test:
-    strategy:
-      matrix:
-        go-version: ['1.25']
-        os: [ubuntu-latest]
-
     runs-on: ubuntu-latest
 
     steps:
@@ -43,7 +38,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
 
       - name: Install Dependencies
         run: go mod tidy && go mod download
@@ -60,7 +55,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
 
       - name: Run cloud-event-proxy e2e tests
         run: bash test/cloud-event-proxy/e2e.sh
@@ -75,7 +70,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
 
       - name: Set up Kubernetes with Kind
         uses: helm/kind-action@v1.8.0

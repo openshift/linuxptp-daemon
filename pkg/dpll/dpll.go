@@ -781,9 +781,9 @@ func (d *DpllConfig) stateDecision() {
 			glog.Infof("non-leading DPLL %s is in holdover, reporting FREERUN", d.iface)
 		// TODO: GNSS holdover currently doesn't offer holdover out of spec. Tech Debt: should work the same as T-BC
 		// making transitions programmable by users
-		case !d.inSpec || (d.hasPTPAsSource() && math.Abs(float64(d.PhaseOffset())) > float64(LocalMaxHoldoverOffSet)):
+		case !d.inSpec || (d.hasPTPAsSource() && math.Abs(float64(d.PhaseOffset())) > float64(d.LocalMaxHoldoverOffSet)):
 			glog.Infof("leading DPLL %s holdover out of spec (inSpec=%v, offset=%d, max=%d), state is FREERUN",
-				d.iface, d.inSpec, d.PhaseOffset(), LocalMaxHoldoverOffSet)
+				d.iface, d.inSpec, d.PhaseOffset(), d.LocalMaxHoldoverOffSet)
 			d.state = event.PTP_FREERUN
 			d.phaseOffset = FaultyPhaseOffset
 			d.sourceLost = true
@@ -999,19 +999,23 @@ func (d *DpllConfig) isInSpecOffsetInRange() bool {
 	return false
 }
 
-// isOffsetInRange returns true when abs(phaseOffset) < GMThreshold.Max
-// (non-inclusive boundary). GMThreshold.Min is deprecated and intentionally
-// ignored here.
+// isOffsetInRange returns true when the qualifying phase offset is within the
+// DPLL holdover free-run bound: abs(phaseOffset) <= LocalMaxHoldoverOffSet,
+// with an inclusive (<=) boundary consistent with isMaxHoldoverOffsetInRange.
+// DPLL monitoring is used only by T-BC and T-GM clocks, whose locked/unlocked
+// and in-spec/out-of-spec qualification is defined by the holdover parameters;
+// the legacy maxOffsetThreshold window therefore contributes nothing here.
+// GMThreshold.Min is deprecated and intentionally ignored.
 func (d *DpllConfig) isOffsetInRange() bool {
 	if d.hasFlag(FlagNoPhaseOffset) {
 		// Special case when the DPLL has no reported phase offset
 		return true
 	}
-	if math.Abs(float64(d.phaseOffset)) < float64(d.processConfig.GMThreshold.Max) {
+	if math.Abs(float64(d.phaseOffset)) <= float64(d.LocalMaxHoldoverOffSet) {
 		return true
 	}
-	glog.Infof("dpll offset out of range: max %d, current %d",
-		d.processConfig.GMThreshold.Max, d.phaseOffset)
+	glog.Infof("dpll offset out of range (holdover bound): max %d, current %d",
+		d.LocalMaxHoldoverOffSet, d.phaseOffset)
 	return false
 }
 
