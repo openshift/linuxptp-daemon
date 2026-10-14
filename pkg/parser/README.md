@@ -66,6 +66,52 @@ regularLog := "phc2sys[10522413.392]: [ptp4l.0.config:6] CLOCK_REALTIME phc offs
 metrics, event, err := phc2sysExtractor.Extract(regularLog)
 ```
 
+#### TS2PHC Poll Monitoring
+
+The parser returns a single metric and/or event per log line. ts2phc
+`adding tstamp` and `poll returns zero, no events` lines are returned as typed
+`Ts2PhcEvent` payloads on `PTPEvent`. Poll-cycle tracking lives in
+`pkg/daemon/ts2phc.go`, where each process can resolve PHC devices to its
+configured interfaces. Offset lines return both a metric and a successful-poll
+`Ts2PhcEvent`; the event consumes the corresponding timestamp independently of
+metric processing. Timeouts and cycle rollover report FREERUN for remaining
+managed clocks, without emitting metrics for unconfigured PHCs. Poll state is
+isolated per process and reset when ts2phc starts.
+
+`selecting /dev/ptpN for synchronization` and `unselecting /dev/ptpN for
+synchronization` lines also return event-only `Ts2PhcEvent` payloads. `PHCDevice`
+identifies the clock and the `Role` field (`TS2PHCRole`) describes its new role.
+An empty role means this is not a role-change event. For compatibility across
+versions and modes, these messages are normalized as:
+
+| Log message | `Role` |
+| --- | --- |
+| `selecting /dev/ptpN for synchronization` | `sink` |
+| `unselecting /dev/ptpN for synchronization` | `unmanaged` |
+| `selecting /dev/ptpN as the reference clock` | `source` |
+| `no reference clock, selecting /dev/ptpN by default` | `source` |
+
+Both reference-selection messages clear ts2phc's `is_target` flag, so the PHC
+must not be monitored as a synchronization target. Messages without a PHC, such
+as `assuming external reference clock` and `reference clock not ready, waiting...`,
+do not generate selection events.
+
+The daemon populates a per-process role map from the configured PHC devices,
+initializing all of them as sinks at configuration load and restart. Multiple
+interface aliases sharing a PHC share its role. Role changes only update known
+PHCs; unknown devices are not implicitly enrolled by log messages.
+
+Only sinks generate synthetic failure metrics for pending or missing timestamps.
+Source and unmanaged timestamps remain stored, but are marked handled to avoid
+failure metrics. Source timestamps are found directly by role in the current
+cycle, without a separate source cache. The source-minus-sink offset furthest
+from zero is preferred with its sign preserved; without another source device's
+timestamp, the largest absolute peer difference is used. All offsets are converted from seconds to nanoseconds.
+Role changes also update source status on pending timestamps, clearing stale
+references on demotion. Reselection as a sink enables future samples without
+reopening already-handled timestamps. Unselection alone does not imply source
+status.
+
 ### Metrics Structure
 
 The parser returns metrics in the following structure:
