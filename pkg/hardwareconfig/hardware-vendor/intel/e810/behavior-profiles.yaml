@@ -8,6 +8,11 @@ behaviorProfiles:
         sourceType: gnss
         subsystem: "{subsystem}"
         boardLabel: GNSS-1PPS
+        gnssConfig:
+          match:
+            ethernetDevice:
+              vendorID: "8086"
+              deviceID: "159B"
     conditions:
       - name: "Initialize T-GM"
         triggers:

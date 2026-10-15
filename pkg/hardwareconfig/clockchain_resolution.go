@@ -640,6 +640,29 @@ func (hcm *HardwareConfigManager) deriveBehavior(hwConfig *ptpv2alpha1.HardwareC
 	return nil
 }
 
+func mergeEthernetDeviceSelectors(template, user *ptpv2alpha1.EthernetDevice) *ptpv2alpha1.EthernetDevice {
+	merged := *template
+	if user.Name != "" {
+		merged.Name = user.Name
+	}
+	if user.PCIAddress != "" {
+		merged.PCIAddress = user.PCIAddress
+	}
+	if user.PermanentMACAddress != "" {
+		merged.PermanentMACAddress = user.PermanentMACAddress
+	}
+	if user.Slot != "" {
+		merged.Slot = user.Slot
+	}
+	if user.VendorID != "" {
+		merged.VendorID = user.VendorID
+	}
+	if user.DeviceID != "" {
+		merged.DeviceID = user.DeviceID
+	}
+	return &merged
+}
+
 // mergeSourceConfig overlays user-provided fields onto a template source.
 // Only non-zero user fields are applied, preserving template defaults.
 func mergeSourceConfig(tpl, user *ptpv2alpha1.SourceConfig) {
@@ -656,8 +679,16 @@ func mergeSourceConfig(tpl, user *ptpv2alpha1.SourceConfig) {
 		// Explicitly shallow-copy the user GNSS config
 		gnss := user.GNSSConfig.DeepCopy()
 		if user.GNSSConfig.Match == nil && tpl.GNSSConfig != nil && tpl.GNSSConfig.Match != nil {
-			// Fallback to the template matcher if no user matcher was provided
+			// Fallback to the template matcher if no user matcher was provided.
 			gnss.Match = tpl.GNSSConfig.Match.DeepCopy()
+		} else if user.GNSSConfig.Match != nil && tpl.GNSSConfig != nil && tpl.GNSSConfig.Match != nil &&
+			tpl.GNSSConfig.Match.EthernetDevice != nil && user.GNSSConfig.Match.EthernetDevice != nil {
+			// Preserve template Ethernet defaults while allowing user selectors,
+			// such as slot, to further constrain the same device.
+			gnss.Match.EthernetDevice = mergeEthernetDeviceSelectors(
+				tpl.GNSSConfig.Match.EthernetDevice,
+				user.GNSSConfig.Match.EthernetDevice,
+			)
 		}
 		tpl.GNSSConfig = gnss
 	}

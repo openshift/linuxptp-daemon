@@ -164,6 +164,11 @@ func (dn *Daemon) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.HardwareConfig) e
 	return dn.hardwareConfigManager.UpdateHardwareConfig(hwConfigs)
 }
 
+// SetGNSSStatusChangedHandler installs a callback for GNSS match status updates.
+func (dn *Daemon) SetGNSSStatusChangedHandler(handler func()) {
+	dn.hardwareConfigManager.SetGNSSStatusChangedHandler(handler)
+}
+
 // GetCurrentHardwareConfigs implements controller.HardwareConfigUpdateHandler.
 // Returns the currently applied hardware configurations from the HardwareConfigManager.
 // This is used at startup to initialize lastAppliedConfigs and avoid unnecessary restarts.
@@ -910,7 +915,9 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 
 			if clockType == event.GM {
 				// If a HardwareConfig defines a GNSS source, locate the serial port and any GNSS initialization commands.
-				dn.setupGPSDAndGPSPipe(nodeProfile, ts2phcProc)
+				if err = dn.setupGPSDAndGPSPipe(nodeProfile, ts2phcProc); err != nil {
+					return err
+				}
 			}
 			dn.setupDPLL(nodeProfile, clockType, ts2phcProc)
 			dprocess = ts2phcProc
@@ -1095,11 +1102,14 @@ func processConfigFor(dprocess *ptpProcess, clockType event.ClockType, eventCh c
 	return cfg
 }
 
-func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *ptpProcess) {
+func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *ptpProcess) error {
 	var gnssInitConfig *ublox.InitConfig
 	if nodeProfile.Name != nil && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
 		gnssPort, gnssErr := dn.hardwareConfigManager.GetGNSSSerialPort(nodeProfile)
 		if gnssErr != nil {
+			if dn.hardwareConfigManager.HasExplicitGNSSMatcher(nodeProfile) {
+				return fmt.Errorf("HardwareConfig GNSS selector failed; refusing to start GPSD with a fallback device: %w", gnssErr)
+			}
 			glog.Warningf("HardwareConfig GNSS device detection failed: %v", gnssErr)
 		} else if gnssPort != "" {
 			glog.Infof("HardwareConfig GNSS device detected: %s (overriding ts2phc config)", gnssPort)
@@ -1154,6 +1164,7 @@ func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *p
 			ConfigName: dprocess.configName,
 		},
 	}
+	return nil
 }
 
 func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.ClockType, dprocess *ptpProcess) error {

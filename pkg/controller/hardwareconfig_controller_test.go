@@ -8,6 +8,7 @@ import (
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // MockHardwareConfigHandler implements HardwareConfigUpdateHandler for testing
@@ -90,6 +91,89 @@ func createTestHardwareConfig(name, profileName, relatedPtpProfile string) ptpv2
 			RelatedPtpProfileName: relatedPtpProfile,
 		},
 	}
+}
+
+type statusSyncClient struct {
+	client.Client
+	config *ptpv2alpha1.HardwareConfig
+	writer *statusSyncWriter
+}
+
+func (c *statusSyncClient) Get(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+	*obj.(*ptpv2alpha1.HardwareConfig) = *c.config.DeepCopy()
+	return nil
+}
+
+func (c *statusSyncClient) Status() client.SubResourceWriter {
+	return c.writer
+}
+
+type statusSyncWriter struct {
+	client.SubResourceWriter
+	config *ptpv2alpha1.HardwareConfig
+}
+
+func (w *statusSyncWriter) Update(_ context.Context, obj client.Object, _ ...client.SubResourceUpdateOption) error {
+	w.config.Status = obj.(*ptpv2alpha1.HardwareConfig).Status
+	return nil
+}
+
+func TestSyncHardwareConfigStatuses(t *testing.T) {
+	config := createTestHardwareConfig("test-config", "test-profile", "profile-a")
+	config.Status.MatchedNodes = []ptpv2alpha1.MatchedNode{{NodeName: "node-a", PtpProfile: "profile-a"}}
+	config.Status.Sources = []ptpv2alpha1.SourceStatus{{Name: "PTP"}}
+
+	applied := *config.DeepCopy()
+	applied.Status.Sources = []ptpv2alpha1.SourceStatus{
+		{Name: "PTP"},
+		{Name: "GNSS", Gnss: &ptpv2alpha1.GNSSStatus{TTYDevice: "/dev/ttyS2"}},
+	}
+
+	kubeClient := &statusSyncClient{config: &config, writer: &statusSyncWriter{config: &config}}
+	reconciler := &HardwareConfigReconciler{
+		Client: kubeClient,
+		HardwareConfigHandler: &MockHardwareConfigHandler{
+			CurrentHardwareConfigs: []ptpv2alpha1.HardwareConfig{applied},
+		},
+	}
+
+	err := reconciler.syncHardwareConfigStatuses(context.Background(), []ptpv2alpha1.HardwareConfig{config})
+	assert.NoError(t, err)
+
+	updated := &ptpv2alpha1.HardwareConfig{}
+	assert.NoError(t, kubeClient.Get(context.Background(), client.ObjectKeyFromObject(&config), updated))
+	assert.Equal(t, applied.Status.Sources, updated.Status.Sources)
+	assert.Equal(t, config.Status.MatchedNodes, updated.Status.MatchedNodes, "unrelated status fields should be preserved")
+}
+
+func TestSyncHardwareConfigStatusesWhenApplicableStatusAliasesDaemonStatus(t *testing.T) {
+	apiConfig := createTestHardwareConfig("test-config", "test-profile", "profile-a")
+	apiConfig.Status.Sources = []ptpv2alpha1.SourceStatus{{
+		Name: "GNSS",
+		Gnss: &ptpv2alpha1.GNSSStatus{TTYDevice: "/dev/ttyS2"},
+	}}
+	storedConfig := *apiConfig.DeepCopy()
+
+	// Model UpdateHardwareConfig retaining a shallow copy of applicableConfig:
+	// the manager's status replacement also changes applicableConfig, but must
+	// not make the sync mistake that the API has already been updated.
+	applicableConfig := *apiConfig.DeepCopy()
+	managerConfig := applicableConfig
+	managerConfig.Status.Sources[0].Gnss = &ptpv2alpha1.GNSSStatus{
+		TTYDevice:   "/dev/ttyS2",
+		MatchResult: "Matched GNSS tty exposed by USB device 1546:01a9",
+	}
+
+	kubeClient := &statusSyncClient{config: &storedConfig, writer: &statusSyncWriter{config: &storedConfig}}
+	reconciler := &HardwareConfigReconciler{
+		Client: kubeClient,
+		HardwareConfigHandler: &MockHardwareConfigHandler{
+			CurrentHardwareConfigs: []ptpv2alpha1.HardwareConfig{managerConfig},
+		},
+	}
+
+	assert.NoError(t, reconciler.syncHardwareConfigStatuses(context.Background(), []ptpv2alpha1.HardwareConfig{applicableConfig}))
+	assert.Equal(t, "Matched GNSS tty exposed by USB device 1546:01a9", storedConfig.Status.Sources[0].Gnss.MatchResult)
 }
 
 func TestCalculateNodeHardwareConfigs(t *testing.T) {
