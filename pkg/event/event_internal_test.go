@@ -3,6 +3,7 @@ package event
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +154,18 @@ func TestUpdateLeadingClockData_DPLL(t *testing.T) {
 	assert.Equal(t, expectedLeadingClockData.inSyncConditionTimes, e.LeadingClockData.inSyncConditionTimes)
 	assert.Equal(t, expectedLeadingClockData.toFreeRunThreshold, e.LeadingClockData.toFreeRunThreshold)
 	assert.Equal(t, expectedLeadingClockData.MaxInSpecOffset, e.LeadingClockData.MaxInSpecOffset)
+}
+
+func TestDPLLLogLineIgnoresHoldoverTimeout(t *testing.T) {
+	event := func(values map[ValueType]interface{}) Event {
+		return Event{Source: DPLL, CfgName: "ts2phc.1.config", IFace: "eno1np0",
+			Data: &PTPData{State: PTP_LOCKED, Values: values}}
+	}
+	withTimeout := event(map[ValueType]interface{}{OFFSET: int64(0), LocalHoldoverTimeout: uint64(0)})
+	without := event(map[ValueType]interface{}{OFFSET: int64(0)})
+	got := strings.SplitN(withTimeout.GetLogData(), "]:", 2)[1]
+	want := strings.SplitN(without.GetLogData(), "]:", 2)[1]
+	assert.Equal(t, want, got, "timeout must not change the DPLL log line")
 }
 
 func TestGetLeadingInterfaceBC(t *testing.T) {
@@ -1254,6 +1267,35 @@ func TestUpdateBCState(t *testing.T) {
 		assert.Equal(t, fbprotocol.ClockClass(135), result.clockClass, "clockClass should be 135 (holdover in-spec)")
 		assert.False(t, needsTTSCAnnounce, "not a TTSC")
 		assert.True(t, needsDownstreamUpdate, "holdover clockClass set, downstream needs update")
+	})
+
+	t.Run("LOCKED on source lost follows the holdover timeout", func(t *testing.T) {
+		for _, tc := range []struct {
+			timeout   uint64
+			wantState PTPState
+			wantClass fbprotocol.ClockClass
+		}{
+			{0, PTP_FREERUN, protocol.ClockClassFreerun},
+			{30, PTP_HOLDOVER, fbprotocol.ClockClass(135)},
+		} {
+			e := newBCHandler()
+			e.updateLeadingClockData(Event{Source: DPLL, IFace: iface, Data: &PTPData{
+				Values: map[ValueType]interface{}{LeadingSource: true, LocalHoldoverTimeout: tc.timeout},
+			}})
+
+			e.addEvent(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+			e.addEvent(makeBCEvent(PTP4lProcessName, PTP_LOCKED, 10, false))
+			fillDataWindows(e, cfg, 10)
+			result, _, _ := e.updateBCState(makeBCEvent(DPLL, PTP_LOCKED, 10, false))
+			assert.Equal(t, PTP_LOCKED, result.state, "setup: should be LOCKED")
+
+			// Upstream lost while the leading DPLL is still locked.
+			e.addEvent(makeBCEvent(PTP4lProcessName, PTP_FREERUN, 10, true))
+			result, _, needsDownstreamUpdate := e.updateBCState(makeBCEvent(PTP4lProcessName, PTP_FREERUN, 10, true))
+			assert.Equal(t, tc.wantState, result.state, "timeout %d: state", tc.timeout)
+			assert.Equal(t, tc.wantClass, result.clockClass, "timeout %d: clockClass", tc.timeout)
+			assert.True(t, needsDownstreamUpdate, "timeout %d: downstream needs update", tc.timeout)
+		}
 	})
 
 	t.Run("HOLDOVER to LOCKED", func(t *testing.T) {

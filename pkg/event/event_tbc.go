@@ -38,6 +38,8 @@ const (
 	TimePropertiesDataSet ValueType = "time-props"
 	// MaxInSpecOffset is the key for passing the MaxInSpecOffset
 	MaxInSpecOffset ValueType = "max-in-spec"
+	// LocalHoldoverTimeout is the key for passing the leading DPLL holdover timeout in seconds
+	LocalHoldoverTimeout ValueType = "local-holdover-timeout"
 	// FaultyPhaseOffset is a value assigned to the phase offset when free-running
 	FaultyPhaseOffset int64 = 99999999999
 	// StaleEventAfter is the number of milliseconds after which an event is considered stale
@@ -63,6 +65,7 @@ type LeadingClockParams struct {
 	inSyncConditionTimes     int
 	toFreeRunThreshold       int
 	MaxInSpecOffset          uint64
+	holdoverDisabled         bool
 	lastInSpec               bool
 	inSyncThresholdCounter   int
 	clockID                  string
@@ -152,10 +155,16 @@ func (e *EventHandler) updateBCState(event Event) (clockSyncState, bool, bool) {
 			glog.Info("BC FSM: LOCKED to FREERUN")
 			updateDownstreamData = true
 		} else if e.isSourceLostBC(cfgName) {
-			e.clkSyncState[cfgName].state = PTP_HOLDOVER
-			e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(135)
-			glog.Info("BC FSM: LOCKED to HOLDOVER")
-			e.LeadingClockData.lastInSpec = true
+			if e.LeadingClockData.holdoverDisabled {
+				e.clkSyncState[cfgName].state = PTP_FREERUN
+				e.clkSyncState[cfgName].clockClass = protocol.ClockClassFreerun
+				glog.Info("BC FSM: LOCKED to FREERUN")
+			} else {
+				e.clkSyncState[cfgName].state = PTP_HOLDOVER
+				e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(135)
+				glog.Info("BC FSM: LOCKED to HOLDOVER")
+				e.LeadingClockData.lastInSpec = true
+			}
 			updateDownstreamData = true
 		} else {
 			if *e.LeadingClockData.upstreamTimeProperties != *e.LeadingClockData.downstreamTimeProperties {
@@ -719,6 +728,9 @@ func (e *EventHandler) updateLeadingClockData(event Event) {
 		ls, found := ptp.Values[LeadingSource].(bool)
 		if found && ls {
 			e.LeadingClockData.leadingInterface = event.IFace
+			if timeout, ok := ptp.Values[LocalHoldoverTimeout].(uint64); ok {
+				e.LeadingClockData.holdoverDisabled = timeout == 0
+			}
 		}
 		inSyncTh, found := ptp.Values[InSyncConditionThreshold].(uint64)
 		if found {
