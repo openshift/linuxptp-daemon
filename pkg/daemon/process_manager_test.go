@@ -1272,3 +1272,71 @@ func TestUnlock_Failover_Phc2sysAndChronyd(t *testing.T) {
 	assert.NotNil(t, chronydStub.Conditions()[process.ActionStart])
 	assert.NotNil(t, chronydStub.Conditions()[process.ActionStop])
 }
+
+func TestReconcileWaiting_StartsWaiterWhenSourceAlreadyUp(t *testing.T) {
+	ct := NewCondiitonsTester(t, event.OC)
+	pmc := &stubProcess{
+		name: "pmc",
+		conds: map[process.Action]process.Condition{
+			process.ActionStart: process.OnProcessUp{Source: event.PTP4l, ConfigName: ptp4lConfig},
+		},
+	}
+	ptp4l := ct.AddProcess(&stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Running, deps: []process.Process{pmc}})
+	ct.AddProcess(pmc)
+
+	// No up event is ever sent: the waiter missed the transient event.
+	ct.pm.reconcileWaiting(ct.ctx)
+
+	assert.Equal(t, 1, pmc.Starts(), "stranded pmc must be started by reconcile")
+	assert.Equal(t, 0, ptp4l.Starts())
+}
+
+func TestReconcileWaiting_DoesNotStartWhenSourceDown(t *testing.T) {
+	ct := NewCondiitonsTester(t, event.OC)
+	pmc := &stubProcess{
+		name: "pmc",
+		conds: map[process.Action]process.Condition{
+			process.ActionStart: process.OnProcessUp{Source: event.PTP4l, ConfigName: ptp4lConfig},
+		},
+	}
+	ct.AddProcess(&stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Dead, deps: []process.Process{pmc}})
+	ct.AddProcess(pmc)
+
+	ct.pm.reconcileWaiting(ct.ctx)
+
+	assert.Equal(t, 0, pmc.Starts())
+}
+
+func TestReconcileWaiting_WrongConfigNotStarted(t *testing.T) {
+	ct := NewCondiitonsTester(t, event.OC)
+	pmc := &stubProcess{
+		name: "pmc",
+		conds: map[process.Action]process.Condition{
+			process.ActionStart: process.OnProcessUp{Source: event.PTP4l, ConfigName: "ptp4l.0.config"},
+		},
+	}
+	ct.AddProcess(&stubProcess{name: string(event.PTP4l), state: process.Running, deps: []process.Process{pmc}, cfgName: "ptp4l.1.config"})
+	ct.AddProcess(pmc)
+
+	ct.pm.reconcileWaiting(ct.ctx)
+
+	assert.Equal(t, 0, pmc.Starts(), "pmc for ptp4l.0.config must not start while only ptp4l.1.config is up")
+}
+
+func TestReconcileWaiting_TickerRecoversStrandedWaiter(t *testing.T) {
+	ct := NewCondiitonsTester(t, event.OC)
+	pmc := &stubProcess{
+		name: "pmc",
+		conds: map[process.Action]process.Condition{
+			process.ActionStart: process.OnProcessUp{Source: event.PTP4l, ConfigName: ptp4lConfig},
+		},
+	}
+	ct.AddProcess(&stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Running, deps: []process.Process{pmc}})
+	ct.AddProcess(pmc)
+
+	ct.StartPM()
+
+	assert.Eventually(t, func() bool { return pmc.Starts() == 1 },
+		waitingProcessReconcileInterval+5*time.Second, 50*time.Millisecond,
+		"event loop reconcile ticker must recover a waiter that missed the up event")
+}
