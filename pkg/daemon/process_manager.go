@@ -14,6 +14,7 @@ import (
 
 const processStartTimeout = 10 * time.Second
 const processRestartTimeout = processStartTimeout
+const waitingProcessReconcileInterval = 10 * time.Second
 
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
@@ -89,6 +90,14 @@ func (pm *ProcessManager) startProcess(ctx context.Context, p process.Process) {
 func (pm *ProcessManager) StartProcesses(ctx context.Context) {
 	immediate := process.Immediate{}
 
+	// Register condition-waiting processes before starting any immediate
+	// processes: immediate starts emit process-status events from their own
+	// goroutines, and waiters must already be registered when those events
+	// are dispatched, otherwise they wait forever for an event that never
+	// re-fires (e.g. pmc waiting for a ptp4l up event that was emitted
+	// before the waiter was registered).
+	pm.waitingProcess = pm.getWaitingProcesses()
+
 	pm.forEachProcess(func(p process.Process) {
 		if p.State() != process.Created && p.State() != process.Stopped {
 			return
@@ -111,6 +120,8 @@ func (pm *ProcessManager) processEvents(ctx context.Context) {
 	if pm.waitingProcess == nil {
 		pm.waitingProcess = pm.getWaitingProcesses()
 	}
+	reconcileTicker := time.NewTicker(waitingProcessReconcileInterval)
+	defer reconcileTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -133,6 +144,8 @@ func (pm *ProcessManager) processEvents(ctx context.Context) {
 				pm.eventsOut <- ev
 			}
 			pm.evalActions(ctx, ev)
+		case <-reconcileTicker.C:
+			pm.reconcileWaiting(ctx)
 		}
 	}
 }
@@ -157,6 +170,54 @@ func (pm *ProcessManager) getWaitingProcesses() []process.Process {
 		}
 	})
 	return waiting
+}
+
+// sourceProcessUp reports whether the process with the given name and config
+// is currently starting or running. Dependent processes are considered too.
+func (pm *ProcessManager) sourceProcessUp(name, cfg string) bool {
+	found := false
+	pm.forEachProcess(func(p process.Process) {
+		if found || p.Name() != name {
+			return
+		}
+		if cfg != "" && p.ConfigName() != cfg {
+			return
+		}
+		switch p.State() {
+		case process.Starting, process.Running:
+			found = true
+		}
+	})
+	return found
+}
+
+// reconcileWaiting starts waiting processes whose start condition is already
+// satisfied by the current process state. This recovers waiters that missed
+// the transient process-status event they were waiting for (e.g. a pmc
+// process registered after the ptp4l up event was already dispatched).
+func (pm *ProcessManager) reconcileWaiting(ctx context.Context) {
+	started := false
+	for _, p := range pm.getWaitingProcesses() {
+		action, defaultCondition := stateTransitionAction(p.State())
+		switch action {
+		case process.ActionStart, process.ActionRestart:
+		default:
+			continue
+		}
+		cond := process.GetCondition(p, action, defaultCondition)
+		sc, ok := cond.(process.StateAwareCondition)
+		if !ok {
+			continue
+		}
+		if sc.MetByCurrentState(p, pm.sourceProcessUp) {
+			glog.Infof("ProcessManager: %s start condition %s already satisfied by current state, starting", p.Name(), cond)
+			pm.startProcess(ctx, p)
+			started = true
+		}
+	}
+	if started {
+		pm.waitingProcess = pm.getWaitingProcesses()
+	}
 }
 
 // collectWindowRequests gathers all config names required by conditions on waiting processes.

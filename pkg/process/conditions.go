@@ -20,6 +20,19 @@ type WindowRequest struct {
 	Source  event.EventSource
 }
 
+// SourceStateQuery reports whether the process identified by name and config
+// is currently up according to the process manager's view of process state.
+type SourceStateQuery func(name string, cfg string) bool
+
+// StateAwareCondition is a Condition that can additionally be evaluated
+// against the current process state instead of only transient events.
+type StateAwareCondition interface {
+	Condition
+	// MetByCurrentState returns true when the condition is already satisfied
+	// by the current state of the processes it depends on.
+	MetByCurrentState(p Process, sourceUp SourceStateQuery) bool
+}
+
 // Condition is a predicate that determines whether an action should be taken on a process.
 type Condition interface {
 	// Met returns true when this condition is satisfied by the event.
@@ -223,6 +236,16 @@ func (c OnProcessUp) Met(p Process, ev event.Event, _ EventStats) bool {
 	met := ok && status == 1
 	condLog(p, c, met, fmt.Sprintf("process_status=%v ok=%v", status, ok))
 	return met
+}
+
+// MetByCurrentState implements StateAwareCondition for OnProcessUp.
+// It returns true when the source process is currently up, which recovers
+// waiters that never observed the transient PROCESS_STATUS Up event.
+func (c OnProcessUp) MetByCurrentState(_ Process, sourceUp SourceStateQuery) bool {
+	if sourceUp == nil {
+		return false
+	}
+	return sourceUp(string(c.Source), c.ConfigName)
 }
 
 // String returns the string representation of OnProcessUp.
