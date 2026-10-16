@@ -1824,6 +1824,7 @@ func (p *ptpProcess) processOutput(output string, pm *plugin.PluginManager, prof
 // up, processes each line, and pushes the result to lineCh for the
 // socket-writer. It closes lineCh when the scanner finishes.
 func (p *ptpProcess) runScanner(cmdReader io.Reader, lineCh chan<- string, pm *plugin.PluginManager, profileClockType string) {
+	p.dn.liveGate.Wait(liveGateTimeout)
 	scanner := bufio.NewScanner(cmdReader)
 	for scanner.Scan() {
 		output := p.processOutput(scanner.Text(), pm, profileClockType)
@@ -1861,25 +1862,6 @@ connect:
 	if _, err2 := fmt.Fprintf(p.c, "%s\n", liveStartCommand); err2 != nil {
 		glog.Errorf("failed to write LIVE_START marker: %v", err2)
 		goto connect
-	}
-	glog.V(14).Infof("socket-writer[%s]: LIVE_START sent, draining stale buffer", p.name)
-	{
-		drained := 0
-	drainLoop:
-		for {
-			select {
-			case _, ok := <-lineCh:
-				if !ok {
-					glog.V(14).Infof("socket-writer[%s]: lineCh closed during drain", p.name)
-					doneCh <- struct{}{}
-					return
-				}
-				drained++
-			default:
-				break drainLoop
-			}
-		}
-		glog.V(14).Infof("socket-writer[%s]: drained %d stale lines, sending processStatus UP", p.name, drained)
 	}
 
 	processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
