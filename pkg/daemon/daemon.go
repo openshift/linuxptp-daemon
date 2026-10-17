@@ -368,6 +368,26 @@ func (p *ptpProcess) getAndSetStopped(val bool) bool {
 	return ret
 }
 
+func (p *ptpProcess) startCmd(cmd *exec.Cmd) (bool, error) {
+	p.execMutex.Lock()
+	defer p.execMutex.Unlock()
+	if p.stopped {
+		return false, nil
+	}
+	p.cmd = cmd
+	return true, cmd.Start()
+}
+
+func (p *ptpProcess) stopCmd() (*exec.Cmd, bool) {
+	p.execMutex.Lock()
+	defer p.execMutex.Unlock()
+	if p.cmd == nil || p.stopped {
+		return p.cmd, false
+	}
+	p.stopped = true
+	return p.cmd, true
+}
+
 func (p *ptpProcess) setStopped(val bool) {
 	p.execMutex.Lock()
 	p.stopped = val
@@ -1938,44 +1958,42 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 
 		cmd.Stderr = cmd.Stdout
 
-		if !stdoutToSocket {
-			scanner := bufio.NewScanner(cmdReader)
-			processStatus(nil, p.name, p.messageTag, PtpProcessUp)
-			go func() {
-				for scanner.Scan() {
-					p.processOutput(scanner.Text(), pm, profileClockType)
-				}
-				doneCh <- struct{}{}
-			}()
-		} else {
-			lineCh := make(chan string, 256)
-			go p.runScanner(cmdReader, lineCh, pm, profileClockType)
-			go p.runSocketWriter(lineCh, doneCh)
-		}
-
-		if !p.Stopped() {
+		startAttempted, startErr := p.startCmd(cmd)
+		if startAttempted {
 			glog.Infof("starting %s...", p.name)
-			p.cmd = cmd
-			err = cmd.Start()
-			if err != nil {
-				glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
-			}
-
-			<-doneCh
-			err = cmd.Wait()
-
-			glog.Infof("done waiting for %s...", p.name)
-			if err != nil {
-				glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
-			}
-			if stdoutToSocket && p.c != nil {
-				glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via socket", p.name)
-				processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
+			if startErr != nil {
+				glog.Errorf("CmdRun() error starting %s, will retry: %v", p.name, startErr)
 			} else {
-				glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via prometheus", p.name)
-				processStatus(nil, p.name, p.messageTag, PtpProcessDown)
+				if !stdoutToSocket {
+					scanner := bufio.NewScanner(cmdReader)
+					processStatus(nil, p.name, p.messageTag, PtpProcessUp)
+					go func() {
+						for scanner.Scan() {
+							p.processOutput(scanner.Text(), pm, profileClockType)
+						}
+						doneCh <- struct{}{}
+					}()
+				} else {
+					lineCh := make(chan string, 256)
+					go p.runScanner(cmdReader, lineCh, pm, profileClockType)
+					go p.runSocketWriter(lineCh, doneCh)
+				}
+				<-doneCh
+				err = cmd.Wait()
+
+				glog.Infof("done waiting for %s...", p.name)
+				if err != nil {
+					glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
+				}
+				if stdoutToSocket && p.c != nil {
+					glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via socket", p.name)
+					processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
+				} else {
+					glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via prometheus", p.name)
+					processStatus(nil, p.name, p.messageTag, PtpProcessDown)
+				}
+				p.updateGMStatusOnProcessDown(p.name)
 			}
-			p.updateGMStatusOnProcessDown(p.name)
 		}
 
 		if profileClockType == TBC && p.name == ptp4lProcessName {
@@ -2040,17 +2058,16 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 }
 
 // cmdStop stops ptpProcess launched by cmdRun.
-// Only one caller owns the stop: getAndSetStopped prevents concurrent waiters
+// Only one caller owns the stop: stopCmd prevents concurrent waiters
 // on the unbuffered exitCh.
 func (p *ptpProcess) cmdStop() {
 	glog.Infof("stopping %s...", p.name)
-	cmd := p.cmd
+	cmd, stopping := p.stopCmd()
 	if cmd == nil {
 		glog.Infof("cmdStop is nil %s", p.name)
 		return
 	}
-	// getAndSetStopped returns the previous value: true means already stopped.
-	if p.getAndSetStopped(true) {
+	if !stopping {
 		glog.Infof("%s is already stopped", p.name)
 		return
 	}
