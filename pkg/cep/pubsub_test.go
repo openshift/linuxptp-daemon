@@ -2,6 +2,7 @@ package cep
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"path/filepath"
@@ -31,7 +32,9 @@ func makeTestEvent(source string) *event.Event {
 
 func testPubSub(t *testing.T, writers map[string]*bytes.Buffer) *PubSub {
 	t.Helper()
-	return NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), func(endpoint string) io.Writer {
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	return NewPubSub(d, func(endpoint string) io.Writer {
 		buf := &bytes.Buffer{}
 		if writers != nil {
 			writers[endpoint] = buf
@@ -96,10 +99,13 @@ func TestSubscribe(t *testing.T) {
 
 	t.Run("empty endpoint skips writerFunc", func(t *testing.T) {
 		var writerCalls int
-		ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), func(_ string) io.Writer {
+		writerFunc := func(_ string) io.Writer {
 			writerCalls++
 			return &bytes.Buffer{}
-		})
+		}
+		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		require.NoError(t, err)
+		ps := NewPubSub(d, writerFunc)
 		ps.Subscribe("/resource/a", "")
 
 		assert.Zero(t, writerCalls)
@@ -356,7 +362,7 @@ func TestPubSubPersistence(t *testing.T) {
 			wantListLen:  0,
 		},
 		{
-			name:          "writerFunc called on load",
+			name:          "writerFunc called on Load",
 			subs:          []sub{{testPTPLockState, "http://example.com/events"}},
 			wantListLen:   1,
 			wantResources: []string{testPTPLockState},
@@ -367,7 +373,10 @@ func TestPubSubPersistence(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			storePath := filepath.Join(t.TempDir(), "subscriptions.json")
 
-			ps1 := NewPubSub(storePath, nil)
+			// ps1 writes subscriptions to disk via its own DiskStore.
+			store1, err := NewDiskStore(storePath)
+			require.NoError(t, err)
+			ps1 := NewPubSub(store1, nil)
 			ids := make([]string, len(tt.subs))
 			for i, s := range tt.subs {
 				ids[i] = ps1.Subscribe(s.resource, s.endpoint)
@@ -376,12 +385,16 @@ func TestPubSubPersistence(t *testing.T) {
 				ps1.Unsubscribe(ids[idx])
 			}
 
+			// ps2 uses a fresh DiskStore pointing at the same path to simulate a process
+			// restart loading previously persisted state.
+			store2, err := NewDiskStore(storePath)
+			require.NoError(t, err)
 			var writerCalled bool
-			ps2 := NewPubSub(storePath, func(_ string) io.Writer {
+			ps2 := NewPubSub(store2, func(_ string) io.Writer {
 				writerCalled = true
 				return &bytes.Buffer{}
 			})
-			require.NoError(t, ps2.LoadFromDisk())
+			require.NoError(t, ps2.LoadFromStore(context.TODO()))
 
 			assert.Len(t, ps2.List(), tt.wantListLen)
 			for _, r := range tt.wantResources {
@@ -395,7 +408,7 @@ func TestPubSubPersistence(t *testing.T) {
 				if tt.wantWriterNil {
 					assert.Nil(t, sub.W)
 				} else {
-					assert.True(t, writerCalled, "writerFunc should have been called on load")
+					assert.True(t, writerCalled, "writerFunc should have been called on Load")
 				}
 			}
 		})

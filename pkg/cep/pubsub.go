@@ -1,9 +1,10 @@
 package cep
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
-	"os"
 	"sync"
 
 	"github.com/google/uuid"
@@ -40,18 +41,18 @@ type PubSub struct {
 	free []int
 	// resourceIndex maps the watched resource to subscriptions, allowing for O(1) lookup
 	resourceIndex map[string][]int
-	// storePath is the filepath for persistent storage of subscriptionRecords
-	storePath string
 	// writerFunc creates an io.Writer for a given endpoint. Used when Subscribe() is called, or when
 	// SubscriptionRecords are loaded from disk.
-	writerFunc WriterFunc
+	writerFunc    WriterFunc
+	recordStorage Store
 }
 
-// NewPubSub creates a PubSub with the given persistent store path and writer factory.
-func NewPubSub(storePath string, writerFunc WriterFunc) *PubSub {
+// NewPubSub creates a PubSub with the given persistent Store and writer factory. ctx bounds the
+// lifetime of persistence operations against the Store.
+func NewPubSub(storageBackend Store, writerFunc WriterFunc) *PubSub {
 	return &PubSub{
 		resourceIndex: make(map[string][]int),
-		storePath:     storePath,
+		recordStorage: storageBackend,
 		writerFunc:    writerFunc,
 	}
 }
@@ -80,7 +81,7 @@ func (ps *PubSub) Subscribe(resource, endpoint string) string {
 	ps.resourceIndex[resource] = append(ps.resourceIndex[resource], idx)
 
 	if err := ps.save(); err != nil {
-		glog.Errorf("failed to save subscriptions: %v", err)
+		glog.Errorf("failed to Save subscriptions: %v", err)
 	}
 	return id
 }
@@ -120,7 +121,7 @@ func (ps *PubSub) Unsubscribe(id string) bool {
 	}
 
 	if err := ps.save(); err != nil {
-		glog.Errorf("failed to save subscriptions: %v", err)
+		glog.Errorf("failed to Save subscriptions: %v", err)
 	}
 	return true
 }
@@ -133,7 +134,7 @@ func (ps *PubSub) UnsubscribeAll() {
 	ps.free = nil
 	ps.resourceIndex = make(map[string][]int)
 	if err := ps.save(); err != nil {
-		glog.Errorf("failed to save subscriptions: %v", err)
+		glog.Errorf("failed to Save subscriptions: %v", err)
 	}
 }
 
@@ -210,34 +211,17 @@ func (ps *PubSub) save() error {
 			records = append(records, subscriptionRecord{ID: sub.ID, Resource: sub.Resource, Endpoint: sub.Endpoint})
 		}
 	}
-	data, err := json.MarshalIndent(records, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Write to a temp file and rename to avoid corrupting subscriptions.json on a crash mid-write.
-	tmpPath := ps.storePath + ".tmp"
-	if writeErr := os.WriteFile(tmpPath, data, 0600); writeErr != nil {
-		return writeErr
-	}
-	return os.Rename(tmpPath, ps.storePath)
+	return ps.recordStorage.Save(records)
 }
 
-// LoadFromDisk replaces the in-memory subscriptions with those persisted to ps.storePath
-func (ps *PubSub) LoadFromDisk() error {
+// LoadFromStore replaces the in-memory subscriptions with those persisted to the storage backend
+func (ps *PubSub) LoadFromStore(ctx context.Context) error {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	data, err := os.ReadFile(ps.storePath)
-	if os.IsNotExist(err) {
-		return nil
-	}
+	records, err := ps.recordStorage.Load(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("error loading subscription records: %w", err)
 	}
-	var records []subscriptionRecord
-	if unmarshalErr := json.Unmarshal(data, &records); unmarshalErr != nil {
-		return unmarshalErr
-	}
-
 	ps.subs = make([]Subscription, len(records))
 	ps.free = nil
 	ps.resourceIndex = make(map[string][]int)

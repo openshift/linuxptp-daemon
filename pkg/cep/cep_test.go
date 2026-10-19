@@ -187,7 +187,9 @@ func TestListenerResilience(t *testing.T) {
 
 func TestIntegrationHealthCheck(t *testing.T) {
 	cache := NewEventCache("worker-0")
-	ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
 	proxy := NewCloudEventProxy(cache, ps)
 	apiServer := httptest.NewServer(proxy.Handler())
 	defer apiServer.Close()
@@ -224,7 +226,9 @@ func TestIntegrationEventDelivery(t *testing.T) {
 		defer consumer.Close()
 
 		cache := NewEventCache("worker-0")
-		ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
+		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		require.NoError(t, err)
+		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
 		proxy := NewCloudEventProxy(cache, ps)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
@@ -282,7 +286,9 @@ func TestIntegrationEventDelivery(t *testing.T) {
 func TestIntegrationSubscriptionAPI(t *testing.T) {
 	t.Run("CRUD lifecycle", func(t *testing.T) {
 		cache := NewEventCache("worker-0")
-		ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
+		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		require.NoError(t, err)
+		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
 		proxy := NewCloudEventProxy(cache, ps)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
@@ -329,7 +335,9 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 
 	t.Run("get by ID", func(t *testing.T) {
 		cache := NewEventCache("worker-0")
-		ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
+		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		require.NoError(t, err)
+		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
 		proxy := NewCloudEventProxy(cache, ps)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
@@ -366,7 +374,9 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 
 	t.Run("delete by ID", func(t *testing.T) {
 		cache := NewEventCache("worker-0")
-		ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
+		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		require.NoError(t, err)
+		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
 		proxy := NewCloudEventProxy(cache, ps)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
@@ -408,7 +418,9 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 
 func TestSubscriptionValidation(t *testing.T) {
 	cache := NewEventCache("worker-0")
-	ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
 	proxy := NewCloudEventProxy(cache, ps)
 	apiServer := httptest.NewServer(proxy.Handler())
 	defer apiServer.Close()
@@ -444,8 +456,8 @@ func TestSubscriptionValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp, err := http.Post(subURL, "application/json", strings.NewReader(tt.body))
-			require.NoError(t, err)
+			resp, postErr := http.Post(subURL, "application/json", strings.NewReader(tt.body))
+			require.NoError(t, postErr)
 			resp.Body.Close()
 			assert.Equal(t, tt.wantStatus, resp.StatusCode)
 		})
@@ -454,7 +466,9 @@ func TestSubscriptionValidation(t *testing.T) {
 
 func TestIntegrationCurrentState(t *testing.T) {
 	cache := NewEventCache("worker-0")
-	ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
 	proxy := NewCloudEventProxy(cache, ps)
 
 	pr, pw := io.Pipe()
