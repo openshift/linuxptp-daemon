@@ -26,7 +26,8 @@ const (
 	testIFace        = "ens2f0"
 	testPTPLockState = "/cluster/node/worker-0/sync/ptp-status/lock-state"
 	// testBaseURL is the server-configured root used to build subscription UriLocation values.
-	testBaseURL = "http://worker-0:9043"
+	testBaseURL  = "http://worker-0:9043"
+	testNodeName = "worker-0"
 )
 
 func TestBuildDataValues(t *testing.T) {
@@ -177,7 +178,7 @@ func TestListenerResilience(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cache := NewEventCache("worker-0")
-			listener := NewCloudEventProxy(cache, nil, testBaseURL)
+			listener := NewCloudEventProxy(cache, nil, "worker-0", testBaseURL)
 
 			listener.handleIncomingEvents(tt.input())
 
@@ -192,7 +193,7 @@ func TestIntegrationHealthCheck(t *testing.T) {
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 	require.NoError(t, err)
 	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
-	proxy := NewCloudEventProxy(cache, ps, testBaseURL)
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 	apiServer := httptest.NewServer(proxy.Handler())
 	defer apiServer.Close()
 	resp, err := http.Get(apiServer.URL + apiBase + "/health")
@@ -231,7 +232,7 @@ func TestIntegrationEventDelivery(t *testing.T) {
 		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 		require.NoError(t, err)
 		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
-		proxy := NewCloudEventProxy(cache, ps, testBaseURL)
+		proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
 
@@ -291,7 +292,7 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 		require.NoError(t, err)
 		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
-		proxy := NewCloudEventProxy(cache, ps, testBaseURL)
+		proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
 
@@ -344,7 +345,7 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 		require.NoError(t, err)
 		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
-		proxy := NewCloudEventProxy(cache, ps, testBaseURL)
+		proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
 
@@ -384,7 +385,7 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 		require.NoError(t, err)
 		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
-		proxy := NewCloudEventProxy(cache, ps, testBaseURL)
+		proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
 
@@ -428,7 +429,7 @@ func TestSubscriptionValidation(t *testing.T) {
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 	require.NoError(t, err)
 	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
-	proxy := NewCloudEventProxy(cache, ps, testBaseURL)
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 	apiServer := httptest.NewServer(proxy.Handler())
 	defer apiServer.Close()
 
@@ -481,7 +482,7 @@ func TestIntegrationCurrentState(t *testing.T) {
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 	require.NoError(t, err)
 	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
-	proxy := NewCloudEventProxy(cache, ps, testBaseURL)
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 
 	pr, pw := io.Pipe()
 	done := make(chan struct{})
@@ -522,13 +523,45 @@ func TestIntegrationCurrentState(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestGetPublishers(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
+	apiServer := httptest.NewServer(proxy.Handler())
+	defer apiServer.Close()
+
+	resp, err := http.Get(apiServer.URL + "/api/ocloudNotifications/v2/publishers")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var pubs []publisherResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&pubs))
+	resp.Body.Close()
+
+	// One publisher per supported resource, with only ResourceAddress populated.
+	require.Len(t, pubs, len(supportedResourceSuffixes))
+	addrs := make(map[string]bool, len(pubs))
+	for _, p := range pubs {
+		assert.NotEmpty(t, p.Resource)
+		assert.Contains(t, p.Resource, "/cluster/node/worker-0/")
+		assert.Empty(t, p.ID)
+		assert.Empty(t, p.EndpointURI)
+		assert.Empty(t, p.URILocation)
+		addrs[p.Resource] = true
+	}
+	// A subscribable resource (lock-state) must be advertised.
+	assert.True(t, addrs[testPTPLockState], "expected %s among publishers", testPTPLockState)
+}
+
 func TestErrorResponsesUseProblemJSON(t *testing.T) {
 	// The O-RAN spec (§3.1.2) requires errors to be RFC 7807 "application/problem+json".
 	cache := NewEventCache("worker-0")
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 	require.NoError(t, err)
 	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
-	proxy := NewCloudEventProxy(cache, ps, testBaseURL)
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 	apiServer := httptest.NewServer(proxy.Handler())
 	defer apiServer.Close()
 
@@ -569,7 +602,7 @@ func TestSubscriptionDuplicateConflict(t *testing.T) {
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 	require.NoError(t, err)
 	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
-	proxy := NewCloudEventProxy(cache, ps, testBaseURL)
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 	apiServer := httptest.NewServer(proxy.Handler())
 	defer apiServer.Close()
 
@@ -622,7 +655,7 @@ func TestSubscriptionInitialNotification(t *testing.T) {
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 	require.NoError(t, err)
 	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
-	proxy := NewCloudEventProxy(cache, ps, testBaseURL)
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 
 	// Populate the cache with a current state for the resource.
 	pr, pw := io.Pipe()

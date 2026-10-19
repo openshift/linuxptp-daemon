@@ -23,6 +23,7 @@ import (
 
 const apiBase = "/api/ocloudNotifications/v2/"
 const subscriptionsPath = "subscriptions"
+const publishersPath = "publishers"
 
 // supportedResourceSuffixes are the O-RAN resource addresses this node can produce notifications
 // for (the resources emitted by oranMapping). A subscription's ResourceAddress must end with one of
@@ -170,14 +171,15 @@ type CloudEventProxy struct {
 	// baseURL is the externally reachable root of this API server (scheme://host:port, no path).
 	// It is fixed at startup and used to build the mandatory O-RAN "UriLocation" field, which must
 	// be a stable, server-determined address rather than one derived from a client request.
-	baseURL string
+	baseURL  string
+	nodeName string
 }
 
 // NewCloudEventProxy creates a CloudEventProxy with the given cache and pubsub. baseURL is the
 // externally reachable root of the server (scheme://host:port) used to build subscription
 // UriLocation values.
-func NewCloudEventProxy(cache *EventCache, pubsub *PubSub, baseURL string) *CloudEventProxy {
-	return &CloudEventProxy{cache: cache, pubSub: pubsub, baseURL: baseURL}
+func NewCloudEventProxy(cache *EventCache, pubsub *PubSub, nodeName string, baseURL string) *CloudEventProxy {
+	return &CloudEventProxy{cache: cache, pubSub: pubsub, nodeName: nodeName, baseURL: baseURL}
 }
 
 // handleIncomingEvents reads from r until EOF or error.
@@ -229,6 +231,7 @@ func (l *CloudEventProxy) Handler() http.Handler {
 		mux.HandleFunc(subPattern, l.subscriptionHandler)
 		mux.HandleFunc(subPattern+"/", l.subscriptionHandler)
 	}
+	mux.HandleFunc(apiBase+publishersPath, l.publishersHandler)
 	mux.HandleFunc(apiBase, l.currentStateHandler)
 	return mux
 }
@@ -344,6 +347,27 @@ func (l *CloudEventProxy) currentStateHandler(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(ce)
 }
 
+// publishersHandler serves GET /publishers, the CEPv1 "(Extensions to O-RAN API)" endpoint. It
+// advertises the resources this node publishes (i.e. that can be subscribed to), one entry per
+// supported resource, with only ResourceAddress populated.
+func (l *CloudEventProxy) publishersHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeProblem(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	node := l.nodeName
+	resp := make([]publisherResponse, 0, len(supportedResourceSuffixes))
+	for _, suffix := range supportedResourceSuffixes {
+		resp = append(resp, publisherResponse{
+			Resource: path.Join("/cluster/node", node, string(suffix)),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 // --- Subscription HTTP handlers ---
 
 type httpWriter struct {
@@ -385,6 +409,17 @@ type subscriptionRequest struct {
 }
 
 type subscriptionResponse struct {
+	ID          string `json:"SubscriptionId"`
+	EndpointURI string `json:"EndpointUri"`
+	Resource    string `json:"ResourceAddress"`
+	URILocation string `json:"UriLocation"`
+}
+
+// publisherResponse keeps the CEPv1 publisher schema (which reuses the subscription object shape) so
+// existing clients of the GET /publishers extension still parse the response. CEPv2 publishers are
+// intrinsic to the node rather than created resources, so only ResourceAddress carries a value; the
+// id/endpoint/location fields exist only to preserve the schema and are returned empty.
+type publisherResponse struct {
 	ID          string `json:"SubscriptionId"`
 	EndpointURI string `json:"EndpointUri"`
 	Resource    string `json:"ResourceAddress"`

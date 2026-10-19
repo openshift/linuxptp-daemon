@@ -88,7 +88,7 @@ func main() {
 	if err = ps.LoadFromStore(ctx); err != nil {
 		glog.Fatalf("failed to load persisted subscriptions: %v", err)
 	}
-	proxy := cep.NewCloudEventProxy(cache, ps, baseURL)
+	proxy := cep.NewCloudEventProxy(cache, ps, nodeName, baseURL)
 
 	if err = os.MkdirAll(filepath.Dir(socket), 0755); err != nil {
 		glog.Fatalf("failed to create socket directory: %v", err)
