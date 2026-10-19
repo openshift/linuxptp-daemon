@@ -157,25 +157,73 @@ func (ps *PubSub) getTargets(source string) []publishTarget {
 	return targets
 }
 
-// Publish converts the event to a CloudEvent and delivers it to all matching subscribers.
-func (ps *PubSub) Publish(e *event.Event) {
+// marshalCloudEvent converts an event to its newline-terminated CloudEvent JSON wire form.
+func marshalCloudEvent(e *event.Event) ([]byte, error) {
 	ce, err := e.NewCloudEventV2()
 	if err != nil {
-		glog.Errorf("failed to convert event to CloudEvent: %v", err)
-		return
+		return nil, fmt.Errorf("failed to convert event to CloudEvent: %w", err)
 	}
 	data, err := json.Marshal(ce)
 	if err != nil {
-		glog.Errorf("failed to marshal CloudEvent: %v", err)
+		return nil, fmt.Errorf("failed to marshal CloudEvent: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
+// Publish converts the event to a CloudEvent and delivers it to all matching subscribers.
+func (ps *PubSub) Publish(e *event.Event) {
+	data, err := marshalCloudEvent(e)
+	if err != nil {
+		glog.Error(err)
 		return
 	}
-	data = append(data, '\n')
 
 	for _, t := range ps.getTargets(e.Source) {
 		if _, writeErr := t.w.Write(data); writeErr != nil {
 			glog.Errorf("failed to write event to subscriber %s: %v", t.id, writeErr)
 		}
 	}
+}
+
+// PublishToID delivers the event to a single subscription by ID, if it exists and has a writer.
+// It is used to send the initial status notification required on subscription creation.
+func (ps *PubSub) PublishToID(id string, e *event.Event) {
+	data, err := marshalCloudEvent(e)
+	if err != nil {
+		glog.Error(err)
+		return
+	}
+
+	ps.mu.RLock()
+	var w io.Writer
+	for i := range ps.subs {
+		if ps.subs[i].active && ps.subs[i].ID == id {
+			w = ps.subs[i].W
+			break
+		}
+	}
+	ps.mu.RUnlock()
+
+	if w == nil {
+		return
+	}
+	if _, writeErr := w.Write(data); writeErr != nil {
+		glog.Errorf("failed to write initial notification to subscriber %s: %v", id, writeErr)
+	}
+}
+
+// FindByResourceEndpoint returns the ID of an existing active subscription for the given
+// resource and endpoint, if one exists. It is used to reject duplicate subscriptions.
+func (ps *PubSub) FindByResourceEndpoint(resource, endpoint string) (string, bool) {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	for _, idx := range ps.resourceIndex[resource] {
+		sub := ps.subs[idx]
+		if sub.active && sub.Endpoint == endpoint {
+			return sub.ID, true
+		}
+	}
+	return "", false
 }
 
 // Get returns the subscription with the given ID.

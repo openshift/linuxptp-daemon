@@ -21,7 +21,7 @@ func TestEventCache_Get(t *testing.T) {
 func TestEventCache_GetBySource(t *testing.T) {
 	t.Run("GetBySource returns matching event", func(t *testing.T) {
 		cache := NewEventCache("worker-0")
-		proxy := NewCloudEventProxy(cache, nil)
+		proxy := NewCloudEventProxy(cache, nil, testBaseURL)
 
 		var buf bytes.Buffer
 		ipc.Transmit(&buf, ipc.Message{

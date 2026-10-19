@@ -24,6 +24,7 @@ var (
 	port      int
 	storePath string
 	nodeName  string
+	apiHost   string
 	tlsCert   string
 	tlsKey    string
 )
@@ -35,6 +36,8 @@ func main() {
 		"This will cause subscriptions to be persisted to a disk backend, instead of the default ConfigMap backend.")
 	flag.StringVar(&tlsCert, "tls-cert", "", "Path to TLS certificate file. If set with --tls-key, the server uses TLS.")
 	flag.StringVar(&tlsKey, "tls-key", "", "Path to TLS private key file. If set with --tls-cert, the server uses TLS.")
+	flag.StringVar(&apiHost, "api-host", "", "Host used to build subscription UriLocation values in API responses. "+
+		"Defaults to the node name.")
 	flag.Parse()
 
 	if tlsKey != "" || tlsCert != "" {
@@ -51,7 +54,17 @@ func main() {
 		}
 	}
 
-	glog.Infof("cloud-event-proxy starting, node=%s, socket=%s, commit=%s", nodeName, socket, GitCommit)
+	if apiHost == "" {
+		apiHost = nodeName
+	}
+	scheme := "http"
+	if tlsCert != "" {
+		scheme = "https"
+	}
+	// baseURL is the stable, server-determined root used to build subscription UriLocation values.
+	baseURL := fmt.Sprintf("%s://%s:%d", scheme, apiHost, port)
+
+	glog.Infof("cloud-event-proxy starting, node=%s, socket=%s, baseURL=%s, commit=%s", nodeName, socket, baseURL, GitCommit)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
@@ -75,7 +88,7 @@ func main() {
 	if err = ps.LoadFromStore(ctx); err != nil {
 		glog.Fatalf("failed to load persisted subscriptions: %v", err)
 	}
-	proxy := cep.NewCloudEventProxy(cache, ps)
+	proxy := cep.NewCloudEventProxy(cache, ps, baseURL)
 
 	if err = os.MkdirAll(filepath.Dir(socket), 0755); err != nil {
 		glog.Fatalf("failed to create socket directory: %v", err)
