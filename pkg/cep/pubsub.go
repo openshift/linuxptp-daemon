@@ -57,17 +57,29 @@ func NewPubSub(storageBackend Store, writerFunc WriterFunc) *PubSub {
 	}
 }
 
-// Subscribe registers a new subscription for the given resource and returns its ID.
-func (ps *PubSub) Subscribe(resource, endpoint string) string {
+// Subscribe registers a subscription only if an active one for the same resource and publish endpoint does not
+// already exist, returning the subscription ID and whether it already existed or not.
+func (ps *PubSub) Subscribe(resource, endpoint string) (string, bool) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	for _, idx := range ps.resourceIndex[resource] {
+		sub := ps.subs[idx]
+		if sub.active && sub.Endpoint == endpoint {
+			return sub.ID, true
+		}
+	}
+	return ps.insertLocked(resource, endpoint), false
+}
+
+// insertLocked inserts a new subscription, persists it, and returns its ID. Callers must hold ps.mu
+// for writing.
+func (ps *PubSub) insertLocked(resource, endpoint string) string {
 	id := uuid.New().String()
 	var w io.Writer
 	if endpoint != "" && ps.writerFunc != nil {
 		w = ps.writerFunc(endpoint)
 	}
 	sub := Subscription{ID: id, Resource: resource, Endpoint: endpoint, W: w, active: true}
-
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
 
 	var idx int
 	if len(ps.free) > 0 {
@@ -210,20 +222,6 @@ func (ps *PubSub) PublishToID(id string, e *event.Event) {
 	if _, writeErr := w.Write(data); writeErr != nil {
 		glog.Errorf("failed to write initial notification to subscriber %s: %v", id, writeErr)
 	}
-}
-
-// FindByResourceEndpoint returns the ID of an existing active subscription for the given
-// resource and endpoint, if one exists. It is used to reject duplicate subscriptions.
-func (ps *PubSub) FindByResourceEndpoint(resource, endpoint string) (string, bool) {
-	ps.mu.RLock()
-	defer ps.mu.RUnlock()
-	for _, idx := range ps.resourceIndex[resource] {
-		sub := ps.subs[idx]
-		if sub.active && sub.Endpoint == endpoint {
-			return sub.ID, true
-		}
-	}
-	return "", false
 }
 
 // Get returns the subscription with the given ID.

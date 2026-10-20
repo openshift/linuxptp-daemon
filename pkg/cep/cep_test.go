@@ -461,6 +461,12 @@ func TestSubscriptionValidation(t *testing.T) {
 			wantStatus: http.StatusNotFound,
 		},
 		{
+			// Valid suffix but another node's address: delivery would never match, so it must 404.
+			name:       "other node resource",
+			body:       `{"EndpointUri":"http://localhost:9999/event","ResourceAddress":"/cluster/node/other-node/sync/ptp-status/lock-state"}`,
+			wantStatus: http.StatusNotFound,
+		},
+		{
 			name:       "valid subscription",
 			body:       fmt.Sprintf(`{"EndpointUri":"http://localhost:9999/event","ResourceAddress":"%s"}`, testPTPLockState),
 			wantStatus: http.StatusCreated,

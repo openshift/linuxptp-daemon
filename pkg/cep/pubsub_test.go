@@ -43,10 +43,14 @@ func testPubSub(t *testing.T, writers map[string]*bytes.Buffer) *PubSub {
 	})
 }
 
+func TestSubscribeUniqueConcurrent(t *testing.T) {
+}
+
 func TestSubscribe(t *testing.T) {
 	t.Run("single subscription", func(t *testing.T) {
 		ps := testPubSub(t, nil)
-		ps.Subscribe("/resource/a", "ep-1")
+		_, existed := ps.Subscribe("/resource/a", "ep-1")
+		require.False(t, existed)
 
 		assert.Len(t, ps.List(), 1)
 		assert.Len(t, ps.subs, 1)
@@ -65,7 +69,8 @@ func TestSubscribe(t *testing.T) {
 
 	t.Run("unsubscribe adds to free list", func(t *testing.T) {
 		ps := testPubSub(t, nil)
-		id := ps.Subscribe("/resource/a", "ep-1")
+		id, existed := ps.Subscribe("/resource/a", "ep-1")
+		require.False(t, existed)
 		ps.Unsubscribe(id)
 
 		assert.Empty(t, ps.List())
@@ -75,9 +80,11 @@ func TestSubscribe(t *testing.T) {
 
 	t.Run("resubscribe reuses freed slot", func(t *testing.T) {
 		ps := testPubSub(t, nil)
-		id := ps.Subscribe("/resource/a", "ep-1")
+		id, existed := ps.Subscribe("/resource/a", "ep-1")
+		require.False(t, existed)
 		ps.Unsubscribe(id)
-		ps.Subscribe("/resource/b", "ep-2")
+		_, existed = ps.Subscribe("/resource/b", "ep-2")
+		require.False(t, existed)
 
 		assert.Len(t, ps.List(), 1)
 		assert.Len(t, ps.subs, 1, "arena did not grow")
@@ -87,7 +94,8 @@ func TestSubscribe(t *testing.T) {
 	t.Run("reuse middle slot", func(t *testing.T) {
 		ps := testPubSub(t, nil)
 		ps.Subscribe("/resource/a", "ep-1")
-		id2 := ps.Subscribe("/resource/b", "ep-2")
+		id2, existed := ps.Subscribe("/resource/b", "ep-2")
+		require.False(t, existed)
 		ps.Subscribe("/resource/c", "ep-3")
 		ps.Unsubscribe(id2)
 		ps.Subscribe("/resource/d", "ep-4")
@@ -95,6 +103,16 @@ func TestSubscribe(t *testing.T) {
 		assert.Len(t, ps.List(), 3)
 		assert.Len(t, ps.subs, 3, "arena did not grow")
 		assert.Empty(t, ps.free)
+	})
+
+	t.Run("duplicate subscription", func(t *testing.T) {
+		ps := testPubSub(t, nil)
+		id0, existed := ps.Subscribe(testPTPLockState, "http://consumer/ep")
+		require.False(t, existed)
+		id1, existed := ps.Subscribe(testPTPLockState, "http://consumer/ep")
+		assert.True(t, existed)
+		assert.Equal(t, id0, id1)
+		assert.Len(t, ps.List(), 1)
 	})
 
 	t.Run("empty endpoint skips writerFunc", func(t *testing.T) {
@@ -250,8 +268,10 @@ func TestUnsubscribe(t *testing.T) {
 			ps := testPubSub(t, writers)
 
 			ids := make([]string, len(tt.subs))
+			var existed bool
 			for i, s := range tt.subs {
-				ids[i] = ps.Subscribe(s.resource, s.endpoint)
+				ids[i], existed = ps.Subscribe(s.resource, s.endpoint)
+				require.False(t, existed)
 			}
 
 			if tt.unsubNonexistent {
@@ -316,8 +336,10 @@ func TestGet(t *testing.T) {
 			ps := testPubSub(t, nil)
 
 			var realID string
+			var existed bool
 			if tt.subResource != "" {
-				realID = ps.Subscribe(tt.subResource, "sub")
+				realID, existed = ps.Subscribe(tt.subResource, "sub")
+				require.False(t, existed)
 			}
 
 			lookupID := tt.lookupID
@@ -378,8 +400,10 @@ func TestPubSubPersistence(t *testing.T) {
 			require.NoError(t, err)
 			ps1 := NewPubSub(store1, nil)
 			ids := make([]string, len(tt.subs))
+			var existed bool
 			for i, s := range tt.subs {
-				ids[i] = ps1.Subscribe(s.resource, s.endpoint)
+				ids[i], existed = ps1.Subscribe(s.resource, s.endpoint)
+				require.False(t, existed)
 			}
 			for _, idx := range tt.unsubIndices {
 				ps1.Unsubscribe(ids[idx])

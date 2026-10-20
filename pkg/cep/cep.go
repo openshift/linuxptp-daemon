@@ -25,9 +25,7 @@ const apiBase = "/api/ocloudNotifications/v2/"
 const subscriptionsPath = "subscriptions"
 const publishersPath = "publishers"
 
-// supportedResourceSuffixes are the O-RAN resource addresses this node can produce notifications
-// for (the resources emitted by oranMapping). A subscription's ResourceAddress must end with one of
-// these; otherwise the resource is not available on this node.
+// supportedResourceSuffixes are the O-RAN resource suffixes this node can produce notifications for.
 var supportedResourceSuffixes = []ptp.EventResource{
 	ptp.PtpLockState,
 	ptp.OsClockSyncState,
@@ -38,10 +36,19 @@ var supportedResourceSuffixes = []ptp.EventResource{
 	ptp.SyncStatusState,
 }
 
-// isSupportedResource reports whether the given ResourceAddress maps to a resource this node offers.
-func isSupportedResource(resource string) bool {
+// publishableResources returns the full, node-scoped resource addresses this node publishes.
+func (l *CloudEventProxy) publishableResources() []string {
+	out := make([]string, 0, len(supportedResourceSuffixes))
 	for _, suffix := range supportedResourceSuffixes {
-		if strings.HasSuffix(resource, string(suffix)) {
+		out = append(out, path.Join("/cluster/node", l.nodeName, string(suffix)))
+	}
+	return out
+}
+
+// isPublishedResource reports whether the ResourceAddress exactly matches a resource this node publishes
+func (l *CloudEventProxy) isPublishedResource(resource string) bool {
+	for _, r := range l.publishableResources() {
+		if resource == r {
 			return true
 		}
 	}
@@ -356,12 +363,10 @@ func (l *CloudEventProxy) publishersHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	node := l.nodeName
-	resp := make([]publisherResponse, 0, len(supportedResourceSuffixes))
-	for _, suffix := range supportedResourceSuffixes {
-		resp = append(resp, publisherResponse{
-			Resource: path.Join("/cluster/node", node, string(suffix)),
-		})
+	resources := l.publishableResources()
+	resp := make([]publisherResponse, 0, len(resources))
+	for _, r := range resources {
+		resp = append(resp, publisherResponse{Resource: r})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -484,18 +489,15 @@ func (l *CloudEventProxy) handleCreateSubscription(w http.ResponseWriter, r *htt
 		writeProblem(w, http.StatusBadRequest, "invalid EndpointUri")
 		return
 	}
-	// The resource must be one this node actually offers (spec: 404 when not available).
-	if !isSupportedResource(req.Resource) {
+	if !l.isPublishedResource(req.Resource) {
 		writeProblem(w, http.StatusNotFound, "ResourceAddress is not available on this node")
 		return
 	}
-	// Reject duplicates: a subscription for this resource+endpoint already exists (spec: 409).
-	if _, exists := l.pubSub.FindByResourceEndpoint(req.Resource, req.EndpointURI); exists {
+	id, existed := l.pubSub.Subscribe(req.Resource, req.EndpointURI)
+	if existed {
 		writeProblem(w, http.StatusConflict, "subscription resource already exists")
 		return
 	}
-
-	id := l.pubSub.Subscribe(req.Resource, req.EndpointURI)
 
 	// Trigger the initial status notification (spec: "shall be triggered" on create). Best-effort:
 	// delivery failures are logged but do not fail creation. Nothing is sent if no state is cached yet.
