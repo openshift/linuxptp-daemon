@@ -99,19 +99,44 @@ func TestResolveProfileInterfaces_InterfaceField(t *testing.T) {
 	}
 }
 
-func TestResolveProfileInterfaces_Phc2sysOpts(t *testing.T) {
-	r := NewInterfaceResolverWithInterfaces([]string{testIfNew, testIf2New})
-	name := testProfile
-	opts := "-r -n 24 -N 8 -R 16 -u 0 -m -s " + testIfOld + " -i " + testIfOld + " -c " + testIf2Old
-	profile := &ptpv1.PtpProfile{
-		Name:        &name,
-		Phc2sysOpts: &opts,
+func TestResolveProfileInterfaces_ProcessOpts(t *testing.T) {
+	tests := []struct {
+		name string
+		opts string
+		want string
+		set  func(*ptpv1.PtpProfile, *string)
+	}{
+		{
+			name: "phc2sys",
+			opts: "-r -n 24 -N 8 -R 16 -u 0 -m -s " + testIfOld + " -i " + testIfOld + " -c " + testIf2Old,
+			want: "-r -n 24 -N 8 -R 16 -u 0 -m -s " + testIfNew + " -i " + testIfNew + " -c " + testIf2New,
+			set:  func(p *ptpv1.PtpProfile, opts *string) { p.Phc2sysOpts = opts },
+		},
+		{
+			name: "ptp4l",
+			opts: "-2 -i " + testIfOld + " -i " + testIf2Old + " -m",
+			want: "-2 -i " + testIfNew + " -i " + testIf2New + " -m",
+			set:  func(p *ptpv1.PtpProfile, opts *string) { p.Ptp4lOpts = opts },
+		},
+		{
+			name: "ts2phc",
+			opts: "-s generic -c " + testIfOld + " -s " + testIf2Old + " -c /dev/ptp0 -m",
+			want: "-s generic -c " + testIfNew + " -s " + testIf2New + " -c /dev/ptp0 -m",
+			set:  func(p *ptpv1.PtpProfile, opts *string) { p.Ts2PhcOpts = opts },
+		},
 	}
-	r.ResolveProfileInterfaces(profile)
-
-	expected := "-r -n 24 -N 8 -R 16 -u 0 -m -s " + testIfNew + " -i " + testIfNew + " -c " + testIf2New
-	if *profile.Phc2sysOpts != expected {
-		t.Errorf("expected %q, got %q", expected, *profile.Phc2sysOpts)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewInterfaceResolverWithInterfaces([]string{testIfNew, testIf2New})
+			name := testProfile
+			opts := tt.opts
+			profile := &ptpv1.PtpProfile{Name: &name}
+			tt.set(profile, &opts)
+			r.ResolveProfileInterfaces(profile)
+			if opts != tt.want {
+				t.Errorf("expected %q, got %q", tt.want, opts)
+			}
+		})
 	}
 }
 

@@ -149,7 +149,13 @@ func (r *InterfaceResolver) ResolveProfileInterfaces(profile *ptpv1.PtpProfile) 
 	// after parsing, inside applyNodePtpProfile — not here.
 
 	if profile.Phc2sysOpts != nil {
-		resolvePhc2sysOpts(r, profile.Phc2sysOpts, profileName)
+		resolveProcessOpts(r, profile.Phc2sysOpts, profileName, "Phc2sysOpts", []string{"-s", "-i", "-c"})
+	}
+	if profile.Ptp4lOpts != nil {
+		resolveProcessOpts(r, profile.Ptp4lOpts, profileName, "Ptp4lOpts", []string{"-i"})
+	}
+	if profile.Ts2PhcOpts != nil {
+		resolveProcessOpts(r, profile.Ts2PhcOpts, profileName, "Ts2PhcOpts", []string{"-s", "-c"})
 	}
 
 	if profile.PtpSettings != nil {
@@ -159,17 +165,15 @@ func (r *InterfaceResolver) ResolveProfileInterfaces(profile *ptpv1.PtpProfile) 
 	resolvePluginDevices(r, profile, profileName)
 }
 
-var phc2sysFlags = []string{"-s", "-i", "-c"}
-
-func resolvePhc2sysOpts(r *InterfaceResolver, opts *string, profileName string) {
+func resolveProcessOpts(r *InterfaceResolver, opts *string, profileName, fieldName string, flags []string) {
 	args := strings.Fields(*opts)
 	changed := false
 	for i := 0; i+1 < len(args); i++ {
-		if !slices.Contains(phc2sysFlags, args[i]) {
+		if !slices.Contains(flags, args[i]) {
 			continue
 		}
 		if resolved, remapped := r.Resolve(args[i+1]); remapped {
-			glog.Infof("Profile %s: Phc2sysOpts %s %q -> %q", profileName, args[i], args[i+1], resolved)
+			glog.Infof("Profile %s: %s %s %q -> %q", profileName, fieldName, args[i], args[i+1], resolved)
 			args[i+1] = resolved
 			changed = true
 		}
