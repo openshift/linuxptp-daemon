@@ -205,6 +205,9 @@ func TestIntegrationHealthCheck(t *testing.T) {
 	assert.Equal(t, "OK", string(body))
 }
 
+// TestIntegrationEventDelivery covers the Status Notifications API (O-RAN spec v04.00 §5.1.1): on a
+// resource state change the producer POSTs the event notification to the consumer's subscribed
+// endpoint.
 func TestIntegrationEventDelivery(t *testing.T) {
 	t.Run("subscriber receives matching events", func(t *testing.T) {
 		var mu sync.Mutex
@@ -286,6 +289,11 @@ func TestIntegrationEventDelivery(t *testing.T) {
 	})
 }
 
+// TestIntegrationSubscriptionAPI exercises the Subscription API from the O-RAN O-Cloud Notification
+// API spec v04.00:
+//   - POST /subscriptions -> 201 and GET /subscriptions -> 200 (§4.1.2, Table 3 & Table 7)
+//   - GET /subscriptions/{id} -> 200 / 404 (§4.1.3, Table 16)
+//   - DELETE /subscriptions/{id} -> 204 (§4.1.3, Table 13)
 func TestIntegrationSubscriptionAPI(t *testing.T) {
 	t.Run("CRUD lifecycle", func(t *testing.T) {
 		cache := NewEventCache("worker-0")
@@ -312,7 +320,7 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 		assert.NotEmpty(t, sub.ID)
 		assert.Equal(t, testPTPLockState, sub.Resource)
 		assert.Equal(t, "http://localhost:9999/event", sub.EndpointURI)
-		// UriLocation is mandatory per the O-RAN O-Cloud Notification API spec and must point at
+		// UriLocation is a mandatory SubscriptionInfo field (spec §7.1.1, Table 30) and must point at
 		// the individual subscription resource.
 		assert.Equal(t, testBaseURL+"/api/ocloudNotifications/v2/subscriptions/"+sub.ID, sub.URILocation)
 
@@ -424,6 +432,9 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 	})
 }
 
+// TestSubscriptionValidation covers the POST /subscriptions response codes defined in the O-RAN
+// O-Cloud Notification API spec v04.00 §4.1.2, Table 7: 400 (bad request), 404 (resource not
+// available on this node), and 201 (created).
 func TestSubscriptionValidation(t *testing.T) {
 	cache := NewEventCache("worker-0")
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
@@ -483,6 +494,9 @@ func TestSubscriptionValidation(t *testing.T) {
 	}
 }
 
+// TestIntegrationCurrentState covers the Event Pull Status Notifications API: GET
+// /{ResourceAddress}/CurrentState -> 200 with the current Event, or 404 when the resource is not
+// available on this node (O-RAN spec v04.00 §6.1.1, Table 25 & Table 29).
 func TestIntegrationCurrentState(t *testing.T) {
 	cache := NewEventCache("worker-0")
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
@@ -529,6 +543,7 @@ func TestIntegrationCurrentState(t *testing.T) {
 	resp.Body.Close()
 }
 
+// GET /publishers is a redhat-cne "(Extensions to O-RAN API)" endpoint, not an O-RAN spec requirement
 func TestGetPublishers(t *testing.T) {
 	cache := NewEventCache("worker-0")
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
@@ -561,8 +576,9 @@ func TestGetPublishers(t *testing.T) {
 	assert.True(t, addrs[testPTPLockState], "expected %s among publishers", testPTPLockState)
 }
 
+// O-RAN spec v04.00 §3.1.2 requires error responses to use the RFC 7807 Problem Details object,
+// signalled by the "application/problem+json" content type.
 func TestErrorResponsesUseProblemJSON(t *testing.T) {
-	// The O-RAN spec (§3.1.2) requires errors to be RFC 7807 "application/problem+json".
 	cache := NewEventCache("worker-0")
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 	require.NoError(t, err)
@@ -603,6 +619,8 @@ func TestErrorResponsesUseProblemJSON(t *testing.T) {
 	}
 }
 
+// TestSubscriptionDuplicateConflict covers the 409 ("subscription resource already exists") response
+// for POST /subscriptions (O-RAN spec v04.00 §4.1.2, Table 7).
 func TestSubscriptionDuplicateConflict(t *testing.T) {
 	cache := NewEventCache("worker-0")
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
@@ -627,9 +645,10 @@ func TestSubscriptionDuplicateConflict(t *testing.T) {
 	resp.Body.Close()
 }
 
+// Scopes the 409 contract (O-RAN spec v04.00 §4.1.2, Table 7): duplicate detection keys on
+// resource AND endpoint, so different clients (different endpoints) subscribing to the same
+// resource must both succeed, not get a 409.
 func TestSubscriptionDifferentClientsSameResource(t *testing.T) {
-	// Duplicate detection keys on resource AND endpoint: different clients (different endpoints)
-	// subscribing to the same resource must both succeed, not get a 409.
 	cache := NewEventCache("worker-0")
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
 	require.NoError(t, err)
@@ -656,6 +675,9 @@ func TestSubscriptionDifferentClientsSameResource(t *testing.T) {
 	assert.Len(t, subs, 2)
 }
 
+// TestSubscriptionInitialNotification covers the O-RAN spec v04.00 §4.1.2 requirement that creating a
+// subscription triggers an initial status notification to the consumer's endpoint ("An initial status
+// notification for the type of event ... shall be triggered").
 func TestSubscriptionInitialNotification(t *testing.T) {
 	cache := NewEventCache("worker-0")
 	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))

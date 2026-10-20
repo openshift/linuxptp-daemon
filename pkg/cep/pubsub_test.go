@@ -43,9 +43,6 @@ func testPubSub(t *testing.T, writers map[string]*bytes.Buffer) *PubSub {
 	})
 }
 
-func TestSubscribeUniqueConcurrent(t *testing.T) {
-}
-
 func TestSubscribe(t *testing.T) {
 	t.Run("single subscription", func(t *testing.T) {
 		ps := testPubSub(t, nil)
