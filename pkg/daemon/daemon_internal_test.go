@@ -2644,6 +2644,53 @@ func TestPtp4lConf_ResolveInterfaceNames(t *testing.T) {
 	})
 }
 
+func TestChronydConf_ResolveInterfaceNames(t *testing.T) {
+	conf := "binddevice ens5f0\nbindacqdevice ens5f1\nhwtimestamp ens5f0 minpoll 0\nhwtimestamp *\nallow 10.0.0.0/8"
+	profile := &ptpv1.PtpProfile{ChronydConf: &conf}
+	resolver := network.NewInterfaceResolverWithInterfaces([]string{"ens5f0np0", "ens5f1np1", "*np0"})
+	p := &ptpProcess{ExecProcess: ExecProcess{name: chronydProcessName}}
+	output, _, err := p.loadProcessConf(ptpProcessEnv{
+		nodeProfile: profile,
+		dn:          &Daemon{interfaceResolver: resolver},
+	})
+	require.NoError(t, err)
+	got, _ := output.RenderPtp4lConf()
+	lines := strings.Split(got, "\n")
+	for _, line := range []string{
+		"binddevice ens5f0np0",
+		"bindacqdevice ens5f1np1",
+		"hwtimestamp ens5f0np0 minpoll 0",
+		"hwtimestamp *",
+		"allow 10.0.0.0/8",
+	} {
+		assert.Contains(t, lines, line)
+	}
+}
+
+func TestTs2PhcConf_ResolveTodSource(t *testing.T) {
+	for _, tt := range []struct{ source, want string }{
+		{"ens5f0", "ens5f0np0"},
+		{"generic", "generic"},
+		{"nmea", "nmea"},
+		{"/dev/ptp0", "/dev/ptp0"},
+	} {
+		t.Run(tt.source, func(t *testing.T) {
+			conf := "[global]\nts2phc.tod_source " + tt.source + "\n[nmea]\nts2phc.master 1"
+			profile := &ptpv1.PtpProfile{Ts2PhcConf: &conf}
+			resolver := network.NewInterfaceResolverWithInterfaces([]string{"ens5f0np0", "genericnp0", "nmeanp0"})
+			p := &ptpProcess{ExecProcess: ExecProcess{name: ts2phcProcessName}}
+			output, _, err := p.loadProcessConf(ptpProcessEnv{
+				nodeProfile: profile,
+				dn:          &Daemon{interfaceResolver: resolver},
+			})
+			require.NoError(t, err)
+			got, _ := output.RenderPtp4lConf()
+			assert.Contains(t, strings.Split(got, "\n"), "ts2phc.tod_source "+tt.want)
+			assert.Contains(t, got, "[nmea]")
+		})
+	}
+}
+
 func TestUpdateClockStateMetrics(t *testing.T) {
 	origNodeName := NodeName
 	defer func() { NodeName = origNodeName }()

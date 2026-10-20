@@ -155,7 +155,7 @@ func (r *InterfaceResolver) ResolveProfileInterfaces(profile *ptpv1.PtpProfile) 
 		resolveProcessOpts(r, profile.Ptp4lOpts, profileName, "Ptp4lOpts", []string{"-i"})
 	}
 	if profile.Ts2PhcOpts != nil {
-		resolveProcessOpts(r, profile.Ts2PhcOpts, profileName, "Ts2PhcOpts", []string{"-s", "-c"})
+		resolveProcessOpts(r, profile.Ts2PhcOpts, profileName, "Ts2PhcOpts", []string{"-s", "-c", "--ts2phc.tod_source"})
 	}
 
 	if profile.PtpSettings != nil {
@@ -168,8 +168,22 @@ func (r *InterfaceResolver) ResolveProfileInterfaces(profile *ptpv1.PtpProfile) 
 func resolveProcessOpts(r *InterfaceResolver, opts *string, profileName, fieldName string, flags []string) {
 	args := strings.Fields(*opts)
 	changed := false
-	for i := 0; i+1 < len(args); i++ {
-		if !slices.Contains(flags, args[i]) {
+	for i := 0; i < len(args); i++ {
+		if flag, value, inline := strings.Cut(args[i], "="); inline && strings.HasPrefix(flag, "--") && slices.Contains(flags, flag) {
+			if isNonInterfaceProcessArg(fieldName, flag, value) {
+				continue
+			}
+			if resolved, remapped := r.Resolve(value); remapped {
+				glog.Infof("Profile %s: %s %s %q -> %q", profileName, fieldName, flag, value, resolved)
+				args[i] = flag + "=" + resolved
+				changed = true
+			}
+			continue
+		}
+		if i+1 == len(args) || !slices.Contains(flags, args[i]) {
+			continue
+		}
+		if isNonInterfaceProcessArg(fieldName, args[i], args[i+1]) {
 			continue
 		}
 		if resolved, remapped := r.Resolve(args[i+1]); remapped {
@@ -181,6 +195,17 @@ func resolveProcessOpts(r *InterfaceResolver, opts *string, profileName, fieldNa
 	if changed {
 		*opts = strings.Join(args, " ")
 	}
+}
+
+func isNonInterfaceProcessArg(fieldName, flag, value string) bool {
+	if strings.HasPrefix(value, "/") {
+		return true
+	}
+	if fieldName == "Phc2sysOpts" && strings.HasPrefix(value, "CLOCK_") {
+		return true
+	}
+	return fieldName == "Ts2PhcOpts" && (flag == "-s" || flag == "--ts2phc.tod_source") &&
+		(value == "generic" || value == "nmea")
 }
 
 func resolvePtpSettings(r *InterfaceResolver, settings map[string]string, profileName string) {

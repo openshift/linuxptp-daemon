@@ -120,8 +120,8 @@ func TestResolveProfileInterfaces_ProcessOpts(t *testing.T) {
 		},
 		{
 			name: "ts2phc",
-			opts: "-s generic -c " + testIfOld + " -s " + testIf2Old + " -c /dev/ptp0 -m",
-			want: "-s generic -c " + testIfNew + " -s " + testIf2New + " -c /dev/ptp0 -m",
+			opts: "-s generic -c " + testIfOld + " -s " + testIf2Old + " -c /dev/ptp0 --ts2phc.tod_source " + testIfOld + " -m --ts2phc.tod_source=" + testIf2Old,
+			want: "-s generic -c " + testIfNew + " -s " + testIf2New + " -c /dev/ptp0 --ts2phc.tod_source " + testIfNew + " -m --ts2phc.tod_source=" + testIf2New,
 			set:  func(p *ptpv1.PtpProfile, opts *string) { p.Ts2PhcOpts = opts },
 		},
 	}
@@ -137,6 +137,32 @@ func TestResolveProfileInterfaces_ProcessOpts(t *testing.T) {
 				t.Errorf("expected %q, got %q", tt.want, opts)
 			}
 		})
+	}
+}
+
+func TestResolveProfileInterfaces_Ts2PhcNamedSources(t *testing.T) {
+	r := NewInterfaceResolverWithInterfaces([]string{"genericnp0", "nmeanp0"})
+	name := testProfile
+	opts := "-s generic --ts2phc.tod_source nmea --ts2phc.tod_source=generic"
+	profile := &ptpv1.PtpProfile{Name: &name, Ts2PhcOpts: &opts}
+	r.ResolveProfileInterfaces(profile)
+	if opts != "-s generic --ts2phc.tod_source nmea --ts2phc.tod_source=generic" {
+		t.Errorf("expected named sources unchanged, got %q", opts)
+	}
+}
+
+func TestResolveProfileInterfaces_ProcessDeviceAndClockNames(t *testing.T) {
+	r := NewInterfaceResolverWithInterfaces([]string{testIfNew, "/dev/ptp0np0", "CLOCK_REALTIMEnp0"})
+	name := testProfile
+	phc2sysOpts := "-s /dev/ptp0 -c CLOCK_REALTIME -i " + testIfOld
+	ts2phcOpts := "-c /dev/ptp0 --ts2phc.tod_source=/dev/ptp0"
+	profile := &ptpv1.PtpProfile{Name: &name, Phc2sysOpts: &phc2sysOpts, Ts2PhcOpts: &ts2phcOpts}
+	r.ResolveProfileInterfaces(profile)
+	if want := "-s /dev/ptp0 -c CLOCK_REALTIME -i " + testIfNew; phc2sysOpts != want {
+		t.Errorf("Phc2sysOpts: expected %q, got %q", want, phc2sysOpts)
+	}
+	if want := "-c /dev/ptp0 --ts2phc.tod_source=/dev/ptp0"; ts2phcOpts != want {
+		t.Errorf("Ts2PhcOpts: expected %q, got %q", want, ts2phcOpts)
 	}
 }
 
