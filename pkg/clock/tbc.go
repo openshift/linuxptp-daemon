@@ -227,7 +227,7 @@ func (c *TBC) updateState() bool {
 	glog.V(14).Info("current BC state: ", c.syncState.State)
 	switch c.syncState.State {
 	case event.PTP_NOTSET, event.PTP_FREERUN:
-		if !c.isSourceLostBC() && c.inSyncCondition() {
+		if !c.freeRunCondition() && !c.isSourceLostBC() && c.inSyncCondition() {
 			c.syncState.State = event.PTP_LOCKED
 			glog.Info("BC FSM: FREERUN to LOCKED")
 			c.leadingClockData.lastInSpec = true
@@ -676,6 +676,13 @@ func (c *TBC) freeRunCondition() bool {
 			if math.Abs(float64(ptp4lAvgOffset)) > float64(c.leadingClockData.toFreeRunThreshold) {
 				glog.Infof("free-run condition on PTP4l, avg offset %d", ptp4lAvgOffset)
 				return true
+			}
+		case event.TS2PHCProcessName:
+			for _, dd := range d.Details {
+				if dd.State == event.PTP_FREERUN {
+					glog.Infof("free-run condition on ts2phc interface %s", dd.IFace)
+					return true
+				}
 			}
 		}
 	}
