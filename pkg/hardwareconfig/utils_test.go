@@ -55,13 +55,101 @@ func SetupMockDpllPinsFromFileForTests() error {
 	return nil
 }
 
-// CreateMockDpllPinsGetterFromFile creates a DpllPinsGetter that loads test data from file (test-only)
+// DoDeviceGetReplyHR represents the human-readable DPLL device dump format,
+// mirroring what a DPLL device dump captured from a real system looks like
+type DoDeviceGetReplyHR struct {
+	ID         uint32 `json:"id"`
+	ModuleName string `json:"moduleName"`
+	ClockID    string `json:"clockId"`
+	Type       string `json:"type"`
+}
+
+// convertDpllType converts a string DPLL device type ("eec"/"pps") to its numeric value
+func convertDpllType(typeStr string) (uint32, error) {
+	switch typeStr {
+	case "pps":
+		return dpll.DpllTypePPS, nil
+	case "eec":
+		return dpll.DpllTypeEEC, nil
+	default:
+		return 0, fmt.Errorf("invalid DPLL device type: %s", typeStr)
+	}
+}
+
+// devicesFileForPinsFile returns the paired device dump path for a pins dump:
+// <name>.json pairs with <name>-devices.json in the same directory. Pin dumps do
+// not carry the parent device type, so each pins dump must be paired with a
+// DPLL device dump captured from the same system.
+func devicesFileForPinsFile(pinsFile string) string {
+	return strings.TrimSuffix(pinsFile, ".json") + "-devices.json"
+}
+
+// loadTestDevicesFromFile loads a paired DPLL device dump (test-only)
+func loadTestDevicesFromFile(filename string) ([]*dpll.DoDeviceGetReply, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	var devicesHR []DoDeviceGetReplyHR
+	err = json.Unmarshal(data, &devicesHR)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse device dump %s: %v", filename, err)
+	}
+	devices := make([]*dpll.DoDeviceGetReply, 0, len(devicesHR))
+	for _, hr := range devicesHR {
+		deviceType, typeErr := convertDpllType(hr.Type)
+		if typeErr != nil {
+			return nil, fmt.Errorf("%s: device %d: %v", filename, hr.ID, typeErr)
+		}
+		devices = append(devices, &dpll.DoDeviceGetReply{
+			ID:         hr.ID,
+			ModuleName: hr.ModuleName,
+			ClockID:    parseClockID(hr.ClockID),
+			Type:       deviceType,
+		})
+	}
+	return devices, nil
+}
+
+// CreateMockDpllPinsGetterFromFile creates a DpllPinsGetter that loads test data
+// from a pins dump file (test-only). The pins dump must be paired with a DPLL
+// device dump at <name>-devices.json (same directory), which supplies the parent
+// device types (EEC/PPS) the same way the real pin cache gets them from
+// DumpDeviceGet; the pairing is validated so a stale or partial device dump
+// fails loudly instead of silently disabling EEC/PPS matching.
 func CreateMockDpllPinsGetterFromFile(filename string) (DpllPinsGetter, error) {
 	pins, err := loadTestPinsFromFile(filename)
 	if err != nil {
 		return nil, err
 	}
-	return CreateMockDpllPinsGetter(pins, nil), nil
+	devicesFile := devicesFileForPinsFile(filename)
+	devices, err := loadTestDevicesFromFile(devicesFile)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("pins dump %s has no paired device dump at %s: capture the DPLL device dump from the same system (see the existing *-devices.json files for the format)", filename, devicesFile)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to load device dump paired with %s: %v", filename, err)
+	}
+
+	// The paired device dump must describe every parent device the pins
+	// reference, otherwise EEC/PPS matching would silently not work for
+	// the missing ones
+	knownDevices := make(map[uint32]bool, len(devices))
+	for _, device := range devices {
+		knownDevices[device.ID] = true
+	}
+	for _, pin := range pins {
+		for _, parent := range pin.ParentDevice {
+			if !knownDevices[parent.ParentID] {
+				return nil, fmt.Errorf("device dump %s does not describe parent device %d referenced by pin %d in %s",
+					devicesFile, parent.ParentID, pin.ID, filename)
+			}
+		}
+	}
+
+	return func() (*PinCache, error) {
+		return buildPinCacheFromPins(pins, devices...), nil
+	}, nil
 }
 
 // SetupMockDpllPinsForTests is a backwards-compatible helper used by tests in other packages.

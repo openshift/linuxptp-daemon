@@ -53,6 +53,36 @@ func GetDpllPins() (*PinCache, error) {
 // PinCache is a cache of DPLL pins with O1 access, hashed by clock ID and board label
 type PinCache struct {
 	Pins map[uint64]map[string]dpll.PinInfo
+
+	// parentDeviceTypes maps a DPLL parent device ID to its device type
+	// (dpll.DpllTypeEEC / dpll.DpllTypePPS). The pin dump does not carry the
+	// parent device type, so it is resolved from a DPLL device dump when the
+	// cache is built, allowing EEC/PPS parent devices to be matched by their
+	// actual device type instead of heuristics.
+	parentDeviceTypes map[uint32]uint32
+}
+
+// ParentDeviceType returns the DPLL device type of the given parent device ID,
+// as reported by the DPLL device dump the cache was built with. The second
+// return value reports whether the parent device is known.
+func (pc *PinCache) ParentDeviceType(parentID uint32) (uint32, bool) {
+	if pc == nil || pc.parentDeviceTypes == nil {
+		return 0, false
+	}
+	parentType, found := pc.parentDeviceTypes[parentID]
+	return parentType, found
+}
+
+// setParentDeviceTypes fills in the parent device types from a DPLL device dump.
+func (pc *PinCache) setParentDeviceTypes(devices []*dpll.DoDeviceGetReply) {
+	parentDeviceTypes := make(map[uint32]uint32, len(devices))
+	for _, device := range devices {
+		if device == nil {
+			continue
+		}
+		parentDeviceTypes[device.ID] = device.Type
+	}
+	pc.parentDeviceTypes = parentDeviceTypes
 }
 
 // ClockIDResolver resolves clock ID from network interface
@@ -578,7 +608,13 @@ func getRealDpllPins() (*PinCache, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to dump DPLL pins: %v", err)
 	}
-	return buildPinCacheFromPins(dpllPins), nil
+	// The pin dump does not carry the parent device type; a device dump is
+	// needed so EEC/PPS parent devices can be matched by their actual type
+	dpllDevices, err := conn.DumpDeviceGet()
+	if err != nil {
+		return nil, fmt.Errorf("failed to dump DPLL devices: %v", err)
+	}
+	return buildPinCacheFromPins(dpllPins, dpllDevices...), nil
 }
 
 // CreateMockDpllPinsGetter creates a DpllPinsGetter function that returns mock pins
@@ -591,9 +627,12 @@ func CreateMockDpllPinsGetter(pins []*dpll.PinInfo, returnError error) DpllPinsG
 	}
 }
 
-func buildPinCacheFromPins(pins []*dpll.PinInfo) *PinCache {
+func buildPinCacheFromPins(pins []*dpll.PinInfo, devices ...*dpll.DoDeviceGetReply) *PinCache {
 	cache := &PinCache{
 		Pins: make(map[uint64]map[string]dpll.PinInfo),
+	}
+	if len(devices) > 0 {
+		cache.setParentDeviceTypes(devices)
 	}
 	for _, pin := range pins {
 		if pin == nil {
