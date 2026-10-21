@@ -851,6 +851,7 @@ func (d *DpllConfig) sendDpllEvent() {
 			event.InSyncConditionTimes:     d.inSyncConditionTimes,
 			event.ToFreeRunThreshold:       d.LocalMaxHoldoverOffSet,
 			event.MaxInSpecOffset:          d.MaxInSpecOffset,
+			event.LocalHoldoverTimeout:     d.LocalHoldoverTimeout,
 		},
 		ClockType:          d.processConfig.ClockType,
 		Time:               time.Now().UnixMilli(),
