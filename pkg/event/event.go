@@ -870,6 +870,9 @@ func (e *EventHandler) ProcessEvents() {
 				case <-e.closeCh:
 					return
 				case <-classTicker.C: // send clock class event 60 secs interval
+					if !e.stdoutToSocket {
+						continue
+					}
 					// Snapshot the clock sync state under lock to avoid concurrent map access
 					e.Lock()
 					clkSnapshot := make(map[string]fbprotocol.ClockClass, len(e.clkSyncState))

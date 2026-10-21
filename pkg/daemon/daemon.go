@@ -957,7 +957,10 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.hwconfigsMu.Unlock()
 	*dn.refreshNodePtpDevice = true
 	dn.readyTracker.setConfig(true)
-	return dn.sendSidecarRestart()
+	if dn.stdoutToSocket {
+		return dn.sendSidecarRestart()
+	}
+	return nil
 }
 
 func reconcileRelatedProfiles(profiles []ptpv1.PtpProfile) map[string]int {
