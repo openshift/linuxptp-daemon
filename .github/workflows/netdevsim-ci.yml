@@ -39,11 +39,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y dkms gcc make ethtool linuxptp \
-            linux-headers-$(uname -r) \
-            linux-modules-extra-$(uname -r) || {
-            echo "::error::Could not install kernel headers/modules for $(uname -r)"
-            exit 1
-          }
+            linux-headers-$(uname -r)
+          # gnss.ko lives in linux-modules-extra on Azure kernels, but the
+          # package is not published for every runner ABI — install when
+          # available, skip otherwise.
+          if apt-cache show linux-modules-extra-$(uname -r) >/dev/null 2>&1; then
+            sudo apt-get install -y linux-modules-extra-$(uname -r)
+          else
+            echo "::warning::linux-modules-extra-$(uname -r) not available — continuing without it"
+          fi
 
       - name: Install DKMS source tree
         run: |
@@ -251,9 +255,15 @@ jobs:
 
       - name: Install DKMS dependencies
         run: |
+          sudo apt-get update
           sudo apt-get install -y dkms gcc make ethtool linuxptp \
-            linux-headers-$(uname -r) \
-            linux-modules-extra-$(uname -r)
+            linux-headers-$(uname -r)
+          # Best-effort: linux-modules-extra is not published for every ABI.
+          if apt-cache show linux-modules-extra-$(uname -r) >/dev/null 2>&1; then
+            sudo apt-get install -y linux-modules-extra-$(uname -r)
+          else
+            echo "::warning::linux-modules-extra-$(uname -r) not available — continuing without it"
+          fi
 
       - name: Clone and install DKMS modules
         run: |
