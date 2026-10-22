@@ -170,6 +170,7 @@ func (c *TBC) evaluateState() {
 		c.sendIPC(ipc.Message{
 			Type:    ipc.TypeClockClass,
 			Profile: profile,
+			IFace:   c.syncState.LeadingIFace,
 			Values:  ipc.ClockClassValue{ClockClass: uint8(c.syncState.ClockClass)},
 		})
 	}
