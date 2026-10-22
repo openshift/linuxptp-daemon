@@ -3,9 +3,11 @@ package cep
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -21,6 +23,37 @@ import (
 
 const apiBase = "/api/ocloudNotifications/v2/"
 const subscriptionsPath = "subscriptions"
+const publishersPath = "publishers"
+
+// supportedResourceSuffixes are the O-RAN resource suffixes this node can produce notifications for.
+var supportedResourceSuffixes = []ptp.EventResource{
+	ptp.PtpLockState,
+	ptp.OsClockSyncState,
+	ptp.PtpClockClass,
+	ptp.GnssSyncStatus,
+	ptp.SynceLockState,
+	ptp.SynceClockQuality,
+	ptp.SyncStatusState,
+}
+
+// publishableResources returns the full, node-scoped resource addresses this node publishes.
+func (l *CloudEventProxy) publishableResources() []string {
+	out := make([]string, 0, len(supportedResourceSuffixes))
+	for _, suffix := range supportedResourceSuffixes {
+		out = append(out, path.Join("/cluster/node", l.nodeName, string(suffix)))
+	}
+	return out
+}
+
+// isPublishedResource reports whether the ResourceAddress exactly matches a resource this node publishes
+func (l *CloudEventProxy) isPublishedResource(resource string) bool {
+	for _, r := range l.publishableResources() {
+		if resource == r {
+			return true
+		}
+	}
+	return false
+}
 
 // oranMapping maps IPC events to the appropriate CloudEvent
 func oranMapping(ipcType string) (eventType ptp.EventType, source ptp.EventResource, ok bool) {
@@ -142,15 +175,22 @@ func setDataValue(e *event.Event, dv event.DataValue) bool {
 type CloudEventProxy struct {
 	cache  *EventCache
 	pubSub *PubSub
+	// baseURL is the externally reachable root of this API server (scheme://host:port, no path).
+	// It is fixed at startup and used to build the mandatory O-RAN "UriLocation" field, which must
+	// be a stable, server-determined address rather than one derived from a client request.
+	baseURL  string
+	nodeName string
 }
 
-// NewCloudEventProxy creates a CloudEventProxy with the given cache and pubsub.
-func NewCloudEventProxy(cache *EventCache, pubsub *PubSub) *CloudEventProxy {
-	return &CloudEventProxy{cache: cache, pubSub: pubsub}
+// NewCloudEventProxy creates a CloudEventProxy with the given cache and pubsub. baseURL is the
+// externally reachable root of the server (scheme://host:port) used to build subscription
+// UriLocation values.
+func NewCloudEventProxy(cache *EventCache, pubsub *PubSub, nodeName string, baseURL string) *CloudEventProxy {
+	return &CloudEventProxy{cache: cache, pubSub: pubsub, nodeName: nodeName, baseURL: baseURL}
 }
 
-// Listen reads from r, and handles events written to the stream.
-func (l *CloudEventProxy) Listen(r io.Reader) {
+// handleIncomingEvents reads from r until EOF or error.
+func (l *CloudEventProxy) handleIncomingEvents(r io.Reader) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -198,51 +238,139 @@ func (l *CloudEventProxy) Handler() http.Handler {
 		mux.HandleFunc(subPattern, l.subscriptionHandler)
 		mux.HandleFunc(subPattern+"/", l.subscriptionHandler)
 	}
+	mux.HandleFunc(apiBase+publishersPath, l.publishersHandler)
 	mux.HandleFunc(apiBase, l.currentStateHandler)
 	return mux
 }
 
-// ListenAndServe starts the HTTP API server on the given port.
-func (l *CloudEventProxy) ListenAndServe(port int) {
+// AcceptDaemonConnections wait for a new connection on the listener and handles new events
+func (l *CloudEventProxy) AcceptDaemonConnections(ctx context.Context, ln net.Listener) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		glog.Infof("waiting for daemon connection on %s", ln.Addr().String())
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			glog.Errorf("accept error: %v", acceptErr)
+			continue
+		}
+
+		glog.Info("daemon connected, requesting current state")
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if encodeErr := ipc.Transmit(conn, ipc.Message{Type: ipc.TypeStatusRequest, Version: ipc.Version}); encodeErr != nil {
+			glog.Errorf("failed to send status_request: %v", encodeErr)
+			conn.Close()
+			continue
+		}
+		connCtx, cancel := context.WithCancel(ctx)
+		go func() { <-connCtx.Done(); conn.Close() }()
+		l.handleIncomingEvents(conn)
+		cancel()
+		glog.Warning("daemon disconnected")
+	}
+}
+
+// ListenAndServe starts the HTTP API server on the given port and blocks until
+// ctx is cancelled, at which point the server is gracefully shut down.
+// If certFile and keyFile are both non-empty, the server uses TLS.
+func (l *CloudEventProxy) ListenAndServe(ctx context.Context, port int, certFile, keyFile string) error {
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
 		ReadHeaderTimeout: 5 * time.Second,
 		Handler:           l.Handler(),
 	}
-	glog.Infof("API server listening on :%d", port)
-	if err := server.ListenAndServe(); err != nil {
-		glog.Errorf("API server error: %v", err)
+	go func() {
+		<-ctx.Done()
+		if err := server.Shutdown(context.Background()); err != nil {
+			glog.Errorf("API server shutdown error: %v", err)
+		}
+	}()
+	if certFile != "" && keyFile != "" {
+		glog.Infof("API server listening on :%d (TLS)", port)
+		if err := server.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+	} else {
+		glog.Infof("API server listening on :%d", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return err
+		}
 	}
+	return nil
+}
+
+// problemDetails is an RFC 7807 problem object. The O-RAN O-Cloud Notification API spec (§3.1.2)
+// requires error responses to be signalled with the "application/problem+json" content type.
+type problemDetails struct {
+	Type   string `json:"type"`
+	Title  string `json:"title"`
+	Status int    `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// writeProblem emits an RFC 7807 error response. Title is the HTTP status phrase (per RFC 7807 §4.2,
+// appropriate when type is "about:blank") and detail carries the human-readable explanation.
+func writeProblem(w http.ResponseWriter, status int, detail string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(problemDetails{
+		Type:   "about:blank",
+		Title:  http.StatusText(status),
+		Status: status,
+		Detail: detail,
+	})
 }
 
 func (l *CloudEventProxy) currentStateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeProblem(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	p := strings.TrimPrefix(r.URL.Path, apiBase)
 	if !strings.HasSuffix(p, "/CurrentState") {
-		http.NotFound(w, r)
+		writeProblem(w, http.StatusNotFound, "not found")
 		return
 	}
 	resource := "/" + strings.TrimSuffix(p, "/CurrentState")
 
 	e, ok := l.cache.GetBySource(resource)
 	if !ok {
-		http.NotFound(w, r)
+		writeProblem(w, http.StatusNotFound, "event notification resource is not available on this node")
 		return
 	}
 
 	ce, err := e.NewCloudEventV2()
 	if err != nil {
 		glog.Errorf("failed to convert event to CloudEvent: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeProblem(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ce)
+}
+
+// publishersHandler serves GET /publishers, the CEPv1 "(Extensions to O-RAN API)" endpoint. It
+// advertises the resources this node publishes (i.e. that can be subscribed to), one entry per
+// supported resource, with only ResourceAddress populated.
+func (l *CloudEventProxy) publishersHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeProblem(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	resources := l.publishableResources()
+	resp := make([]publisherResponse, 0, len(resources))
+	for _, r := range resources {
+		resp = append(resp, publisherResponse{Resource: r})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // --- Subscription HTTP handlers ---
@@ -289,6 +417,27 @@ type subscriptionResponse struct {
 	ID          string `json:"SubscriptionId"`
 	EndpointURI string `json:"EndpointUri"`
 	Resource    string `json:"ResourceAddress"`
+	URILocation string `json:"UriLocation"`
+}
+
+// publisherResponse keeps the CEPv1 publisher schema (which reuses the subscription object shape) so
+// existing clients of the GET /publishers extension still parse the response. CEPv2 publishers are
+// intrinsic to the node rather than created resources, so only ResourceAddress carries a value; the
+// id/endpoint/location fields exist only to preserve the schema and are returned empty.
+type publisherResponse struct {
+	ID          string `json:"SubscriptionId"`
+	EndpointURI string `json:"EndpointUri"`
+	Resource    string `json:"ResourceAddress"`
+	URILocation string `json:"UriLocation"`
+}
+
+// subscriptionURILocation builds the O-RAN "UriLocation" value for a subscription: the absolute
+// URL of the individual subscription resource (.../subscriptions/{id}). Per the O-Cloud
+// Notification API spec (Table 30) this field is mandatory in every SubscriptionInfo response.
+// It is built from the server's configured baseURL so the value is stable and independent of the
+// client's request host.
+func (l *CloudEventProxy) subscriptionURILocation(id string) (string, error) {
+	return url.JoinPath(l.baseURL, apiBase, subscriptionsPath, id)
 }
 
 func (l *CloudEventProxy) subscriptionHandler(w http.ResponseWriter, r *http.Request) {
@@ -311,7 +460,7 @@ func (l *CloudEventProxy) handleSubscriptions(w http.ResponseWriter, r *http.Req
 	case http.MethodDelete:
 		l.handleDeleteSubscriptions(w, r)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeProblem(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -322,33 +471,52 @@ func (l *CloudEventProxy) handleSubscriptionByID(w http.ResponseWriter, r *http.
 	case http.MethodDelete:
 		l.handleDeleteSubscriptionByID(w, id)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeProblem(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
 func (l *CloudEventProxy) handleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 	var req subscriptionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeProblem(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.EndpointURI == "" || req.Resource == "" {
-		http.Error(w, "EndpointUri and ResourceAddress are required", http.StatusBadRequest)
+		writeProblem(w, http.StatusBadRequest, "EndpointUri and ResourceAddress are required")
 		return
 	}
 	if _, err := url.ParseRequestURI(req.EndpointURI); err != nil {
-		http.Error(w, "invalid EndpointUri", http.StatusBadRequest)
+		writeProblem(w, http.StatusBadRequest, "invalid EndpointUri")
+		return
+	}
+	if !l.isPublishedResource(req.Resource) {
+		writeProblem(w, http.StatusNotFound, "ResourceAddress is not available on this node")
+		return
+	}
+	id, existed := l.pubSub.Subscribe(req.Resource, req.EndpointURI)
+	if existed {
+		writeProblem(w, http.StatusConflict, "subscription resource already exists")
 		return
 	}
 
-	id := l.pubSub.Subscribe(req.Resource, req.EndpointURI)
+	// Trigger the initial status notification (spec: "shall be triggered" on create). Best-effort:
+	// delivery failures are logged but do not fail creation. Nothing is sent if no state is cached yet.
+	if e, ok := l.cache.GetBySource(req.Resource); ok {
+		l.pubSub.PublishToID(id, &e)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	uri, err := l.subscriptionURILocation(id)
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "error constructing subscription URI")
+		return
+	}
 	json.NewEncoder(w).Encode(subscriptionResponse{
 		ID:          id,
 		EndpointURI: req.EndpointURI,
 		Resource:    req.Resource,
+		URILocation: uri,
 	})
 }
 
@@ -356,10 +524,16 @@ func (l *CloudEventProxy) handleGetSubscriptions(w http.ResponseWriter, _ *http.
 	subs := l.pubSub.List()
 	resp := make([]subscriptionResponse, 0, len(subs))
 	for _, sub := range subs {
+		uri, err := l.subscriptionURILocation(sub.ID)
+		if err != nil {
+			writeProblem(w, http.StatusInternalServerError, "error constructing subscription URI")
+			return
+		}
 		resp = append(resp, subscriptionResponse{
 			ID:          sub.ID,
 			EndpointURI: sub.Endpoint,
 			Resource:    sub.Resource,
+			URILocation: uri,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -369,20 +543,26 @@ func (l *CloudEventProxy) handleGetSubscriptions(w http.ResponseWriter, _ *http.
 func (l *CloudEventProxy) handleGetSubscriptionByID(w http.ResponseWriter, id string) {
 	sub, ok := l.pubSub.Get(id)
 	if !ok {
-		http.Error(w, "subscription not found", http.StatusNotFound)
+		writeProblem(w, http.StatusNotFound, "subscription not found")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	uri, err := l.subscriptionURILocation(sub.ID)
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "error constructing subscription URI")
+		return
+	}
 	json.NewEncoder(w).Encode(subscriptionResponse{
 		ID:          sub.ID,
 		EndpointURI: sub.Endpoint,
 		Resource:    sub.Resource,
+		URILocation: uri,
 	})
 }
 
 func (l *CloudEventProxy) handleDeleteSubscriptionByID(w http.ResponseWriter, id string) {
 	if !l.pubSub.Unsubscribe(id) {
-		http.Error(w, "subscription not found", http.StatusNotFound)
+		writeProblem(w, http.StatusNotFound, "subscription not found")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -2,6 +2,7 @@ package cep
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"path/filepath"
@@ -31,7 +32,9 @@ func makeTestEvent(source string) *event.Event {
 
 func testPubSub(t *testing.T, writers map[string]*bytes.Buffer) *PubSub {
 	t.Helper()
-	return NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), func(endpoint string) io.Writer {
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	return NewPubSub(d, func(endpoint string) io.Writer {
 		buf := &bytes.Buffer{}
 		if writers != nil {
 			writers[endpoint] = buf
@@ -43,7 +46,8 @@ func testPubSub(t *testing.T, writers map[string]*bytes.Buffer) *PubSub {
 func TestSubscribe(t *testing.T) {
 	t.Run("single subscription", func(t *testing.T) {
 		ps := testPubSub(t, nil)
-		ps.Subscribe("/resource/a", "ep-1")
+		_, existed := ps.Subscribe("/resource/a", "ep-1")
+		require.False(t, existed)
 
 		assert.Len(t, ps.List(), 1)
 		assert.Len(t, ps.subs, 1)
@@ -62,7 +66,8 @@ func TestSubscribe(t *testing.T) {
 
 	t.Run("unsubscribe adds to free list", func(t *testing.T) {
 		ps := testPubSub(t, nil)
-		id := ps.Subscribe("/resource/a", "ep-1")
+		id, existed := ps.Subscribe("/resource/a", "ep-1")
+		require.False(t, existed)
 		ps.Unsubscribe(id)
 
 		assert.Empty(t, ps.List())
@@ -72,9 +77,11 @@ func TestSubscribe(t *testing.T) {
 
 	t.Run("resubscribe reuses freed slot", func(t *testing.T) {
 		ps := testPubSub(t, nil)
-		id := ps.Subscribe("/resource/a", "ep-1")
+		id, existed := ps.Subscribe("/resource/a", "ep-1")
+		require.False(t, existed)
 		ps.Unsubscribe(id)
-		ps.Subscribe("/resource/b", "ep-2")
+		_, existed = ps.Subscribe("/resource/b", "ep-2")
+		require.False(t, existed)
 
 		assert.Len(t, ps.List(), 1)
 		assert.Len(t, ps.subs, 1, "arena did not grow")
@@ -84,7 +91,8 @@ func TestSubscribe(t *testing.T) {
 	t.Run("reuse middle slot", func(t *testing.T) {
 		ps := testPubSub(t, nil)
 		ps.Subscribe("/resource/a", "ep-1")
-		id2 := ps.Subscribe("/resource/b", "ep-2")
+		id2, existed := ps.Subscribe("/resource/b", "ep-2")
+		require.False(t, existed)
 		ps.Subscribe("/resource/c", "ep-3")
 		ps.Unsubscribe(id2)
 		ps.Subscribe("/resource/d", "ep-4")
@@ -94,12 +102,25 @@ func TestSubscribe(t *testing.T) {
 		assert.Empty(t, ps.free)
 	})
 
+	t.Run("duplicate subscription", func(t *testing.T) {
+		ps := testPubSub(t, nil)
+		id0, existed := ps.Subscribe(testPTPLockState, "http://consumer/ep")
+		require.False(t, existed)
+		id1, existed := ps.Subscribe(testPTPLockState, "http://consumer/ep")
+		assert.True(t, existed)
+		assert.Equal(t, id0, id1)
+		assert.Len(t, ps.List(), 1)
+	})
+
 	t.Run("empty endpoint skips writerFunc", func(t *testing.T) {
 		var writerCalls int
-		ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), func(_ string) io.Writer {
+		writerFunc := func(_ string) io.Writer {
 			writerCalls++
 			return &bytes.Buffer{}
-		})
+		}
+		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		require.NoError(t, err)
+		ps := NewPubSub(d, writerFunc)
 		ps.Subscribe("/resource/a", "")
 
 		assert.Zero(t, writerCalls)
@@ -244,8 +265,10 @@ func TestUnsubscribe(t *testing.T) {
 			ps := testPubSub(t, writers)
 
 			ids := make([]string, len(tt.subs))
+			var existed bool
 			for i, s := range tt.subs {
-				ids[i] = ps.Subscribe(s.resource, s.endpoint)
+				ids[i], existed = ps.Subscribe(s.resource, s.endpoint)
+				require.False(t, existed)
 			}
 
 			if tt.unsubNonexistent {
@@ -310,8 +333,10 @@ func TestGet(t *testing.T) {
 			ps := testPubSub(t, nil)
 
 			var realID string
+			var existed bool
 			if tt.subResource != "" {
-				realID = ps.Subscribe(tt.subResource, "sub")
+				realID, existed = ps.Subscribe(tt.subResource, "sub")
+				require.False(t, existed)
 			}
 
 			lookupID := tt.lookupID
@@ -356,7 +381,7 @@ func TestPubSubPersistence(t *testing.T) {
 			wantListLen:  0,
 		},
 		{
-			name:          "writerFunc called on load",
+			name:          "writerFunc called on Load",
 			subs:          []sub{{testPTPLockState, "http://example.com/events"}},
 			wantListLen:   1,
 			wantResources: []string{testPTPLockState},
@@ -367,21 +392,30 @@ func TestPubSubPersistence(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			storePath := filepath.Join(t.TempDir(), "subscriptions.json")
 
-			ps1 := NewPubSub(storePath, nil)
+			// ps1 writes subscriptions to disk via its own DiskStore.
+			store1, err := NewDiskStore(storePath)
+			require.NoError(t, err)
+			ps1 := NewPubSub(store1, nil)
 			ids := make([]string, len(tt.subs))
+			var existed bool
 			for i, s := range tt.subs {
-				ids[i] = ps1.Subscribe(s.resource, s.endpoint)
+				ids[i], existed = ps1.Subscribe(s.resource, s.endpoint)
+				require.False(t, existed)
 			}
 			for _, idx := range tt.unsubIndices {
 				ps1.Unsubscribe(ids[idx])
 			}
 
+			// ps2 uses a fresh DiskStore pointing at the same path to simulate a process
+			// restart loading previously persisted state.
+			store2, err := NewDiskStore(storePath)
+			require.NoError(t, err)
 			var writerCalled bool
-			ps2 := NewPubSub(storePath, func(_ string) io.Writer {
+			ps2 := NewPubSub(store2, func(_ string) io.Writer {
 				writerCalled = true
 				return &bytes.Buffer{}
 			})
-			require.NoError(t, ps2.LoadFromDisk())
+			require.NoError(t, ps2.LoadFromStore(context.TODO()))
 
 			assert.Len(t, ps2.List(), tt.wantListLen)
 			for _, r := range tt.wantResources {
@@ -395,7 +429,7 @@ func TestPubSubPersistence(t *testing.T) {
 				if tt.wantWriterNil {
 					assert.Nil(t, sub.W)
 				} else {
-					assert.True(t, writerCalled, "writerFunc should have been called on load")
+					assert.True(t, writerCalled, "writerFunc should have been called on Load")
 				}
 			}
 		})

@@ -21,13 +21,13 @@ func TestEventCache_Get(t *testing.T) {
 func TestEventCache_GetBySource(t *testing.T) {
 	t.Run("GetBySource returns matching event", func(t *testing.T) {
 		cache := NewEventCache("worker-0")
-		proxy := NewCloudEventProxy(cache, nil)
+		proxy := NewCloudEventProxy(cache, nil, testNodeName, testBaseURL)
 
 		var buf bytes.Buffer
 		ipc.Transmit(&buf, ipc.Message{
 			Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile, IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked},
 		})
-		proxy.Listen(&buf)
+		proxy.handleIncomingEvents(&buf)
 
 		e, ok := cache.GetBySource(testPTPLockState)
 		require.True(t, ok)
