@@ -996,6 +996,12 @@ func (p *ptpProcess) loadProcessConf(env ptpProcessEnv) (*Ptp4lConf, *string, er
 	}
 	if env.dn != nil && env.dn.interfaceResolver != nil {
 		output.ResolveInterfaceNames(env.dn.interfaceResolver)
+		switch p.name {
+		case chronydProcessName:
+			output.ResolveChronydInterfaceNames(env.dn.interfaceResolver)
+		case ts2phcProcessName:
+			output.ResolveTs2PhcInterfaceNames(env.dn.interfaceResolver)
+		}
 	}
 
 	if env.nodeProfile.Interface != nil && *env.nodeProfile.Interface != "" {
