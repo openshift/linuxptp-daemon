@@ -136,6 +136,19 @@ func (c *HAClock) ClockClass() fbprotocol.ClockClass {
 	return 0
 }
 
+// ProcessDataForConfig exposes a member's own source states/windows rather than
+// the composite's state, which could be healthy because of a different member.
+func (c *HAClock) ProcessDataForConfig(cfgName string) []*event.Data {
+	for _, member := range c.members {
+		for _, cfg := range member.ConfigNames() {
+			if cfg == cfgName {
+				return member.ProcessData()
+			}
+		}
+	}
+	return c.ProcessData()
+}
+
 // GetState returns the composite PTP state: the best-of the member states.
 func (c *HAClock) GetState() event.PTPState { return c.syncState }
 

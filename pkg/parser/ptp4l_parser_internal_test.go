@@ -4,12 +4,9 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 )
-
-func _ptr[T any](x T) *T {
-	return &x
-}
 
 func TestPTP4LParser(t *testing.T) {
 	tests := []struct {
@@ -28,10 +25,10 @@ func TestPTP4LParser(t *testing.T) {
 				Timestamp:  "74737.942",
 				ConfigName: "ptp4l.0.config",
 				Interface:  "",
-				Offset:     _ptr(53.0),
-				MaxOffset:  _ptr(74.0),
-				FreqAdj:    _ptr(-16642.0),
-				Delay:      _ptr(1089.0),
+				Offset:     utils.ToPtr(53.0),
+				MaxOffset:  utils.ToPtr(74.0),
+				FreqAdj:    utils.ToPtr(-16642.0),
+				Delay:      utils.ToPtr(1089.0),
 				ServoState: "",
 			},
 		},
@@ -43,10 +40,10 @@ func TestPTP4LParser(t *testing.T) {
 				Timestamp:  "5196755.139",
 				ConfigName: "ptp4l.0.config",
 				Interface:  "ens5f0",
-				Offset:     _ptr(3152778.0),
-				MaxOffset:  _ptr(3152778.0),
-				FreqAdj:    _ptr(-6083928.0),
-				Delay:      _ptr(2791.0),
+				Offset:     utils.ToPtr(3152778.0),
+				MaxOffset:  utils.ToPtr(3152778.0),
+				FreqAdj:    utils.ToPtr(-6083928.0),
+				Delay:      utils.ToPtr(2791.0),
 				ServoState: "",
 			},
 		},
@@ -67,9 +64,9 @@ func TestPTP4LParser(t *testing.T) {
 				Timestamp:  "365195.391",
 				ConfigName: "ptp4l.0.config",
 				Interface:  "master",
-				Offset:     _ptr(-1.0),
-				FreqAdj:    _ptr(-3972.0),
-				Delay:      _ptr(89.0),
+				Offset:     utils.ToPtr(-1.0),
+				FreqAdj:    utils.ToPtr(-3972.0),
+				Delay:      utils.ToPtr(89.0),
 				ServoState: "s2",
 			},
 		},
@@ -103,7 +100,7 @@ func TestPTP4LParser(t *testing.T) {
 			expectedResult: &ptp4lParsed{
 				Timestamp:  "4268779.809",
 				ConfigName: "ptp4l.1.config",
-				PortID:     _ptr(1),
+				PortID:     utils.ToPtr(1),
 				Event:      "UNCALIBRATED to SLAVE on MASTER",
 			},
 		},
@@ -114,7 +111,7 @@ func TestPTP4LParser(t *testing.T) {
 			expectedResult: &ptp4lParsed{
 				Timestamp:  "4268779.809",
 				ConfigName: "ptp4l.2.config",
-				PortID:     _ptr(2),
+				PortID:     utils.ToPtr(2),
 				Event:      "UNCALIBRATED to PASSIVE on RS_PASSIVE",
 			},
 		},
@@ -125,7 +122,7 @@ func TestPTP4LParser(t *testing.T) {
 			expectedResult: &ptp4lParsed{
 				Timestamp:  "4268779.809",
 				ConfigName: "ptp4l.3.config",
-				PortID:     _ptr(3),
+				PortID:     utils.ToPtr(3),
 				Event:      "UNCALIBRATED to MASTER on RS_MASTER",
 			},
 		},
@@ -136,7 +133,7 @@ func TestPTP4LParser(t *testing.T) {
 			expectedResult: &ptp4lParsed{
 				Timestamp:  "4268779.809",
 				ConfigName: "ptp4l.4.config",
-				PortID:     _ptr(4),
+				PortID:     utils.ToPtr(4),
 				Event:      "FAULT_DETECTED",
 			},
 		},
@@ -147,7 +144,7 @@ func TestPTP4LParser(t *testing.T) {
 			expectedResult: &ptp4lParsed{
 				Timestamp:  "4268779.809",
 				ConfigName: "ptp4l.5.config",
-				PortID:     _ptr(5),
+				PortID:     utils.ToPtr(5),
 				Event:      "UNCALIBRATED to LISTENING on RS_LISTENING",
 			},
 		},
@@ -158,7 +155,7 @@ func TestPTP4LParser(t *testing.T) {
 			expectedResult: &ptp4lParsed{
 				Timestamp:  "412707.219",
 				ConfigName: "ptp4l.5.config",
-				PortID:     _ptr(11),
+				PortID:     utils.ToPtr(11),
 				PortName:   "ens8f2",
 				Event:      "LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
 			},

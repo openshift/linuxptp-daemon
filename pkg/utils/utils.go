@@ -5,6 +5,9 @@ import (
 	"regexp"
 )
 
+// ToPtr returns a pointer to a copy of v.
+func ToPtr[T any](v T) *T { return &v }
+
 // GetAliasValue generates a PHC (PTP Hardware Clock) identifier alias from network interface names.
 // It supports Intel and Mellanox naming formats with optional VLAN tags.
 //

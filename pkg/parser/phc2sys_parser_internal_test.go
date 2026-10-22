@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -25,10 +26,10 @@ func TestPHC2SYSParser(t *testing.T) {
 				Timestamp:  "3560354.300",
 				ConfigName: "ptp4l.0.config",
 				ClockName:  constants.ClockRealTime,
-				Offset:     _ptr(4.0),
-				MaxOffset:  _ptr(4.0),
-				FreqAdj:    _ptr(-76829.0),
-				Delay:      _ptr(1085.0),
+				Offset:     utils.ToPtr(4.0),
+				MaxOffset:  utils.ToPtr(4.0),
+				FreqAdj:    utils.ToPtr(-76829.0),
+				Delay:      utils.ToPtr(1085.0),
 				Source:     "",
 			},
 		},
@@ -59,11 +60,11 @@ func TestPHC2SYSParser(t *testing.T) {
 			expectedResult: &phc2sysParsed{
 				Timestamp:      "10522413.392",
 				ConfigName:     "ptp4l.0.config",
-				ServerityLevel: _ptr(6),
+				ServerityLevel: utils.ToPtr(6),
 				ClockName:      constants.ClockRealTime,
-				Offset:         _ptr(8.0),
-				FreqAdj:        _ptr(-6990.0),
-				Delay:          _ptr(502.0),
+				Offset:         utils.ToPtr(8.0),
+				FreqAdj:        utils.ToPtr(-6990.0),
+				Delay:          utils.ToPtr(502.0),
 				ServoState:     "s2",
 				Source:         constants.Phc,
 			},
@@ -75,11 +76,11 @@ func TestPHC2SYSParser(t *testing.T) {
 			expectedResult: &phc2sysParsed{
 				Timestamp:      "10522413.392",
 				ConfigName:     "ptp4l.0.config",
-				ServerityLevel: _ptr(6),
+				ServerityLevel: utils.ToPtr(6),
 				ClockName:      constants.ClockRealTime,
-				Offset:         _ptr(8.0),
-				FreqAdj:        _ptr(-6990.0),
-				Delay:          _ptr(502.0),
+				Offset:         utils.ToPtr(8.0),
+				FreqAdj:        utils.ToPtr(-6990.0),
+				Delay:          utils.ToPtr(502.0),
 				ServoState:     "s2",
 				Source:         constants.Sys,
 			},

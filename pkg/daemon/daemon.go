@@ -76,6 +76,10 @@ const (
 	// offset data. Set via PtpSettings["ptp4lOffsetEventWindowSize"]. Tune according to
 	// the ptp4l message rate: 16 for 8275.1 (16 msg/s), 128 for 8275.2 (128 msg/s).
 	defaultPtp4lOffsetEventWindowSize = 16
+	// defaultSysOffsetSamples is the number of consecutive phc2sys offset samples
+	// that must breach an OS-clock threshold before the filtered state flips.
+	// Configurable via PtpClockThreshold.sysOffsetSamples.
+	defaultSysOffsetSamples = 10
 )
 
 var (
@@ -290,11 +294,13 @@ func New(
 	handlerEvents := make(chan event.Event, 100)
 	ctx, cancel := context.WithCancel(context.Background())
 	cache := ipc.NewCache(100)
+	clockManager := clockmgr.Init(nodeName, handlerEvents, Offset, ClockState, ClockClassMetrics, cache)
 	pm := &ProcessManager{
 		process:   nil,
 		eventsIn:  eventChannel,
 		eventsOut: handlerEvents,
-		clockMgr:  clockmgr.Init(nodeName, handlerEvents, Offset, ClockState, ClockClassMetrics, cache),
+		clockMgr:  clockManager,
+		statsIn:   clockManager.StatsUpdatesCh(),
 	}
 	pm.clockMgr.SetHAMetric(PTPHAMetrics)
 	tracker.processManager = pm
@@ -905,6 +911,7 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 			}
 			dprocess = ptpProc
 		case phc2sysProcessName:
+			dn.processManager.clockMgr.ConfigureOSClockFilter(osClockFilterConfig(nodeProfile))
 			dprocess, err = NewPhc2sysProcess(env)
 		case ts2phcProcessName:
 			if leap.LeapMgr != nil {
@@ -1334,6 +1341,31 @@ func getProfileName(profile *ptpv1.PtpProfile) string {
 		profileName = *profile.Name
 	}
 	return profileName
+}
+
+// osClockFilterConfig resolves profile settings without putting filter state on
+// a process. The shared OsClock owns the configured filter.
+func osClockFilterConfig(nodeProfile *ptpv1.PtpProfile) clock.OSClockFilterConfig {
+	threshold := float64(getPTPThreshold(nodeProfile).MaxOffsetThreshold)
+	cfg := clock.OSClockFilterConfig{
+		InSyncThreshold:    threshold,
+		OutOfSyncThreshold: threshold,
+		Samples:            defaultSysOffsetSamples,
+	}
+	if th := nodeProfile.PtpClockThreshold; th != nil {
+		if th.SysOffsetInSyncThreshold != nil {
+			cfg.InSyncThreshold = float64(*th.SysOffsetInSyncThreshold)
+		}
+		if th.SysOffsetOutOfSyncThreshold != nil {
+			cfg.OutOfSyncThreshold = float64(*th.SysOffsetOutOfSyncThreshold)
+		}
+		if th.SysOffsetSamples != nil && *th.SysOffsetSamples > 0 {
+			cfg.Samples = int(*th.SysOffsetSamples)
+		} else if th.SysOffsetSamples != nil {
+			glog.Warningf("invalid sysOffsetSamples=%d, using default %d", *th.SysOffsetSamples, defaultSysOffsetSamples)
+		}
+	}
+	return cfg
 }
 
 // resolvePTPThreshold resolves a profile's clock thresholds (max/min offset in

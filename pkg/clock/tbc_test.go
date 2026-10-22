@@ -642,6 +642,80 @@ func TestGetLeadingInterfaceBC_UsesConfiguredProfileInterface(t *testing.T) {
 	assert.Equal(t, testEth1, bc.getLeadingInterfaceBC(), "DPLL-learned interface takes precedence")
 }
 
+// TestInSyncCondition verifies the in-sync condition only holds after
+// inSyncConditionTimes consecutive in-sync evaluations, and that a breach
+// restarts the streak.
+func TestInSyncCondition(t *testing.T) {
+	newBC := func() *TBC {
+		bc := newPMCTestTBCClock(nil)
+		bc.leadingClockData.leadingInterface = testIFace1
+		bc.leadingClockData.inSyncConditionThreshold = 100
+		bc.leadingClockData.inSyncConditionTimes = 3
+		bc.leadingClockData.toFreeRunThreshold = 1500
+		bc.leadingClockData.initInSyncFilter()
+		bc.syncState.LeadingIFace = testIFace1
+		bc.data = []*event.Data{
+			{ProcessName: event.PTP4lProcessName, Details: []*event.DataDetails{{IFace: testIFace1, Offset: 0, Time: time.Now().UnixMilli()}}},
+		}
+		return bc
+	}
+
+	// sample refills the ptp4l window so getLargestOffset() reports the new
+	// offset as the window mean, then evaluates the in-sync condition.
+	sample := func(bc *TBC, offset int64) bool {
+		fillBCDataWindows(bc, offset)
+		return bc.inSyncCondition()
+	}
+
+	t.Run("pending initialization", func(t *testing.T) {
+		bc := newPMCTestTBCClock(nil)
+		assert.False(t, bc.inSyncCondition(), "condition must not hold before thresholds arrive")
+	})
+
+	t.Run("requires consecutive in-sync samples", func(t *testing.T) {
+		bc := newBC()
+		assert.False(t, sample(bc, 10), "first in-sync sample must not satisfy the condition")
+		assert.False(t, sample(bc, 20), "second in-sync sample must not satisfy the condition")
+		assert.True(t, sample(bc, 30), "third consecutive in-sync sample satisfies the condition")
+		assert.True(t, sample(bc, 40), "condition holds while samples stay in sync")
+	})
+
+	t.Run("breach after satisfied revokes immediately", func(t *testing.T) {
+		bc := newBC()
+		sample(bc, 10)
+		sample(bc, 20)
+		sample(bc, 30)
+		assert.True(t, sample(bc, 40), "condition satisfied")
+		// 200 breaches the in-sync threshold: one sample revokes the condition.
+		assert.False(t, sample(bc, 200), "single breach must revoke the condition")
+		assert.False(t, sample(bc, 10), "streak restarted: first in-sync sample after a breach")
+		assert.False(t, sample(bc, 10))
+		assert.True(t, sample(bc, 10), "third consecutive in-sync sample after the breach")
+	})
+
+	t.Run("breach restarts the streak", func(t *testing.T) {
+		bc := newBC()
+		sample(bc, 10)
+		sample(bc, 20)
+		// 200 breaches the in-sync threshold (still below the free-run threshold).
+		assert.False(t, sample(bc, 200), "breaching sample must not satisfy the condition")
+		assert.False(t, sample(bc, 10), "streak restarted: first in-sync sample after a breach")
+		assert.False(t, sample(bc, 10), "streak restarted: second in-sync sample after a breach")
+		assert.True(t, sample(bc, 10), "third consecutive in-sync sample after the breach")
+	})
+
+	t.Run("out-of-sync sample restarts the streak", func(t *testing.T) {
+		bc := newBC()
+		sample(bc, 10)
+		sample(bc, 20)
+		// 2000 exceeds the free-run threshold as well.
+		assert.False(t, sample(bc, 2000), "out-of-sync sample must not satisfy the condition")
+		assert.False(t, sample(bc, 10))
+		assert.False(t, sample(bc, 10))
+		assert.True(t, sample(bc, 10))
+	})
+}
+
 func TestInSpecCondition(t *testing.T) {
 	t.Run("returns false when MaxInSpecOffset is 0", func(t *testing.T) {
 		bc := newPMCTestTBCClock(nil)
@@ -710,7 +784,7 @@ func TestFreeRunCondition(t *testing.T) {
 			if tt.fillWindow {
 				for _, d := range tt.data {
 					if d.ProcessName == event.PTP4l && len(d.Details) > 0 {
-						d.Window = *utils.NewWindow(event.WindowSize)
+						d.Window = utils.NewWindow(event.WindowSize)
 						lastOffset := d.Details[len(d.Details)-1].Offset
 						for i := 0; i < event.WindowSize; i++ {
 							d.Window.Insert(float64(lastOffset))
@@ -770,7 +844,7 @@ func TestGetLargestOffset(t *testing.T) {
 					if len(d.Details) == 0 {
 						continue
 					}
-					d.Window = *utils.NewWindow(event.WindowSize)
+					d.Window = utils.NewWindow(event.WindowSize)
 					for i := 0; i < event.WindowSize; i++ {
 						offset := d.Details[i%len(d.Details)].Offset
 						d.Window.Insert(float64(offset))
@@ -935,7 +1009,7 @@ func TestUpdateBCState(t *testing.T) {
 		result := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
 		assert.Equal(t, event.PTP_HOLDOVER, result.State, "setup: should be HOLDOVER")
 
-		bc.leadingClockData.inSyncThresholdCounter = 0
+		bc.leadingClockData.inSyncFilter.Reset()
 		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 5, false))
 		fillBCDataWindows(bc, 5)
 		result = bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_LOCKED, 5, false))
@@ -1061,8 +1135,8 @@ func TestProcessSyncE(t *testing.T) {
 			Source: event.SYNCE,
 			IFace:  testEns7f0,
 			Data: &event.SyncEData{
-				QL:    event.BytePtr(4),
-				ExtQL: event.BytePtr(0xFF),
+				QL:    utils.ToPtr[byte](4),
+				ExtQL: utils.ToPtr[byte](0xFF),
 			},
 		}
 		bc.processSyncE(ev)
@@ -1160,7 +1234,7 @@ func TestTBCClock_ParentDSUpdate(t *testing.T) {
 // Helper functions for TBC tests
 func fillBCDataWindows(bc *TBC, offset int64) {
 	for _, d := range bc.data {
-		d.Window = *utils.NewWindow(event.WindowSize)
+		d.Window = utils.NewWindow(event.WindowSize)
 		for i := 0; i < event.WindowSize; i++ {
 			d.Window.Insert(float64(offset))
 		}
@@ -1184,7 +1258,7 @@ func makeTBCEvent(process event.EventSource, state event.PTPState, offset int64,
 }
 
 func tbcLeadingClockParams() *LeadingClockParams {
-	return &LeadingClockParams{
+	p := &LeadingClockParams{
 		leadingInterface:         testTBCIface,
 		inSyncConditionThreshold: 100,
 		inSyncConditionTimes:     1,
@@ -1195,6 +1269,8 @@ func tbcLeadingClockParams() *LeadingClockParams {
 		downstreamParentDataSet:  &protocol.ParentDataSet{},
 		downstreamTimeProperties: &protocol.TimePropertiesDS{},
 	}
+	p.initInSyncFilter()
+	return p
 }
 
 func newLockedTBCClock() (*TBC, *ipcRecorder) {

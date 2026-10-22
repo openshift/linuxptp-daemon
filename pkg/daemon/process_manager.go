@@ -25,6 +25,8 @@ type ProcessManager struct {
 	waitingProcess []process.Process
 	eventsIn       chan event.Event
 	eventsOut      chan event.Event
+	statsIn        <-chan process.EventStats
+	latestStats    process.EventStats // updated only from the processed-snapshot channel
 	processOnce    sync.Once
 	clockMgr       *clockmgr.ClockManager
 	daemon         *Daemon
@@ -141,9 +143,21 @@ func (pm *ProcessManager) processEvents(ctx context.Context) {
 					pm.handleProcessDown(ctx, ev)
 				}
 			} else {
-				pm.eventsOut <- ev
+				select {
+				case pm.eventsOut <- ev:
+				case <-ctx.Done():
+					return
+				}
 			}
 			pm.evalActions(ctx, ev)
+		case stats, ok := <-pm.statsIn:
+			if !ok {
+				pm.statsIn = nil
+				pm.latestStats = process.EventStats{}
+				continue
+			}
+			pm.latestStats = stats
+			pm.reconcileWaiting(ctx)
 		case <-reconcileTicker.C:
 			pm.reconcileWaiting(ctx)
 		}
@@ -191,61 +205,52 @@ func (pm *ProcessManager) sourceProcessUp(name, cfg string) bool {
 	return found
 }
 
-// reconcileWaiting starts waiting processes whose start condition is already
-// satisfied by the current process state. This recovers waiters that missed
-// the transient process-status event they were waiting for (e.g. a pmc
-// process registered after the ptp4l up event was already dispatched).
+// reconcileWaiting evaluates persistent conditions against current process
+// state and the latest received clock snapshot. It never queries ClockManager.
+// Periodic reconciliation also recovers late or missed process prerequisites.
 func (pm *ProcessManager) reconcileWaiting(ctx context.Context) {
-	started := false
-	for _, p := range pm.getWaitingProcesses() {
-		action, defaultCondition := stateTransitionAction(p.State())
-		switch action {
-		case process.ActionStart, process.ActionRestart:
-		default:
+	if ctx.Err() != nil {
+		return
+	}
+	pm.waitingProcess = pm.getWaitingProcesses()
+	// A plugin/process event may be selected while a newer snapshot is already
+	// queued. Use that pushed value rather than evaluating an older cached state.
+	select {
+	case stats, ok := <-pm.statsIn:
+		if ok {
+			pm.latestStats = stats
+		} else {
+			pm.statsIn = nil
+			pm.latestStats = process.EventStats{}
+		}
+	default:
+	}
+	hasChanged := false
+	for _, p := range pm.waitingProcess {
+		if p.State() == process.Starting || p.State() == process.Stopping {
 			continue
 		}
+		action, defaultCondition := stateTransitionAction(p.State())
 		cond := process.GetCondition(p, action, defaultCondition)
 		sc, ok := cond.(process.StateAwareCondition)
 		if !ok {
 			continue
 		}
-		if sc.MetByCurrentState(p, pm.sourceProcessUp) {
-			glog.Infof("ProcessManager: %s start condition %s already satisfied by current state, starting", p.Name(), cond)
-			pm.startProcess(ctx, p)
-			started = true
+		if sc.MetByCurrentState(p, pm.sourceProcessUp, pm.latestStats) {
+			switch action {
+			case process.ActionStart, process.ActionRestart:
+				glog.Infof("ProcessManager: %s condition %s satisfied by current state, starting", p.Name(), cond)
+				pm.startProcess(ctx, p)
+			case process.ActionStop:
+				glog.Infof("ProcessManager: %s stop condition %s satisfied by current state", p.Name(), cond)
+				p.Stop()
+			}
+			hasChanged = true
 		}
 	}
-	if started {
+	if hasChanged {
 		pm.waitingProcess = pm.getWaitingProcesses()
 	}
-}
-
-// collectWindowRequests gathers all config names required by conditions on waiting processes.
-func (pm *ProcessManager) collectWindowRequests() []process.WindowRequest {
-	seen := make(map[process.WindowRequest]bool)
-	var result []process.WindowRequest
-
-	for _, p := range pm.waitingProcess {
-		if p == nil {
-			continue
-		}
-		conds := p.Conditions()
-		if conds == nil {
-			continue
-		}
-		for _, cond := range conds {
-			if cond == nil {
-				continue
-			}
-			for _, cfg := range cond.GetWindowRequests() {
-				if !seen[cfg] {
-					seen[cfg] = true
-					result = append(result, cfg)
-				}
-			}
-		}
-	}
-	return result
 }
 
 // stateTransitionAction returns how a process should transition its state, and when we would prefer it to.
@@ -265,19 +270,22 @@ func stateTransitionAction(s process.State) (process.Action, process.Condition) 
 }
 
 func (pm *ProcessManager) evalActions(ctx context.Context, ev event.Event) {
+	pm.waitingProcess = pm.getWaitingProcesses()
 	if len(pm.waitingProcess) == 0 {
 		return
 	}
 
-	var stats process.EventStats
-	if pm.clockMgr != nil {
-		windowRequests := pm.collectWindowRequests()
-		stats = pm.clockMgr.GetWindows(windowRequests)
-	}
+	// This path observes transient process/plugin events (and resets composite
+	// event history). Clock readiness is evaluated only during reconciliation,
+	// using snapshots pushed after clock processing.
+	stats := process.EventStats{}
 
 	hasChanged := false
 
 	for _, p := range pm.waitingProcess {
+		if p.State() == process.Starting || p.State() == process.Stopping {
+			continue
+		}
 		action, defaultCondition := stateTransitionAction(p.State())
 		switch action {
 		case process.ActionStart, process.ActionRestart:

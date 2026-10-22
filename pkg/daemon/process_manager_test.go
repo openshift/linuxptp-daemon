@@ -13,6 +13,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -111,7 +112,7 @@ func newStubProcess(p process.Process) *stubProcess {
 	}
 }
 
-func stringPtr(s string) *string { return &s }
+func stringPtr(s string) *string { return utils.ToPtr(s) }
 
 type ConditionsTester struct {
 	dn     *Daemon
@@ -146,9 +147,10 @@ func NewCondiitonsTester(t *testing.T, clockType event.ClockType, cfgNames ...st
 		clks: make(map[string]*clock.Clock),
 	}
 
-	cm := clockmgr.Init("test-node", make(chan event.Event), nil, nil, nil, nil)
+	cm := clockmgr.Init("test-node", handler, nil, nil, nil, nil)
 	pm := c.pm
 	pm.clockMgr = cm
+	pm.statsIn = cm.StatsUpdatesCh()
 	dn := &Daemon{
 		processManager: pm,
 	}
@@ -216,18 +218,7 @@ func (c *ConditionsTester) StartPM() {
 }
 
 func (c *ConditionsTester) StartCM() {
-	go func() {
-		for {
-			select {
-			case <-c.ctx.Done():
-				return
-			case _, ok := <-c.pm.eventsOut:
-				if !ok {
-					return
-				}
-			}
-		}
-	}()
+	go c.cm.ProcessEvents(c.ctx)
 }
 
 func (c *ConditionsTester) Start() {
@@ -252,7 +243,7 @@ func (c *ConditionsTester) SendPluginEvent(plugin, eventName string) {
 	c.sendEvent(event.PluginEvent(event.EventSource(plugin), eventName))
 }
 
-func (c *ConditionsTester) SendOffsetClock(source event.EventSource, clockID, cfgName string, state event.PTPState, offset int64) {
+func (c *ConditionsTester) SendOffsetClock(source event.EventSource, _, cfgName string, state event.PTPState, offset int64) {
 	ev := event.Event{
 		Source:  source,
 		CfgName: cfgName,
@@ -261,11 +252,6 @@ func (c *ConditionsTester) SendOffsetClock(source event.EventSource, clockID, cf
 			State:  state,
 			Offset: offset,
 		},
-	}
-	if clk := c.cm.GetClock(clockID); clk != nil {
-		clk.GetData(source).AddEvent(ev)
-	} else if c.clks != nil {
-		(*c.clks[cfgName]).GetData(source).AddEvent(ev)
 	}
 	c.sendEvent(ev)
 }
@@ -435,12 +421,15 @@ func TestApplyNodePtpProfileStartupConditions(t *testing.T) {
 		assertRejectedStartupOffsets(t, ct, ts2phc, event.PHC2SYS, ptp4l.ConfigName())
 		ct.SendOffsetSamples(event.PTP4l, ptp4l.ConfigName(), event.PTP_LOCKED, 0, 5)
 		ct.SendOffsetSamples(event.PHC2SYS, ptp4l.ConfigName(), event.PTP_LOCKED, 0, 5)
+		assert.Zero(t, ts2phc.Starts(), "raw LOCKED must not bypass the OS-clock debounce")
+		ct.SendOffsetSamples(event.PHC2SYS, ptp4l.ConfigName(), event.PTP_LOCKED, 0, defaultSysOffsetSamples-5)
 		assertConstructedProcessesRunning(t, processes)
 	})
 }
 
 func TestForwardEvents_HopsEvent(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC, ptp4lConfig)
+	ct.pm.clockMgr = nil // Without a clock manager, retain channel forwarding.
 	ct.StartPM()
 
 	want := event.Event{
@@ -457,6 +446,26 @@ func TestForwardEvents_HopsEvent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not receive hopped event on handlerChannel")
 	}
+}
+
+func TestProcessManager_ConditionsWaitForEvaluatedOSClockState(t *testing.T) {
+	ct := NewCondiitonsTester(t, event.OC, ptp4lConfig)
+	ct.cm.ConfigureOSClockFilter(clock.OSClockFilterConfig{InSyncThreshold: 50, OutOfSyncThreshold: 100, Samples: 3})
+	stateWaiter := ct.AddProcess(&stubProcess{
+		name: "state-waiter", state: process.Created,
+		conds: map[process.Action]process.Condition{
+			process.ActionStart: process.OnProcessState{ConfigName: ptp4lConfig, Source: string(event.PHC2SYS), State: event.PTP_LOCKED},
+		},
+	})
+	ct.Start()
+	for i := 1; i <= 3; i++ {
+		ct.SendOffset(event.PHC2SYS, ptp4lConfig, event.PTP_LOCKED, 10)
+		if i < 3 {
+			assert.Zero(t, stateWaiter.Starts(), "raw state must not satisfy state conditions")
+		}
+	}
+	require.Eventually(t, func() bool { return stateWaiter.Starts() == 1 }, time.Second, time.Millisecond,
+		"the settling sample itself must satisfy conditions, without waiting for another event")
 }
 
 func TestForwardEvents_CancelReturns(t *testing.T) {
@@ -627,13 +636,8 @@ func TestEvalActions_StopRunningProcess(t *testing.T) {
 
 	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("event was not forwarded")
-	}
-	assert.Equal(t, 1, phc2sys.stops)
-	assert.Equal(t, process.Stopped, phc2sys.state)
+	require.Eventually(t, func() bool { return phc2sys.Stops() == 1 }, 2*time.Second, time.Millisecond)
+	assert.Equal(t, process.Stopped, phc2sys.State())
 }
 
 func TestEvalActions_StartStoppedProcess(t *testing.T) {
@@ -666,42 +670,26 @@ func TestEvalActions_StartStopChronyD(t *testing.T) {
 	ct.StartPM()
 
 	ct.SendPluginEvent(ntpfailover, generic.GnssFailoverEventName)
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("event was not forwarded")
-	}
+	require.Eventually(t, func() bool { return chronyd.Starts() == 1 }, 2*time.Second, time.Millisecond)
 	assert.Equal(t, 1, chronyd.starts)
 	assert.Equal(t, 0, chronyd.stops)
 	assert.Equal(t, process.Running, chronyd.state)
 
 	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("event was not forwarded")
-	}
+	require.Eventually(t, func() bool { return chronyd.Stops() == 1 }, 2*time.Second, time.Millisecond)
 	assert.Equal(t, 1, chronyd.starts)
 	assert.Equal(t, 1, chronyd.stops)
 	assert.Equal(t, process.Stopped, chronyd.state)
 
 	// Do it a second time to make sure it can handle a cycles
 	ct.SendPluginEvent(ntpfailover, generic.GnssFailoverEventName)
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("event was not forwarded")
-	}
+	require.Eventually(t, func() bool { return chronyd.Starts() == 2 }, 2*time.Second, time.Millisecond)
 	assert.Equal(t, 2, chronyd.starts)
 	assert.Equal(t, 1, chronyd.stops)
 	assert.Equal(t, process.Running, chronyd.state)
 
 	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("event was not forwarded")
-	}
+	require.Eventually(t, func() bool { return chronyd.Stops() == 2 }, 2*time.Second, time.Millisecond)
 	assert.Equal(t, 2, chronyd.starts)
 	assert.Equal(t, 2, chronyd.stops)
 	assert.Equal(t, process.Stopped, chronyd.state)
@@ -719,11 +707,6 @@ func TestEvalActions_StartNotCheckedWhenRunning(t *testing.T) {
 	ct.StartPM()
 
 	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("event was not forwarded")
-	}
 	assert.Equal(t, 0, phc2sys.starts)
 }
 
@@ -742,11 +725,6 @@ func TestEvalActions_StartOnlyWhenStopped(t *testing.T) {
 	ct.StartPM()
 
 	ct.SendPluginEvent(ntpfailover, generic.GnssFailoverEventName)
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("event was not forwarded")
-	}
 	assert.Equal(t, 0, chronyd.starts)
 	assert.Equal(t, 0, chronyd.stops)
 }
@@ -757,11 +735,6 @@ func TestEvalActions_NoActionWithoutCondition(t *testing.T) {
 	ct.StartPM()
 
 	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("event was not forwarded")
-	}
 	assert.Equal(t, process.Running, stub.state)
 }
 
@@ -821,11 +794,7 @@ func TestEvalActions_FullFailoverFlow(t *testing.T) {
 
 	// Failover: stop phc2sys + Start chronyd
 	ct.SendPluginEvent(ntpfailover, generic.GnssFailoverEventName)
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("failover event was not forwarded")
-	}
+	require.Eventually(t, func() bool { return chronyd.Starts() == 1 }, 2*time.Second, time.Millisecond)
 	assert.Equal(t, 1, chronyd.starts, "chronyd should be Startd on failover")
 
 	// Simulate phc2sys being stopped
@@ -834,11 +803,7 @@ func TestEvalActions_FullFailoverFlow(t *testing.T) {
 	// Recovery: start phc2sys + Stop chronyd
 	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
 	assert.Eventually(t, func() bool { return phc2sys.Starts() == 1 }, 2*time.Second, 10*time.Millisecond)
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("recovery event was not forwarded")
-	}
+	require.Eventually(t, func() bool { return chronyd.Stops() == 1 }, 2*time.Second, time.Millisecond)
 	assert.Equal(t, 1, chronyd.stops, "chronyd should be Stopped on recovery")
 }
 
@@ -1029,8 +994,8 @@ func TestPhc2sysOffsetStartCondition_HA(t *testing.T) {
 	profile1 := ptpv1.PtpProfile{Name: &master1}
 	profile2 := ptpv1.PtpProfile{Name: &master2}
 	haProfile := ptpv1.PtpProfile{
-		Phc2sysConf: event.Ptr(" "),
-		Phc2sysOpts: event.Ptr(" "),
+		Phc2sysConf: utils.ToPtr(" "),
+		Phc2sysOpts: utils.ToPtr(" "),
 		PtpSettings: map[string]string{PTP_HA_IDENTIFIER: master1 + "," + master2,
 			clockTypeSetting: TBC,
 		}}
@@ -1096,60 +1061,74 @@ func TestTBC_Ts2phcUnlocksThroughProcessManager(t *testing.T) {
 		"T-BC ts2phc must unlock and start once ptp4l lock and offset threshold are satisfied")
 
 	assert.Equal(t,
-		[]process.WindowRequest{
+		[]process.StatsRequest{
 			{ClockID: ptp4lConfig, Source: event.PTP4l},
 		},
-		realTs2phc.Conditions()[process.ActionStart].GetWindowRequests(),
-		"Incorrect Window Requests",
+		realTs2phc.Conditions()[process.ActionStart].GetStatsRequests(),
+		"Incorrect stats requests",
 	)
 }
 
 func TestTBC_Ts2phcWithPhc2sysUnlocksThroughProcessManager(t *testing.T) {
-	ct := NewCondiitonsTester(t, event.OC, ptp4lConfig, "ts2phc.0.config")
+	for _, tt := range []struct {
+		name      string
+		samples   int64
+		offset    int64
+		threshold int64
+	}{
+		{"one sample, no second debounce", 1, 10, 50},
+		{"three samples", 3, 10, 50},
+		{"more than the old window capacity", 12, 10, 50},
+		{"configured threshold replaces the one-second check", 1, 1500000000, 2000000000},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ct := NewCondiitonsTester(t, event.OC, ptp4lConfig, "ts2phc.0.config")
+			profileName := "test-tbc-phc2sys"
+			profile := &ptpv1.PtpProfile{
+				Name:        &profileName,
+				PtpSettings: map[string]string{clockTypeSetting: TBC},
+				Ts2PhcConf:  stringPtr("[global]\n[ts2phc.0.config]\n"),
+				Ts2PhcOpts:  stringPtr("-s"),
+				Phc2sysConf: stringPtr("[global]\n"),
+				PtpClockThreshold: &ptpv1.PtpClockThreshold{
+					SysOffsetInSyncThreshold:    utils.ToPtr(tt.threshold),
+					SysOffsetOutOfSyncThreshold: utils.ToPtr(tt.threshold),
+					SysOffsetSamples:            utils.ToPtr(tt.samples),
+				},
+			}
+			ct.cm.ConfigureOSClockFilter(osClockFilterConfig(profile))
+			topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
+			require.NoError(t, err)
+			realTs2phc, err := NewTs2phcProcess(ct.Env(0, profile, event.TBC, &topology))
+			require.NoError(t, err)
+			ts2phcStub := ct.AddProcess(realTs2phc)
+			ct.StartProcesses()
+			ct.StartCM()
+			assert.Zero(t, ts2phcStub.Starts())
 
-	profileName := "test-tbc-phc2sys"
-	profile := &ptpv1.PtpProfile{
-		Name: &profileName,
-		PtpSettings: map[string]string{
-			clockTypeSetting: TBC,
-		},
-		Ts2PhcConf:  stringPtr("[global]\n[ts2phc.0.config]\n"),
-		Ts2PhcOpts:  stringPtr("-s"),
-		Phc2sysConf: stringPtr("[global]\n"),
+			// The independent ptp4l offset-window condition remains in place.
+			ct.SendOffsetSamples(event.PTP4l, ptp4lConfig, event.PTP_LOCKED, 10000, 5)
+			assert.Zero(t, ts2phcStub.Starts(), "still waiting for phc2sys")
+			ct.SendOffset(event.PHC2SYS, ptp4lConfig, event.PTP_HOLDOVER, tt.offset)
+			assert.Zero(t, ts2phcStub.Starts(), "HOLDOVER is not ready")
+			for i := int64(1); i <= tt.samples; i++ {
+				ct.SendOffset(event.PHC2SYS, ptp4lConfig, event.PTP_LOCKED, tt.offset)
+				if i < tt.samples {
+					assert.Zero(t, ts2phcStub.Starts(), "raw LOCKED must not bypass the configured filter")
+				}
+			}
+			require.Eventually(t, func() bool { return ts2phcStub.Starts() == 1 }, time.Second, time.Millisecond,
+				"the settling sample must start ts2phc without an additional offset-window check")
+			requests := realTs2phc.Conditions()[process.ActionStart].GetStatsRequests()
+			assert.Equal(t, []process.StatsRequest{
+				{ClockID: ptp4lConfig, Source: event.PTP4l},
+				{ClockID: ptp4lConfig, Source: event.PHC2SYS},
+			}, requests)
+			stats := ct.cm.GetStats(requests)
+			assert.Equal(t, event.PTP_LOCKED, stats.States[ptp4lConfig][event.PHC2SYS])
+			assert.Nil(t, stats.Windows[ptp4lConfig][event.PHC2SYS])
+		})
 	}
-
-	topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
-	require.NoError(t, err)
-
-	realTs2phc, err := NewTs2phcProcess(ct.Env(0, profile, event.TBC, &topology))
-	require.NoError(t, err)
-	ts2phcStub := ct.AddProcess(realTs2phc)
-
-	ct.StartProcesses()
-	assert.Equal(t, 0, ts2phcStub.Starts())
-
-	ct.Start()
-
-	// Qualify ptp4l with 5 samples (> 3)
-	ct.SendOffsetSamples(event.PTP4l, ptp4lConfig, event.PTP_LOCKED, 10000, 5)
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 0, ts2phcStub.Starts(), "ts2phc must not start with only ptp4l locked; still waiting for phc2sys")
-
-	// Qualify phc2sys with 5 samples (> 3)
-	ct.SendOffsetSamples(event.PHC2SYS, ptp4lConfig, event.PTP_LOCKED, 15000, 5)
-
-	// Stateful All condition should now be fully satisfied
-	assert.Eventually(t, func() bool { return ts2phcStub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond,
-		"T-BC ts2phc must start once both ptp4l and phc2sys conditions are met")
-
-	assert.Equal(t,
-		[]process.WindowRequest{
-			{ClockID: ptp4lConfig, Source: event.PTP4l},
-			{ClockID: ptp4lConfig, Source: event.PHC2SYS},
-		},
-		realTs2phc.Conditions()[process.ActionStart].GetWindowRequests(),
-		"Incorrect Window Requests",
-	)
 }
 
 func TestUnlock_TBC_Phc2sys(t *testing.T) {
@@ -1258,11 +1237,7 @@ func TestUnlock_Failover_Phc2sysAndChronyd(t *testing.T) {
 
 	// Failover event triggers stop on phc2sys
 	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
-	select {
-	case <-ct.pm.eventsOut:
-	case <-time.After(2 * time.Second):
-		t.Fatal("failover event was not forwarded")
-	}
+	require.Eventually(t, func() bool { return phc2sysStub.Starts() == 1 }, 2*time.Second, time.Millisecond)
 
 	// Recovery event triggers start on phc2sys
 	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
@@ -1325,6 +1300,8 @@ func TestReconcileWaiting_WrongConfigNotStarted(t *testing.T) {
 
 func TestReconcileWaiting_TickerRecoversStrandedWaiter(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC)
+	ct.pm.clockMgr = nil
+	ct.pm.statsIn = nil // Exercise the periodic fallback without pushed clock snapshots.
 	pmc := &stubProcess{
 		name: "pmc",
 		conds: map[process.Action]process.Condition{

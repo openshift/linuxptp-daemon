@@ -96,7 +96,7 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 	// Zero NMEA status when GM is not locked
 	if clockState.State != event.PTP_LOCKED {
 		if od, ok := ev.Data.(*event.OffsetData); ok && od.NMEALocked != nil {
-			od.NMEALocked = event.Ptr(false)
+			od.NMEALocked = utils.ToPtr(false)
 		}
 	}
 

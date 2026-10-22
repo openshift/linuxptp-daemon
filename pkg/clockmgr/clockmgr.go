@@ -15,6 +15,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -47,6 +48,11 @@ type ClockManager struct {
 	applyingProfiles atomic.Bool
 	// syncStatusCh is signalled (non-blocking) whenever a clock state transitions.
 	syncStatusCh chan struct{}
+	// statsUpdates holds the latest complete snapshot for ProcessManager. All
+	// publishers are serialized by clockManagementMu; old pending snapshots
+	// are replaced so a slow consumer cannot block clock processing.
+	statsUpdates   chan process.EventStats
+	osClockConfigs map[string]struct{}
 }
 
 type metricKey struct {
@@ -91,9 +97,42 @@ func (m *ClockManager) signalSyncStatus() {
 	}
 }
 
+// StatsUpdatesCh returns the snapshot channel for the single ProcessManager
+// consumer. It is not a subscription: the channel retains the latest snapshot
+// even before the manager starts, and is never closed by ClockManager.
+func (m *ClockManager) StatsUpdatesCh() <-chan process.EventStats {
+	return m.statsUpdates
+}
+
+// publishStats pushes a detached snapshot after every evaluated sample/reset,
+// including unchanged states. Call with clockManagementMu held (or during Init).
+func (m *ClockManager) publishStats() {
+	requests := make([]process.StatsRequest, 0, len(m.clocks)+len(m.osClockConfigs))
+	for cfg := range m.clocks {
+		requests = append(requests, process.StatsRequest{ClockID: cfg})
+	}
+	for cfg := range m.osClockConfigs {
+		if _, exists := m.clocks[cfg]; !exists {
+			requests = append(requests, process.StatsRequest{ClockID: cfg})
+		}
+	}
+	stats := m.snapshotStats(requests)
+	select {
+	case m.statsUpdates <- stats:
+	default:
+		select {
+		case <-m.statsUpdates:
+		default:
+		}
+		// Only this lock-serialized publisher writes to the capacity-one
+		// channel. After removing the old value, this send cannot block.
+		m.statsUpdates <- stats
+	}
+}
+
 // Init ... initialize event manager
 func Init(nodeName string, processChannel chan event.Event, offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec, clockClassMetric *prometheus.GaugeVec, ipcCache *ipc.Cache) *ClockManager {
-	return &ClockManager{
+	m := &ClockManager{
 		nodeName:         nodeName,
 		events:           processChannel,
 		metricCache:      map[metricKey]metricEntry{},
@@ -102,10 +141,21 @@ func Init(nodeName string, processChannel chan event.Event, offsetMetric *promet
 		offsetMetric:     offsetMetric,
 		clockClassMetric: clockClassMetric,
 		clocks:           map[string]clock.Clock{},
-		osClock:          clock.OsClock{State: event.PTP_FREERUN},
+		osClock:          clock.OsClock{State: event.PTP_FREERUN, E3State: event.PTP_NOTSET, IFace: parserconstants.ClockRealTime},
 		ipcCache:         ipcCache,
 		syncStatusCh:     make(chan struct{}, 1),
+		statsUpdates:     make(chan process.EventStats, 1),
+		osClockConfigs:   make(map[string]struct{}),
 	}
+	m.publishStats()
+	return m
+}
+
+// ConfigureOSClockFilter applies the resolved phc2sys profile settings.
+func (m *ClockManager) ConfigureOSClockFilter(cfg clock.OSClockFilterConfig) {
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+	m.osClock.ConfigureFilter(cfg)
 }
 
 // AddClock takes ownership of a given Clock
@@ -126,38 +176,57 @@ func (m *ClockManager) AddClock(clk clock.Clock) error {
 		m.clocks[cfg] = clk
 	}
 	glog.Infof("AddClock: registered %s clock for config %s", clk.ClockType(), clk.ConfigName())
+	m.publishStats()
 	return nil
 }
 
-// GetWindows returns offset sample windows keyed by clock config name.
-// If requiredStatsConfigs is empty, all windows are returned.
-// Otherwise, only windows for configs in requiredStatsConfigs are returned.
-func (m *ClockManager) GetWindows(windowRequests []process.WindowRequest) map[string]map[event.EventSource]utils.ROWindow {
+// GetWindows returns read-only offset windows for the requested clock sources.
+func (m *ClockManager) GetWindows(requests []process.StatsRequest) map[string]map[event.EventSource]utils.ROWindow {
+	return m.GetStats(requests).Windows
+}
+
+// GetStats snapshots evaluated states and offset windows for
+// the requested sources. OS samples are available even without a registered PTP
+// clock. A request with no source selects every source on that clock.
+// Sources without offset history expose their evaluated state only.
+func (m *ClockManager) GetStats(requests []process.StatsRequest) process.EventStats {
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
+	return m.snapshotStats(requests)
+}
 
-	out := make(map[string]map[event.EventSource]utils.ROWindow)
-	for _, req := range windowRequests {
-		clk := m.GetClock(req.ClockID)
-		if clk == nil {
-			continue
+// snapshotStats builds a detached snapshot while clockManagementMu is held.
+func (m *ClockManager) snapshotStats(requests []process.StatsRequest) process.EventStats {
+	stats := process.EventStats{
+		Windows:        make(map[string]map[event.EventSource]utils.ROWindow),
+		States:         make(map[string]map[event.EventSource]event.PTPState),
+		ClockStates:    make(map[string]event.PTPState),
+		OSClockState:   m.osClock.State,
+		OSClockE3State: m.osClock.E3State,
+	}
+	for _, req := range requests {
+		var data []*event.Data
+		if clk := m.GetClock(req.ClockID); clk != nil {
+			data = clk.ProcessDataForConfig(req.ClockID)
+			stats.ClockStates[req.ClockID] = clk.GetState()
+		} else {
+			data = m.osClock.ProcessData()
 		}
-		if _, ok := out[req.ClockID]; !ok {
-			out[req.ClockID] = map[event.EventSource]utils.ROWindow{}
-		}
-
-		// TODO: We might want to process the requests and group them in the future so
-		// requests for the same clock but different event source can be done in one go
-		for _, d := range clk.ProcessData() {
-			if d == nil {
+		for _, d := range data {
+			if d == nil || (req.Source != "" && d.ProcessName != req.Source) {
 				continue
 			}
-			if d.ProcessName == req.Source {
-				out[req.ClockID][req.Source] = &d.Window
+			if stats.States[req.ClockID] == nil {
+				stats.States[req.ClockID] = make(map[event.EventSource]event.PTPState)
+				stats.Windows[req.ClockID] = make(map[event.EventSource]utils.ROWindow)
+			}
+			stats.States[req.ClockID][d.ProcessName] = d.State
+			if d.Window != nil {
+				stats.Windows[req.ClockID][d.ProcessName] = d.Window.Snapshot()
 			}
 		}
 	}
-	return out
+	return stats
 }
 
 // RemoveAllClocks tears down all registered clocks and cleans up associated state.
@@ -169,6 +238,8 @@ func (m *ClockManager) RemoveAllClocks() {
 		m.unregisterMetrics(cfgName, "")
 	}
 	m.clocks = map[string]clock.Clock{}
+	m.osClockConfigs = make(map[string]struct{})
+	m.publishStats()
 	m.clockManagementMu.Unlock()
 
 	debug.ClearState()
@@ -200,31 +271,57 @@ func (m *ClockManager) GetUtcOffset() int {
 	return leap.GetUtcOffset()
 }
 
-// handleOSClockEvent fans out a PHC2SYS/CHRONYD event to all clocks, emits os_clock_state message once, and emits
-// a sync_state message per-profile when the overall state changes.
-func (m *ClockManager) handleOSClockEvent(ev event.Event) {
-	ptp, ok := ev.Data.(*event.OffsetData)
-	if !ok {
-		glog.Warningf("handleOSClockEvent: received unexpected event")
-		return
+// handleOSClockEvent lets OsClock accept its own events, derives E3, and notifies
+// the registered clocks when the disciplining state changes. It returns whether
+// the event was handled, independently of whether the state changed.
+func (m *ClockManager) handleOSClockEvent(ev event.Event) bool {
+	previous := m.osClock.State
+	if !m.osClock.AddEvent(ev) {
+		return false
 	}
-	m.osClock.AddEvent(ev)
-	if m.osClock.State == ptp.State {
-		return
+	m.osClockConfigs[ev.CfgName] = struct{}{}
+	derived := m.emitOSClockState()
+	if m.osClock.State == previous {
+		return true
 	}
-	m.osClock.State = ptp.State
 	m.signalSyncStatus()
-
-	// if the OS clock state changed, emit the event to CEP and also pass it along to each clock
-	osOffset := ptp.Offset
-	m.sendIPC(ipc.Message{
-		Type:   ipc.TypeOSClockState,
-		IFace:  ev.IFace,
-		Values: ipc.StateValue{State: event.PtpStateToIPCState(m.osClock.State), Offset: osOffset},
-	})
+	glog.V(4).Infof("OS clock: disciplining %s -> E3 %s (e1 %s)", m.osClock.State, derived, m.worstClockState())
 	for _, clk := range m.clocks {
 		clk.SystemClockUpdate()
 	}
+	return true
+}
+
+// worstClockState returns the most degraded non-NOTSET state across the
+// registered clocks, or NOTSET when no clock reports a real state.
+func (m *ClockManager) worstClockState() event.PTPState {
+	states := make([]event.PTPState, 0, len(m.clocks))
+	for _, clk := range m.clocks {
+		states = append(states, clk.GetState())
+	}
+	return clock.WorstOfPtpStates(states)
+}
+
+// emitOSClockState derives the node-wide E3 OS-clock state as worst-of(E1,
+// phc2sys) and emits an os_clock_state IPC when it changes. Returns the derived
+// state. Assumes clockManagementMu is held.
+func (m *ClockManager) emitOSClockState() event.PTPState {
+	e1 := m.worstClockState()
+	derived := clock.DeriveOSClockState(e1, m.osClock.State)
+	if len(m.clocks) == 0 {
+		derived = m.osClock.State
+	}
+	if derived == event.PTP_NOTSET || derived == m.osClock.E3State {
+		return derived
+	}
+	m.osClock.E3State = derived
+	glog.V(4).Infof("OS clock E3: %s (e1 %s, phc2sys %s)", derived, e1, m.osClock.State)
+	m.sendIPC(ipc.Message{
+		Type:   ipc.TypeOSClockState,
+		IFace:  m.osClock.IFace,
+		Values: ipc.StateValue{State: event.PtpStateToIPCState(derived), Offset: m.osClock.Offset},
+	})
+	return derived
 }
 
 // ProcessEvents loops until
@@ -236,86 +333,82 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 			if !ok {
 				return
 			}
-			// TODO: This is a pretty large lock. Using it for simplicity. We should evaluate this in the future.
-			//       I think a combination of the manager lock + locks for each individual clock will be the end goal.
-			m.clockManagementMu.Lock()
-			if ev.Reset {
-				m.reset(ev)
-				m.clockManagementMu.Unlock()
-				continue
-			}
-
-			// phc2sys/chronyd offset samples drive the OS clock. A phc2sys HA source
-			// selection (SelectedSourceData) is not an OS-clock sample — it is routed
-			// to its clock (the HA clock) by config name, so let it fall through.
-			if ev.Source == event.CHRONYD {
-				m.handleOSClockEvent(ev)
-				m.clockManagementMu.Unlock()
-				continue
-			}
-			if ev.Source == event.PHC2SYS {
-				if _, isSelection := ev.Data.(*event.SelectedSourceData); !isSelection {
-					m.handleOSClockEvent(ev)
-					m.clockManagementMu.Unlock()
-					continue
-				}
-			}
-
-			// TODO: Move to better identifiers? Having to do this translation here is odd
-			lookupName := ev.CfgName
-			if ev.Source == event.SYNCE {
-				lookupName = strings.Replace(ev.CfgName, "synce4l", "ptp4l", 1)
-			}
-
-			clk := m.GetClock(lookupName)
-			if clk == nil {
-				glog.Warningf("ProcessEvents: no clock registered for %s, skipping event", lookupName)
-				m.clockManagementMu.Unlock()
-				continue
-			}
-
-			if clk.ClockType() == event.TBC && m.IsApplying() {
-				m.clockManagementMu.Unlock()
-				continue
-			}
-
-			if ev.WriteToLog {
-				if logData := ev.GetLogData(); logData != "" {
-					fmt.Printf("%s", logData)
-				}
-			}
-			prevState := clk.GetState()
-			clockState := clk.AddEvent(ev)
-			if prevState != event.PTP_NOTSET && prevState != clockState.State {
-				m.signalSyncStatus()
-			}
-			if clockState.LeadingIFace != "" && clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
-				// BC/OC clock_state is scraped as process="ptp4l" (ptp4l is the
-				// servo), whereas GM/T-BC report under their clock-type label. The
-				// event's clock type is checked too: an HA clock is a composite whose
-				// member events carry ClockType=BC, and those must still report as
-				// ptp4l like a standalone BC follower.
-				process := string(ev.ClockType)
-				if clk.ClockType() == event.BC || clk.ClockType() == event.OC ||
-					ev.ClockType == event.BC || ev.ClockType == event.OC {
-					process = string(event.PTP4l)
-				}
-				m.updateClockStateMetrics(clockState.State, process, alias.GetAlias(clockState.LeadingIFace))
-			}
-			// Use the clock class from the event's returned state, not clk.ClockClass().
-			// For a composite HA clock, clk.ClockClass() is the active member's class,
-			// but the metric is keyed per member config (lookupName), so each member
-			// must report its own class. For GM/TBC/BC the returned state carries the
-			// same class clk.ClockClass() would, so this is equivalent for them.
-			m.updateClockClassMetrics(lookupName, clockState.ClockClass)
-			m.updateHAProfileMetrics(clockState.HAProfileStatus)
-			m.updateMetrics(ev)
-			m.clockManagementMu.Unlock()
-
+			m.ProcessEvent(ev)
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// ProcessEvent evaluates one event. Production callers forward events to the
+// ProcessEvents channel; the resulting snapshot is pushed to ProcessManager.
+// All clock mutation is serialized by clockManagementMu.
+func (m *ClockManager) ProcessEvent(ev event.Event) {
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+	if ev.Reset {
+		m.reset(ev)
+		m.publishStats()
+		return
+	}
+
+	// OsClock owns event acceptance. Other events continue to their clock by
+	// config name, including HA source-selection events.
+	if m.handleOSClockEvent(ev) {
+		m.publishStats()
+		return
+	}
+
+	// TODO: Move to better identifiers? Having to do this translation here is odd
+	lookupName := ev.CfgName
+	if ev.Source == event.SYNCE {
+		lookupName = strings.Replace(ev.CfgName, "synce4l", "ptp4l", 1)
+	}
+
+	clk := m.GetClock(lookupName)
+	if clk == nil {
+		glog.Warningf("ProcessEvents: no clock registered for %s, skipping event", lookupName)
+		return
+	}
+
+	if clk.ClockType() == event.TBC && m.IsApplying() {
+		return
+	}
+
+	if ev.WriteToLog {
+		if logData := ev.GetLogData(); logData != "" {
+			fmt.Printf("%s", logData)
+		}
+	}
+	prevState := clk.GetState()
+	clockState := clk.AddEvent(ev)
+	if prevState != event.PTP_NOTSET && prevState != clockState.State {
+		m.signalSyncStatus()
+	}
+	if clockState.LeadingIFace != "" && clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
+		// BC/OC clock_state is scraped as process="ptp4l" (ptp4l is the
+		// servo), whereas GM/T-BC report under their clock-type label. The
+		// event's clock type is checked too: an HA clock is a composite whose
+		// member events carry ClockType=BC, and those must still report as
+		// ptp4l like a standalone BC follower.
+		process := string(ev.ClockType)
+		if clk.ClockType() == event.BC || clk.ClockType() == event.OC ||
+			ev.ClockType == event.BC || ev.ClockType == event.OC {
+			process = string(event.PTP4l)
+		}
+		m.updateClockStateMetrics(clockState.State, process, alias.GetAlias(clockState.LeadingIFace))
+	}
+	// Use the clock class from the event's returned state, not clk.ClockClass().
+	// For a composite HA clock, clk.ClockClass() is the active member's class,
+	// but the metric is keyed per member config (lookupName), so each member
+	// must report its own class. For GM/TBC/BC the returned state carries the
+	// same class clk.ClockClass() would, so this is equivalent for them.
+	m.updateClockClassMetrics(lookupName, clockState.ClockClass)
+	m.updateHAProfileMetrics(clockState.HAProfileStatus)
+	m.updateMetrics(ev)
+	// A clock (E1) transition may move the derived E3 os_clock_state.
+	m.emitOSClockState()
+	m.publishStats()
 }
 
 // reset handles a reset event
@@ -327,6 +420,7 @@ func (m *ClockManager) reset(ev event.Event) {
 	if clk := m.GetClock(ev.CfgName); clk != nil {
 		clk.Reset()
 	}
+	m.osClock.E3State = event.PTP_NOTSET
 	if ev.Source == event.TS2PHC {
 		m.unregisterMetrics(ev.CfgName, "")
 	} else {

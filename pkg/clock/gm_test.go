@@ -9,6 +9,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -271,7 +272,7 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 	t.Run("skips when clockClass is uninitialized", func(t *testing.T) {
 		gm, _, pmcMock := newTestGMClock()
 		gm.announceClockClassIfChanged(
-			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: event.Int64Ptr(50)}},
+			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: utils.ToPtr[int64](50)}},
 			SyncState{State: event.PTP_LOCKED, ClockClass: protocol.ClockClassUninitialized},
 		)
 		assert.Empty(t, pmcMock.SnapshotSetCalls())
@@ -310,7 +311,7 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 		gm.announcedClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
 		gm.syncState.ClockClass = fbprotocol.ClockClass7
 		gm.announceClockClassIfChanged(
-			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: event.Int64Ptr(500)}},
+			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: utils.ToPtr[int64](500)}},
 			SyncState{State: event.PTP_HOLDOVER, ClockClass: fbprotocol.ClockClass7},
 		)
 		setCalls := pmcMock.SnapshotSetCalls()

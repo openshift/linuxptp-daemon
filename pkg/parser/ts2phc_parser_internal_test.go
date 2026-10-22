@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,8 +22,13 @@ func TestTS2PHCParser(t *testing.T) {
 			regex:   regularTS2PhcRegex,
 			logLine: "ts2phc[82674.465]: [ts2phc.0.cfg] ens2f1 master offset        2345 s2 freq      -16642",
 			expectedResult: &ts2phcParsed{
-				Timestamp: "82674.465", ConfigName: "ts2phc.0.cfg", Interface: "ens2f1",
-				ClockName: "master", Offset: _ptr(2345.0), ServoState: "s2", FreqAdj: _ptr(-16642.0),
+				Timestamp:  "82674.465",
+				ConfigName: "ts2phc.0.cfg",
+				Interface:  "ens2f1",
+				ClockName:  "master",
+				Offset:     utils.ToPtr(2345.0),
+				ServoState: "s2",
+				FreqAdj:    utils.ToPtr(-16642.0),
 			},
 		},
 		{
@@ -30,8 +36,12 @@ func TestTS2PHCParser(t *testing.T) {
 			regex:   regularTS2PhcRegex,
 			logLine: "ts2phc[82674.4656]: [ts2phc.0.cfg] /dev/ptp6 offset        3152778 s2 freq      -3152778",
 			expectedResult: &ts2phcParsed{
-				Timestamp: "82674.4656", ConfigName: "ts2phc.0.cfg", Interface: "/dev/ptp6",
-				Offset: _ptr(3152778.0), ServoState: "s2", FreqAdj: _ptr(-3152778.0),
+				Timestamp:  "82674.4656",
+				ConfigName: "ts2phc.0.cfg",
+				Interface:  "/dev/ptp6",
+				Offset:     utils.ToPtr(3152778.0),
+				ServoState: "s2",
+				FreqAdj:    utils.ToPtr(-3152778.0),
 			},
 		},
 		{
@@ -39,8 +49,14 @@ func TestTS2PHCParser(t *testing.T) {
 			regex:   regularTS2PhcRegex,
 			logLine: "ts2phc[521734.693]: [ts2phc.0.config:6] ens2f2 offset      -1 s2 freq      -3972 holdover",
 			expectedResult: &ts2phcParsed{
-				Timestamp: "521734.693", ConfigName: "ts2phc.0.config", SeverityLevel: _ptr(6),
-				Interface: "ens2f2", Offset: _ptr(-1.0), ServoState: "s2", FreqAdj: _ptr(-3972.0), Holdover: "holdover",
+				Timestamp:     "521734.693",
+				ConfigName:    "ts2phc.0.config",
+				SeverityLevel: utils.ToPtr(6),
+				Interface:     "ens2f2",
+				Offset:        utils.ToPtr(-1.0),
+				ServoState:    "s2",
+				FreqAdj:       utils.ToPtr(-3972.0),
+				Holdover:      "holdover",
 			},
 		},
 		{
@@ -54,8 +70,12 @@ func TestTS2PHCParser(t *testing.T) {
 			regex:   nmeaStatusTS2PhcRegex,
 			logLine: "ts2phc[1726600506]:[ts2phc.0.config] ens7f0 nmea_status 1 offset 0 s2",
 			expectedResult: &ts2phcParsed{
-				Timestamp: "1726600506", ConfigName: "ts2phc.0.config", Interface: "ens7f0",
-				Status: _ptr(1.0), Offset: _ptr(0.0), ServoState: "s2",
+				Timestamp:  "1726600506",
+				ConfigName: "ts2phc.0.config",
+				Interface:  "ens7f0",
+				Status:     utils.ToPtr(1.0),
+				Offset:     utils.ToPtr(0.0),
+				ServoState: "s2",
 			},
 		},
 		{
@@ -63,8 +83,12 @@ func TestTS2PHCParser(t *testing.T) {
 			regex:   nmeaStatusTS2PhcRegex,
 			logLine: "ts2phc[1699929121]:[ts2phc.0.config] ens2f0 nmea_status 0 offset 999999 s0",
 			expectedResult: &ts2phcParsed{
-				Timestamp: "1699929121", ConfigName: "ts2phc.0.config", Interface: "ens2f0",
-				Status: _ptr(0.0), Offset: _ptr(999999.0), ServoState: "s0",
+				Timestamp:  "1699929121",
+				ConfigName: "ts2phc.0.config",
+				Interface:  "ens2f0",
+				Status:     utils.ToPtr(0.0),
+				Offset:     utils.ToPtr(999999.0),
+				ServoState: "s0",
 			},
 		},
 	}
@@ -121,9 +145,9 @@ func TestTS2PHCOffsetReturnsMetricAndEvent(t *testing.T) {
 
 func TestTS2PHCInvalidOffsetDoesNotReturnSuccessEvent(t *testing.T) {
 	for _, parsed := range []*ts2phcParsed{
-		{Offset: _ptr(0.0), FreqAdj: _ptr(0.0)},
-		{Interface: "ens0", FreqAdj: _ptr(0.0)},
-		{Interface: "ens0", Offset: _ptr(0.0)},
+		{Offset: utils.ToPtr(0.0), FreqAdj: utils.ToPtr(0.0)},
+		{Interface: "ens0", FreqAdj: utils.ToPtr(0.0)},
+		{Interface: "ens0", Offset: utils.ToPtr(0.0)},
 	} {
 		metric, event, err := extractTS2PHCOffset(parsed)
 		require.Error(t, err)
