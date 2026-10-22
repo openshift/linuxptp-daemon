@@ -93,8 +93,9 @@ type ptpProcess struct {
 	dn *Daemon
 	pm *plugin.PluginManager
 
-	clockType event.ClockType
-	logParser parser.MetricsExtractor
+	clockType  event.ClockType
+	logParser  parser.MetricsExtractor
+	ts2phcPoll ts2phcPollState
 
 	ptpClockThreshold     *ptpv1.PtpClockThreshold
 	haProfile             map[string][]string // stores list of interface name for each profile
@@ -422,6 +423,9 @@ func (p *ptpProcess) run() {
 		processStatus(p.name, p.messageTag, PtpProcessUp)
 		sendProcessStatusEvent(p.eventCh, event.EventSource(p.name), p.configName, p.clockType, "", PtpProcessUp)
 
+		if p.name == ts2phcProcessName {
+			p.resetPollCycle()
+		}
 		p.runScanner(cmdReader)
 
 		if waitErr := cmd.Wait(); waitErr != nil {
@@ -1022,6 +1026,9 @@ func (p *ptpProcess) renderPtp4lConf(env ptpProcessEnv, output *Ptp4lConf, opts 
 	p.addMonitorFlags(output, opts)
 	configOutput, ifaces := output.RenderPtp4lConf()
 	p.ifaces = ifaces
+	if p.name == ts2phcProcessName {
+		p.resetPollCycle()
+	}
 	return p.writeProcessConf(output, configOutput)
 }
 

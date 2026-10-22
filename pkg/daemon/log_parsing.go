@@ -161,12 +161,18 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	case ts2phcProcessName:
 		// Send event for ts2phc
 		eventSource := process.ifaces.GetEventSource(process.ifaces.GetPhcID2IFace(ptpMetrics.Iface))
-		od := &event.OffsetData{
-			State:  state,
-			Offset: int64(ptpMetrics.Offset),
-		}
-		if eventSource == event.GNSS {
-			od.NMEALocked = event.Ptr(true)
+		// Preserve the state transition when the offset is unavailable, but
+		// never convert NaN to an integer or publish it as a measured offset.
+		var data event.EventData = &event.StateData{State: state}
+		if !math.IsNaN(ptpMetrics.Offset) {
+			od := &event.OffsetData{
+				State:  state,
+				Offset: int64(ptpMetrics.Offset),
+			}
+			if eventSource == event.GNSS {
+				od.NMEALocked = event.Ptr(true)
+			}
+			data = od
 		}
 		select {
 		case process.eventCh <- event.Event{
@@ -177,7 +183,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			Time:       time.Now().UnixMilli(),
 			WriteToLog: eventSource == event.GNSS,
 			Reset:      false,
-			Data:       od,
+			Data:       data,
 		}:
 		default:
 		}
@@ -216,14 +222,17 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 
 // processParsedEvent handles PTP events extracted by the parser
 func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
-	if process.name == phc2sysProcessName {
+	switch process.name {
+	case phc2sysProcessName:
 		processPhc2sysSelectedSource(process, ptpEvent)
-		return
+	case ptp4lProcessName:
+		processPtp4lEvent(process, ptpEvent)
+	case ts2phcProcessName:
+		process.processTS2PhcEvent(ptpEvent)
 	}
-	if process.name != ptp4lProcessName {
-		return
-	}
+}
 
+func processPtp4lEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 	// Update interface role metrics
 	if ptpEvent.PortID > 0 && len(process.ifaces) >= ptpEvent.PortID-1 {
 		configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)

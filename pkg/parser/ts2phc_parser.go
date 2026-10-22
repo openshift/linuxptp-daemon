@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
@@ -46,6 +47,45 @@ var (
 	// exiting holdover.
 	// Not concerned about concurrency; will get to 2 even with race condition
 	NoSourceTSCount = 0
+
+	// ts2phc[9979.140]: [ts2phc.1.config:7] adding tstamp 1791226372.999999988 to clock /dev/ptp0
+	// ts2phc[9979.140]: [ts2phc.1.config:7] adding tstamp 1791226372.787084270 to clock /dev/ptp1
+	// ts2phc[9979.626]: [ts2phc.1.config:7] adding tstamp 1791226372.999999870 to clock /dev/ptp2
+	tstampEventTS2PHCRegex = regexp.MustCompile(
+		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s+\[(?P<config_name>.*\.\d+\.c.*g):?(?P<severity>\d*)\]` +
+			`\s+adding tstamp\s+(?P<tstamp>\d+\.\d+)` +
+			`\s+to clock\s+(?P<phc>\S+)$`,
+	)
+
+	// ts2phc[1031603.223]: [ts2phc.1.config:6] unselecting /dev/ptp9 for synchronization
+	selectionTS2PHCRegex = regexp.MustCompile(
+		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s*\[(?P<config_name>.*\.\d+\.c.*g):?(?P<severity>\d*)\]` +
+			`\s+(?P<selection>selecting|unselecting)\s+(?P<phc>/dev/ptp\d+)\s+for synchronization$`,
+	)
+
+	// Without external-PPS mode, choosing a reference also clears is_target.
+	// ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 as the reference clock
+	referenceTS2PHCRegex = regexp.MustCompile(
+		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s*\[(?P<config_name>.*\.\d+\.c.*g):?(?P<severity>\d*)\]` +
+			`\s+selecting\s+(?P<phc>/dev/ptp\d+)\s+as the reference clock$`,
+	)
+
+	// ts2phc[9979.140]: [ts2phc.1.config:6] no reference clock, selecting /dev/ptp9 by default
+	defaultReferenceTS2PHCRegex = regexp.MustCompile(
+		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s*\[(?P<config_name>.*\.\d+\.c.*g):?(?P<severity>\d*)\]` +
+			`\s+no reference clock, selecting\s+(?P<phc>/dev/ptp\d+)\s+by default$`,
+	)
+
+	// ts2phc[9979.473]: [ts2phc.1.config:7] poll returns zero, no events
+	tstampTimeoutTS2PHCRegex = regexp.MustCompile(
+		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s+\[(?P<config_name>.*\.\d+\.c.*g):?(?P<severity>\d*)\]` +
+			`\s+(?P<pollTimeout>poll returns zero, no events)$`,
+	)
 )
 
 type ts2phcParsed struct {
@@ -60,6 +100,29 @@ type ts2phcParsed struct {
 	ServoState    string
 	FreqAdj       *float64
 	Holdover      string
+	PHCTstamp     *PHCTimestamp
+	PHCDevice     string
+	PollTimeout   bool
+	Role          TS2PHCRole
+}
+
+func parsePHCTimestamp(value string) (PHCTimestamp, error) {
+	secondsText, fraction, hasFraction := strings.Cut(value, ".")
+	seconds, err := strconv.ParseInt(secondsText, 10, 64)
+	if err != nil {
+		return PHCTimestamp{}, err
+	}
+	if !hasFraction {
+		return PHCTimestamp{Seconds: seconds}, nil
+	}
+	if fraction == "" || len(fraction) > 9 {
+		return PHCTimestamp{}, errors.New("PHC timestamp fraction must contain 1 to 9 digits")
+	}
+	nanoseconds, err := strconv.ParseInt(fraction+strings.Repeat("0", 9-len(fraction)), 10, 64)
+	if err != nil {
+		return PHCTimestamp{}, err
+	}
+	return PHCTimestamp{Seconds: seconds, Nanoseconds: nanoseconds}, nil
 }
 
 func (p *ts2phcParsed) Populate(line string, matched, fields []string) error {
@@ -107,6 +170,21 @@ func (p *ts2phcParsed) Populate(line string, matched, fields []string) error {
 			p.FreqAdj = &freqAdj
 		case "holdover":
 			p.Holdover = matched[i]
+		case "tstamp":
+			tstamp, err := parsePHCTimestamp(matched[i])
+			if err != nil {
+				return err
+			}
+			p.PHCTstamp = &tstamp
+		case "phc":
+			p.PHCDevice = matched[i]
+		case "pollTimeout":
+			p.PollTimeout = true
+		case "selection":
+			p.Role = TS2PHCUnmanaged
+			if matched[i] == "selecting" {
+				p.Role = TS2PHCSink
+			}
 		}
 	}
 	return nil
@@ -121,18 +199,12 @@ func NewTS2PHCExtractor() *BaseMetricsExtractor[*ts2phcParsed] {
 		},
 		RegexExtractorPairs: []RegexExtractorPair[*ts2phcParsed]{
 			{
-				Regex: regularTS2PhcRegex,
-				Extractor: func(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
-					metric, err := extractTS2PHCOffset(parsed)
-					return metric, nil, err
-				},
+				Regex:     regularTS2PhcRegex,
+				Extractor: extractTS2PHCOffset,
 			},
 			{
-				Regex: nmeaStatusTS2PhcRegex,
-				Extractor: func(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
-					metric, err := extractTS2PHCnmeaStatus(parsed)
-					return metric, nil, err
-				},
+				Regex:     nmeaStatusTS2PhcRegex,
+				Extractor: extractTS2PHCnmeaStatus,
 			},
 			{
 				Regex: noSourceTSRegex,
@@ -141,21 +213,41 @@ func NewTS2PHCExtractor() *BaseMetricsExtractor[*ts2phcParsed] {
 					return nil, nil, nil
 				},
 			},
+			{
+				Regex:     tstampEventTS2PHCRegex,
+				Extractor: extractTS2PHCPollEvent,
+			},
+			{
+				Regex:     tstampTimeoutTS2PHCRegex,
+				Extractor: extractTS2PHCPollEvent,
+			},
+			{
+				Regex:     selectionTS2PHCRegex,
+				Extractor: extractTS2PHCPollEvent,
+			},
+			{
+				Regex:     referenceTS2PHCRegex,
+				Extractor: extractTS2PHCReferenceEvent,
+			},
+			{
+				Regex:     defaultReferenceTS2PHCRegex,
+				Extractor: extractTS2PHCReferenceEvent,
+			},
 		},
 	}
 }
 
-func extractTS2PHCOffset(parsed *ts2phcParsed) (*Metrics, error) {
+func extractTS2PHCOffset(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
 	if parsed.Interface == "" {
-		return nil, errors.New("ts2phc interface is empty")
+		return nil, nil, errors.New("ts2phc interface is empty")
 	}
 
 	if parsed.Offset == nil {
-		return nil, errors.New("ts2phc offset is empty")
+		return nil, nil, errors.New("ts2phc offset is empty")
 	}
 
 	if parsed.FreqAdj == nil {
-		return nil, errors.New("ts2phc freq is empty")
+		return nil, nil, errors.New("ts2phc freq is empty")
 	}
 
 	clockState := clockStateFromServo(parsed.ServoState)
@@ -165,7 +257,7 @@ func extractTS2PHCOffset(parsed *ts2phcParsed) (*Metrics, error) {
 
 	NoSourceTSCount = 0
 
-	return &Metrics{
+	metrics := &Metrics{
 		From:       constants.TS2PHC,
 		Iface:      parsed.Interface,
 		Offset:     *parsed.Offset,
@@ -173,16 +265,25 @@ func extractTS2PHCOffset(parsed *ts2phcParsed) (*Metrics, error) {
 		ClockState: clockState,
 		FreqAdj:    *parsed.FreqAdj,
 		Source:     constants.Master,
-	}, nil
+	}
+	event := &PTPEvent{
+		Iface: parsed.Interface,
+		Raw:   parsed.Raw,
+		Ts2Phc: &Ts2PhcEvent{
+			Timestamp:      parsed.Timestamp,
+			PollSuccessful: true,
+		},
+	}
+	return metrics, event, nil
 }
 
-func extractTS2PHCnmeaStatus(parsed *ts2phcParsed) (*Metrics, error) {
+func extractTS2PHCnmeaStatus(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
 	if parsed.Interface == "" {
-		return nil, errors.New("ts2phc interface is empty")
+		return nil, nil, errors.New("ts2phc interface is empty")
 	}
 
 	if parsed.Offset == nil {
-		return nil, errors.New("ts2phc offset is empty")
+		return nil, nil, errors.New("ts2phc offset is empty")
 	}
 
 	clockState := clockStateFromServo(parsed.ServoState)
@@ -204,11 +305,30 @@ func extractTS2PHCnmeaStatus(parsed *ts2phcParsed) (*Metrics, error) {
 		ClockState: clockState,
 		Source:     constants.NmeaStatus,
 		Status:     statusMetrics,
-	}, nil
+	}, nil, nil
 }
 
 func extractNoSourceTS(*ts2phcParsed) {
 	if NoSourceTSCount < 2 {
 		NoSourceTSCount++
 	}
+}
+
+// Reference-selection messages identify a source, not just an unmanaged PHC.
+func extractTS2PHCReferenceEvent(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
+	parsed.Role = TS2PHCSource
+	return extractTS2PHCPollEvent(parsed)
+}
+
+func extractTS2PHCPollEvent(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
+	return nil, &PTPEvent{
+		Raw: parsed.Raw,
+		Ts2Phc: &Ts2PhcEvent{
+			Timestamp:   parsed.Timestamp,
+			PHCDevice:   parsed.PHCDevice,
+			PHCTstamp:   parsed.PHCTstamp,
+			PollTimeout: parsed.PollTimeout,
+			Role:        parsed.Role,
+		},
+	}, nil
 }

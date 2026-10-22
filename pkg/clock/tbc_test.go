@@ -874,12 +874,51 @@ func TestUpdateBCState(t *testing.T) {
 		assert.Equal(t, event.PTP_LOCKED, bc.syncState.State, "should be LOCKED")
 	})
 
+	t.Run("FREERUN does not recover while ts2phc remains undisciplined", func(t *testing.T) {
+		bc, _ := newLockedTBCClock()
+		bc.AddEvent(event.Event{
+			Source: event.TS2PHC, IFace: "ens1f1", CfgName: "ts2phc.0.config",
+			ClockType: event.BC, Time: time.Now().UnixMilli(),
+			Data: &event.StateData{State: event.PTP_FREERUN},
+		})
+		assert.Equal(t, event.PTP_FREERUN, bc.syncState.State, "ts2phc failure should degrade the composite clock")
+
+		result := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+		assert.Equal(t, event.PTP_FREERUN, result.State,
+			"healthy offsets and source state must not recover while ts2phc still reports FREERUN")
+
+		result = bc.AddEvent(event.Event{
+			Source: event.TS2PHC, IFace: "ens1f1", CfgName: "ts2phc.0.config",
+			ClockType: event.BC, Time: time.Now().UnixMilli(),
+			Data: &event.StateData{State: event.PTP_LOCKED},
+		})
+		assert.Equal(t, event.PTP_LOCKED, result.State, "the clock may recover after ts2phc reports LOCKED")
+	})
+
 	t.Run("LOCKED to FREERUN via offset", func(t *testing.T) {
 		bc, _ := newLockedTBCClock()
 
 		result := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 2000, false))
 		assert.Equal(t, event.PTP_FREERUN, result.State, "should transition to FREERUN")
 		assert.Equal(t, protocol.ClockClassFreerun, result.ClockClass, "clockClass should be 248")
+	})
+
+	t.Run("LOCKED to FREERUN when any ts2phc interface loses discipline", func(t *testing.T) {
+		bc, _ := newLockedTBCClock()
+		bc.AddEvent(event.Event{
+			Source: event.TS2PHC, IFace: "ens1f1", CfgName: "ts2phc.0.config",
+			ClockType: event.BC, Time: time.Now().UnixMilli(),
+			Data: &event.StateData{State: event.PTP_LOCKED},
+		})
+		assert.Equal(t, event.PTP_LOCKED, bc.syncState.State, "precondition: clock should be LOCKED")
+
+		result := bc.AddEvent(event.Event{
+			Source: event.TS2PHC, IFace: "ens1f2", CfgName: "ts2phc.0.config",
+			ClockType: event.BC, Time: time.Now().UnixMilli(),
+			Data: &event.StateData{State: event.PTP_FREERUN},
+		})
+		assert.Equal(t, event.PTP_FREERUN, result.State, "one undisciplined PHC makes the T-BC FREERUN")
+		assert.Equal(t, protocol.ClockClassFreerun, result.ClockClass, "downstream class must degrade to 248")
 	})
 
 	t.Run("LOCKED to HOLDOVER via source lost", func(t *testing.T) {
