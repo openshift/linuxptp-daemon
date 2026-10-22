@@ -1150,6 +1150,7 @@ func TestTBCClock_ParentDSUpdate(t *testing.T) {
 			if msg.Type == ipc.TypeClockClass {
 				foundClockClassIPC = true
 				assert.Equal(t, ipc.ClockClassValue{ClockClass: 7}, msg.Values)
+				assert.Equal(t, testTBCIface, msg.IFace)
 			}
 		}
 		assert.True(t, foundClockClassIPC, "should send clock class IPC message")

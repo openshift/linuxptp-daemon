@@ -186,3 +186,19 @@ func TestEventCache_Update(t *testing.T) {
 		assert.False(t, ok)
 	})
 }
+
+func TestEventCache_ClockClassResourceIncludesInterface(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	event := cache.Update(ipc.Message{
+		Version: ipc.Version,
+		Type:    ipc.TypeClockClass,
+		Profile: testProfile,
+		IFace:   testIFace,
+		Values:  ipc.ClockClassValue{ClockClass: 6},
+	})
+
+	require.NotNil(t, event)
+	require.Len(t, event.Data.Values, 1)
+	assert.Equal(t, "/cluster/node/worker-0/ens2f0/master/clock-class", event.Data.Values[0].Resource)
+	assert.Equal(t, int64(6), event.Data.Values[0].Value)
+}
