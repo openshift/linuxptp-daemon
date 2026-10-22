@@ -146,11 +146,16 @@ func TestClockManager_EmitClockClassAndIPCCache(t *testing.T) {
 		Data:   &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}},
 	})
 	require.Equal(t, fbprotocol.ClockClass(6), bc.ClockClass())
+	for _, msg := range cache.Snapshot() {
+		assert.NotEqual(t, ipc.TypeClockClass, msg.Type, "clock class must wait for an interface")
+	}
+	bc.AddEvent(event.Event{Source: event.PTP4l, IFace: "eth0", Data: &event.OffsetData{Offset: 0}})
 
 	found := false
 	for _, msg := range cache.Snapshot() {
 		if msg.Type == ipc.TypeClockClass {
 			found = true
+			assert.Equal(t, "eth0", msg.IFace)
 			assert.Equal(t, uint8(6), msg.Values.(ipc.ClockClassValue).ClockClass)
 		}
 	}
@@ -171,11 +176,16 @@ func TestClockManager_EmitClockClassAndIPCCach_OC(t *testing.T) {
 		Data:   &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}},
 	})
 	require.Equal(t, fbprotocol.ClockClass(255), bc.ClockClass())
+	for _, msg := range cache.Snapshot() {
+		assert.NotEqual(t, ipc.TypeClockClass, msg.Type, "clock class must wait for an interface")
+	}
+	bc.AddEvent(event.Event{Source: event.PTP4l, IFace: "eth0", Data: &event.OffsetData{Offset: 0}})
 
 	found := false
 	for _, msg := range cache.Snapshot() {
 		if msg.Type == ipc.TypeClockClass {
 			found = true
+			assert.Equal(t, "eth0", msg.IFace)
 			assert.Equal(t, uint8(255), msg.Values.(ipc.ClockClassValue).ClockClass)
 		}
 	}
