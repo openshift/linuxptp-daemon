@@ -345,16 +345,6 @@ func (*PluginData) eventData() {}
 
 func (d *PluginData) String() string { return d.EventName }
 
-// Int64Ptr returns a pointer to v. Used by DPLL/offset senders for optional fields.
-func Int64Ptr(v int64) *int64 { return &v }
-
-// Ptr returns a pointer to the type you pass in it the type is ambiguious
-// e.g. Ptr(15) you have coherse the type by using Ptr[int64](15)
-func Ptr[T any](v T) *T { return &v }
-
-// BytePtr returns a pointer to v. Used by SyncE senders for optional QL fields.
-func BytePtr(v byte) *byte { return &v }
-
 // ClockType ...
 type ClockType string
 

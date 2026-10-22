@@ -13,6 +13,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 func convertParserRoleToMetricsRole(role parserconstants.PTPPortRole) ptpPortRole {
@@ -122,8 +123,11 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	// if state is HOLDOVER do not update the state
 	state := convertParserClockStateEventPTPState(ptpMetrics.ClockState)
 
+	// TODO: Split metrics handling into process-specific handlers, sharing the
+	// threshold rule where needed. Ultimately, forward raw observations and let
+	// clock objects own state evaluation, as OsClock already does for phc2sys.
 	// transition to FREERUN if offset is outside configured thresholds
-	if shouldFreeRun(state, ptpMetrics.Offset, process.ptpClockThreshold) {
+	if process.name != phc2sysProcessName && shouldFreeRun(state, ptpMetrics.Offset, process.ptpClockThreshold) {
 		state = event.PTP_FREERUN
 	}
 
@@ -170,7 +174,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 				Offset: int64(ptpMetrics.Offset),
 			}
 			if eventSource == event.GNSS {
-				od.NMEALocked = event.Ptr(true)
+				od.NMEALocked = utils.ToPtr(true)
 			}
 			data = od
 		}

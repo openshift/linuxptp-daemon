@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -16,6 +17,64 @@ type testDataSet struct {
 	data        map[string][]*event.Data
 	wantedState event.PTPState
 	desc        string
+}
+
+func TestAddEventWithoutWindowRetainsLatestSample(t *testing.T) {
+	d := &event.Data{ProcessName: event.PHC2SYS}
+	for i, offset := range []int64{10, 20} {
+		d.AddEvent(event.Event{
+			Source: event.PHC2SYS, IFace: "CLOCK_REALTIME", Time: int64(i + 1),
+			Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: offset},
+		})
+		d.UpdateState()
+		detail := d.GetDataDetails("CLOCK_REALTIME")
+		if !assert.NotNil(t, detail) {
+			return
+		}
+		assert.Equal(t, offset, detail.Offset, "the first sample is retained too")
+		assert.True(t, detail.HasOffset)
+		assert.Equal(t, event.PTP_LOCKED, d.State)
+		assert.Nil(t, d.Window, "no history is needed to retain latest details")
+	}
+	d.AddEvent(event.Event{
+		Source: event.PHC2SYS, IFace: "CLOCK_REALTIME", Time: 1,
+		Data: &event.OffsetData{State: event.PTP_FREERUN, Offset: 999},
+	})
+	assert.Equal(t, int64(20), d.GetDataDetails("CLOCK_REALTIME").Offset, "stale samples remain ignored")
+}
+
+func TestDataLatestOffset(t *testing.T) {
+	w := utils.NewWindow(3)
+	w.Insert(1)
+	w.Insert(-2.5)
+	for _, tt := range []struct {
+		name  string
+		data  *event.Data
+		want  float64
+		valid bool
+	}{
+		{name: "nil data"},
+		{name: "no samples", data: &event.Data{}},
+		{name: "empty window", data: &event.Data{
+			Window:  utils.NewWindow(3),
+			Details: event.DDetails{{Offset: 99, HasOffset: true}},
+		}},
+		{name: "window sample", data: &event.Data{Window: w}, want: -2.5, valid: true},
+		{name: "window takes precedence", data: &event.Data{Window: w, Details: event.DDetails{{Offset: 99, HasOffset: true}}}, want: -2.5, valid: true},
+		{name: "latest interface timestamp", data: &event.Data{Details: event.DDetails{
+			{Offset: 999, HasOffset: true, Time: 1},
+			{Offset: -20, HasOffset: true, Time: 3},
+			{Offset: 30, HasOffset: true, Time: 2},
+		}}, want: -20, valid: true},
+		{name: "recorded zero without window", data: &event.Data{Details: event.DDetails{{Offset: 0, HasOffset: true}}}, valid: true},
+		{name: "state without an offset", data: &event.Data{Details: event.DDetails{nil, {State: event.PTP_LOCKED}}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			offset, ok := tt.data.LatestOffset()
+			assert.Equal(t, tt.valid, ok)
+			assert.Equal(t, tt.want, offset)
+		})
+	}
 }
 
 func Test_updateStats(t *testing.T) {

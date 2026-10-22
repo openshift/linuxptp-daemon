@@ -16,6 +16,7 @@ import (
 	nl "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/mdlayher/genetlink"
 	"golang.org/x/sync/semaphore"
 )
@@ -852,13 +853,13 @@ func (d *DpllConfig) sendDpllEvent() {
 		HoldoverDisabled:         d.LocalHoldoverTimeout == 0,
 	}
 	if !d.hasFlag(FlagNoFreqencyStatus) {
-		dpllData.FrequencyStatus = event.Int64Ptr(d.frequencyStatus)
+		dpllData.FrequencyStatus = utils.ToPtr[int64](d.frequencyStatus)
 	}
 	if !d.hasFlag(FlagNoPhaseStatus) {
-		dpllData.PhaseStatus = event.Int64Ptr(d.phaseStatus)
+		dpllData.PhaseStatus = utils.ToPtr[int64](d.phaseStatus)
 	}
 	if !d.hasFlag(FlagNoPhaseOffset) {
-		dpllData.Offset = event.Int64Ptr(d.phaseOffset)
+		dpllData.Offset = utils.ToPtr[int64](d.phaseOffset)
 	}
 	eventData := event.Event{
 		Source:     event.DPLL,

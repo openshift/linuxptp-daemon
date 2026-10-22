@@ -462,7 +462,7 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 			if iface != clockRealTime && p.name == ts2phcProcessName {
 				eventSource := p.ifaces.GetEventSource(ifaceName)
 				if eventSource == event.GNSS {
-					nmeaLocked = event.Ptr(true)
+					nmeaLocked = utils.ToPtr(true)
 				}
 			}
 			// ts2phc has to be handled differently since it announce holdover state when gnss is lost
@@ -680,7 +680,7 @@ func (p *ptpProcess) processSynceEvents(logEntry synce.LogEntry) {
 			if sDeviceConfig.ExtendedTlv == synce.ExtendedTLV_DISABLED && logEntry.QL != synce.QL_DEFAULT_SSM {
 				data.Device = sDeviceConfig.Name
 				data.NetworkOption = sDeviceConfig.NetworkOption
-				data.QL = event.BytePtr(logEntry.QL)
+				data.QL = utils.ToPtr[byte](logEntry.QL)
 				sDeviceConfig.LastQLState[*logEntry.Source] = &synce.QualityLevelInfo{
 					Priority:    0,
 					SSM:         logEntry.QL,
@@ -711,8 +711,8 @@ func (p *ptpProcess) processSynceEvents(logEntry synce.LogEntry) {
 				if lastQLState.SSM != synce.QL_DEFAULT_SSM && logEntry.ExtQl != synce.QL_DEFAULT_SSM { // then have both ql
 					data.NetworkOption = sDeviceConfig.NetworkOption
 					data.Device = sDeviceConfig.Name
-					data.ExtQL = event.BytePtr(logEntry.ExtQl)
-					data.QL = event.BytePtr(lastQLState.SSM)
+					data.ExtQL = utils.ToPtr[byte](logEntry.ExtQl)
+					data.QL = utils.ToPtr[byte](lastQLState.SSM)
 					sDeviceConfig.LastQLState[*logEntry.Source].ExtendedSSM = logEntry.ExtQl
 					clockQuality, _ = sDeviceConfig.ClockQuality(synce.QualityLevelInfo{
 						SSM:         lastQLState.SSM,
@@ -1285,7 +1285,8 @@ func NewTs2phcProcess(env ptpProcessEnv) (*ptpProcess, error) {
 func ts2phcConditionsForTBC(p *ptpProcess, env ptpProcessEnv) map[process.Action]process.Condition {
 	conditions := map[process.Action]process.Condition{}
 
-	// Build ts2phc start condition: ptp4l locked with stable offset, and (if configured) phc2sys locked with stable offset
+	// Wait for stable ptp4l offsets and, if configured, phc2sys LOCKED.
+	// OsClock already applies the configured phc2sys thresholds and sample count.
 	ptp4lConfigName := fmt.Sprintf("ptp4l.%d.config", env.runID)
 	offsetThreshold := int64(1e9) // nanoseconds (same as current default)
 	offsetSampleCount := 3        // same sample count as used currently
@@ -1309,13 +1310,10 @@ func ts2phcConditionsForTBC(p *ptpProcess, env ptpProcessEnv) map[process.Action
 			cfgName = fmt.Sprintf("phc2sys.%d.config", env.runID)
 		}
 
-		startConditions = append(startConditions, &process.OnStateAndOffsetForCount{
-			ClockID:    ptp4lConfigName,
+		startConditions = append(startConditions, &process.OnProcessState{
 			ConfigName: cfgName,
-			Source:     event.PHC2SYS,
+			Source:     string(event.PHC2SYS),
 			State:      event.PTP_LOCKED,
-			MaxOffset:  float64(offsetThreshold),
-			Count:      offsetSampleCount,
 		})
 	}
 
