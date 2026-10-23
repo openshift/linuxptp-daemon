@@ -111,6 +111,33 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 		assert.True(t, gotClass6, "expected TypeClockClass 6 on FREERUN→LOCKED")
 	})
 
+	t.Run("initial LOCKED emits TypeClockClass 6", func(t *testing.T) {
+		gm, rio, _ := newTestGMClock()
+
+		// GNSS and DPLL are already locked on the first update: the GM goes
+		// straight to LOCKED and never passes through FREERUN.
+		gm.data = []*event.Data{
+			gmData(event.GNSS, event.PTP_LOCKED),
+			gmData(event.DPLL, event.PTP_LOCKED),
+			gmData(event.TS2PHCProcessName, event.PTP_LOCKED),
+		}
+		result := gm.updateState()
+		assert.Equal(t, event.PTP_LOCKED, result.State)
+		assert.Equal(t, fbprotocol.ClockClass6, result.ClockClass)
+
+		var gotClass6 bool
+		for _, msg := range rio.messages {
+			if msg.Type == ipc.TypeClockClass {
+				cv := msg.Values.(ipc.ClockClassValue)
+				assert.Equal(t, uint8(6), cv.ClockClass)
+				assert.Equal(t, cfg, msg.Profile)
+				assert.Equal(t, iface, msg.IFace)
+				gotClass6 = true
+			}
+		}
+		assert.True(t, gotClass6, "expected TypeClockClass 6 on first LOCKED update")
+	})
+
 	t.Run("LOCKED to HOLDOVER emits TypePTPState and TypeClockClass", func(t *testing.T) {
 		gm, rio, _ := newTestGMClock()
 
