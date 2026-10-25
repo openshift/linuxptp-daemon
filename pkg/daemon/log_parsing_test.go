@@ -1,14 +1,18 @@
 package daemon
 
 import (
+	"math"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
 // TestReplayDualUpstreamLog replays the actual ptp4l log sequence from OCPBUGS-111881
@@ -133,6 +137,63 @@ func TestSourceLostOnListening(t *testing.T) {
 		ptp, ok := evs[0].Data.(*event.OffsetData)
 		assert.True(t, ok && ptp.SourceLost, "emitted event must carry SourceLost=true")
 		assert.Equal(t, "ens3f0", evs[0].IFace)
+	}
+}
+
+func TestTS2PHCOffsetEventConversion(t *testing.T) {
+	for _, source := range []event.EventSource{event.GNSS, event.PPS} {
+		t.Run(string(source), func(t *testing.T) {
+			for _, tt := range []struct {
+				name   string
+				offset float64
+			}{
+				{name: "unavailable", offset: math.NaN()},
+				{name: "zero", offset: 0},
+				{name: "positive", offset: 123},
+				{name: "negative", offset: -123},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					p := newTS2PHCPollTestProcess()
+					p.ifaces[0].Source = source
+					processParsedMetrics(p, &parser.Metrics{
+						From: constants.TS2PHC, Iface: "ens0", Source: constants.Master,
+						ClockState: constants.ClockStateFreeRun,
+						Offset:     tt.offset, MaxOffset: tt.offset,
+					})
+					events := drainEvents(p.eventCh)
+					require.Len(t, events, 1)
+					ev := events[0]
+					assert.Equal(t, event.TS2PHC, ev.Source)
+					assert.Equal(t, "ens0", ev.IFace)
+					assert.Equal(t, p.configName, ev.CfgName)
+					if math.IsNaN(tt.offset) {
+						require.IsType(t, &event.StateData{}, ev.Data)
+						assert.Equal(t, &event.StateData{State: event.PTP_FREERUN}, ev.Data)
+						// The state-only event remains usable by clock aggregation
+						// without inserting a fabricated offset into its window.
+						d := &event.Data{ProcessName: event.TS2PHC}
+						d.AddEvent(ev)
+						d.UpdateState()
+						assert.Equal(t, event.PTP_FREERUN, d.State)
+						require.Len(t, d.Details, 1)
+						assert.False(t, d.Details[0].HasOffset)
+						assert.True(t, math.IsNaN(testutil.ToFloat64(Offset.WithLabelValues(
+							constants.Master, ts2phcProcessName, NodeName, alias.GetAlias("ens0")))))
+					} else {
+						require.IsType(t, &event.OffsetData{}, ev.Data)
+						od := ev.Data.(*event.OffsetData)
+						assert.Equal(t, event.PTP_FREERUN, od.State)
+						assert.Equal(t, int64(tt.offset), od.Offset)
+						if source == event.GNSS {
+							require.NotNil(t, od.NMEALocked)
+							assert.True(t, *od.NMEALocked)
+						} else {
+							assert.Nil(t, od.NMEALocked)
+						}
+					}
+				})
+			}
+		})
 	}
 }
 

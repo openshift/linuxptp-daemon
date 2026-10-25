@@ -1,9 +1,10 @@
 package cep
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
-	"os"
 	"sync"
 
 	"github.com/google/uuid"
@@ -40,33 +41,45 @@ type PubSub struct {
 	free []int
 	// resourceIndex maps the watched resource to subscriptions, allowing for O(1) lookup
 	resourceIndex map[string][]int
-	// storePath is the filepath for persistent storage of subscriptionRecords
-	storePath string
 	// writerFunc creates an io.Writer for a given endpoint. Used when Subscribe() is called, or when
 	// SubscriptionRecords are loaded from disk.
-	writerFunc WriterFunc
+	writerFunc    WriterFunc
+	recordStorage Store
 }
 
-// NewPubSub creates a PubSub with the given persistent store path and writer factory.
-func NewPubSub(storePath string, writerFunc WriterFunc) *PubSub {
+// NewPubSub creates a PubSub with the given persistent Store and writer factory. ctx bounds the
+// lifetime of persistence operations against the Store.
+func NewPubSub(storageBackend Store, writerFunc WriterFunc) *PubSub {
 	return &PubSub{
 		resourceIndex: make(map[string][]int),
-		storePath:     storePath,
+		recordStorage: storageBackend,
 		writerFunc:    writerFunc,
 	}
 }
 
-// Subscribe registers a new subscription for the given resource and returns its ID.
-func (ps *PubSub) Subscribe(resource, endpoint string) string {
+// Subscribe registers a subscription only if an active one for the same resource and publish endpoint does not
+// already exist, returning the subscription ID and whether it already existed or not.
+func (ps *PubSub) Subscribe(resource, endpoint string) (string, bool) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	for _, idx := range ps.resourceIndex[resource] {
+		sub := ps.subs[idx]
+		if sub.active && sub.Endpoint == endpoint {
+			return sub.ID, true
+		}
+	}
+	return ps.insertLocked(resource, endpoint), false
+}
+
+// insertLocked inserts a new subscription, persists it, and returns its ID. Callers must hold ps.mu
+// for writing.
+func (ps *PubSub) insertLocked(resource, endpoint string) string {
 	id := uuid.New().String()
 	var w io.Writer
 	if endpoint != "" && ps.writerFunc != nil {
 		w = ps.writerFunc(endpoint)
 	}
 	sub := Subscription{ID: id, Resource: resource, Endpoint: endpoint, W: w, active: true}
-
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
 
 	var idx int
 	if len(ps.free) > 0 {
@@ -80,7 +93,7 @@ func (ps *PubSub) Subscribe(resource, endpoint string) string {
 	ps.resourceIndex[resource] = append(ps.resourceIndex[resource], idx)
 
 	if err := ps.save(); err != nil {
-		glog.Errorf("failed to save subscriptions: %v", err)
+		glog.Errorf("failed to Save subscriptions: %v", err)
 	}
 	return id
 }
@@ -120,7 +133,7 @@ func (ps *PubSub) Unsubscribe(id string) bool {
 	}
 
 	if err := ps.save(); err != nil {
-		glog.Errorf("failed to save subscriptions: %v", err)
+		glog.Errorf("failed to Save subscriptions: %v", err)
 	}
 	return true
 }
@@ -133,7 +146,7 @@ func (ps *PubSub) UnsubscribeAll() {
 	ps.free = nil
 	ps.resourceIndex = make(map[string][]int)
 	if err := ps.save(); err != nil {
-		glog.Errorf("failed to save subscriptions: %v", err)
+		glog.Errorf("failed to Save subscriptions: %v", err)
 	}
 }
 
@@ -156,24 +169,58 @@ func (ps *PubSub) getTargets(source string) []publishTarget {
 	return targets
 }
 
-// Publish converts the event to a CloudEvent and delivers it to all matching subscribers.
-func (ps *PubSub) Publish(e *event.Event) {
+// marshalCloudEvent converts an event to its newline-terminated CloudEvent JSON wire form.
+func marshalCloudEvent(e *event.Event) ([]byte, error) {
 	ce, err := e.NewCloudEventV2()
 	if err != nil {
-		glog.Errorf("failed to convert event to CloudEvent: %v", err)
-		return
+		return nil, fmt.Errorf("failed to convert event to CloudEvent: %w", err)
 	}
 	data, err := json.Marshal(ce)
 	if err != nil {
-		glog.Errorf("failed to marshal CloudEvent: %v", err)
+		return nil, fmt.Errorf("failed to marshal CloudEvent: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
+// Publish converts the event to a CloudEvent and delivers it to all matching subscribers.
+func (ps *PubSub) Publish(e *event.Event) {
+	data, err := marshalCloudEvent(e)
+	if err != nil {
+		glog.Error(err)
 		return
 	}
-	data = append(data, '\n')
 
 	for _, t := range ps.getTargets(e.Source) {
 		if _, writeErr := t.w.Write(data); writeErr != nil {
 			glog.Errorf("failed to write event to subscriber %s: %v", t.id, writeErr)
 		}
+	}
+}
+
+// PublishToID delivers the event to a single subscription by ID, if it exists and has a writer.
+// It is used to send the initial status notification required on subscription creation.
+func (ps *PubSub) PublishToID(id string, e *event.Event) {
+	data, err := marshalCloudEvent(e)
+	if err != nil {
+		glog.Error(err)
+		return
+	}
+
+	ps.mu.RLock()
+	var w io.Writer
+	for i := range ps.subs {
+		if ps.subs[i].active && ps.subs[i].ID == id {
+			w = ps.subs[i].W
+			break
+		}
+	}
+	ps.mu.RUnlock()
+
+	if w == nil {
+		return
+	}
+	if _, writeErr := w.Write(data); writeErr != nil {
+		glog.Errorf("failed to write initial notification to subscriber %s: %v", id, writeErr)
 	}
 }
 
@@ -210,34 +257,17 @@ func (ps *PubSub) save() error {
 			records = append(records, subscriptionRecord{ID: sub.ID, Resource: sub.Resource, Endpoint: sub.Endpoint})
 		}
 	}
-	data, err := json.MarshalIndent(records, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Write to a temp file and rename to avoid corrupting subscriptions.json on a crash mid-write.
-	tmpPath := ps.storePath + ".tmp"
-	if writeErr := os.WriteFile(tmpPath, data, 0600); writeErr != nil {
-		return writeErr
-	}
-	return os.Rename(tmpPath, ps.storePath)
+	return ps.recordStorage.Save(records)
 }
 
-// LoadFromDisk replaces the in-memory subscriptions with those persisted to ps.storePath
-func (ps *PubSub) LoadFromDisk() error {
+// LoadFromStore replaces the in-memory subscriptions with those persisted to the storage backend
+func (ps *PubSub) LoadFromStore(ctx context.Context) error {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	data, err := os.ReadFile(ps.storePath)
-	if os.IsNotExist(err) {
-		return nil
-	}
+	records, err := ps.recordStorage.Load(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("error loading subscription records: %w", err)
 	}
-	var records []subscriptionRecord
-	if unmarshalErr := json.Unmarshal(data, &records); unmarshalErr != nil {
-		return unmarshalErr
-	}
-
 	ps.subs = make([]Subscription, len(records))
 	ps.free = nil
 	ps.resourceIndex = make(map[string][]int)

@@ -13,11 +13,11 @@ type DDetails []*DataDetails
 
 // Data ...
 type Data struct {
-	ProcessName EventSource // ts2phc  // dpll
-	Details     DDetails    // array of iface and  offset
-	State       PTPState    // have the worst state here
-	LogData     string      // iface that is connected to GNSS
-	Window      utils.Window
+	ProcessName EventSource   // ts2phc  // dpll
+	Details     DDetails      // array of iface and  offset
+	State       PTPState      // have the worst state here
+	LogData     string        // iface that is connected to GNSS
+	Window      *utils.Window // optional offset history; latest per-interface values are stored in Details
 }
 
 // DataMetrics ...
@@ -87,8 +87,38 @@ func (d *Data) GetDataDetails(iface string) *DataDetails {
 	return nil
 }
 
+// LatestOffset returns the last window sample when a window is configured, or
+// the latest timestamped per-interface offset when no window is configured.
+// The boolean is false when no offset has been recorded; a recorded zero offset
+// is still valid.
+func (d *Data) LatestOffset() (float64, bool) {
+	if d == nil {
+		return 0, false
+	}
+	if d.Window != nil {
+		if d.Window.IsEmpty() {
+			return 0, false
+		}
+		return d.Window.LastInserted(), true
+	}
+	var latest *DataDetails
+	for _, detail := range d.Details {
+		if detail != nil && detail.HasOffset && (latest == nil || detail.Time >= latest.Time) {
+			latest = detail
+		}
+	}
+	if latest == nil {
+		return 0, false
+	}
+	return float64(latest.Offset), true
+}
+
 // AddEvent records an incoming event into the data store.
 func (d *Data) AddEvent(event Event) {
+	d.addEvent(event)
+}
+
+func (d *Data) addEvent(event Event) {
 	var state PTPState
 	var sourceLost bool
 	var offset int64
@@ -143,7 +173,9 @@ func (d *Data) AddEvent(event Event) {
 				if hasOffset {
 					dd.Offset = offset
 					dd.HasOffset = true
-					d.Window.Insert(float64(offset))
+					if d.Window != nil {
+						d.Window.Insert(float64(offset))
+					}
 				}
 			} else {
 				glog.Infof("discarding stale event for process %s, last event @ %d, current event @ %d", event.Source, dd.Time, event.Time)
@@ -162,6 +194,10 @@ func (d *Data) AddEvent(event Event) {
 		SourceLost:         sourceLost,
 		OutOfSpec:          outOfSpec,
 		FrequencyTraceable: frequencyTraceable,
+	}
+	if d.Window == nil && hasOffset {
+		details.Offset = offset
+		details.HasOffset = true
 	}
 	if leading {
 		glog.Info(details.IFace, " is set as the leading source ")

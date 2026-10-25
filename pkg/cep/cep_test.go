@@ -25,6 +25,9 @@ const (
 	testProfile      = "ptp4l.0.config"
 	testIFace        = "ens2f0"
 	testPTPLockState = "/cluster/node/worker-0/sync/ptp-status/lock-state"
+	// testBaseURL is the server-configured root used to build subscription UriLocation values.
+	testBaseURL  = "http://worker-0:9043"
+	testNodeName = "worker-0"
 )
 
 func TestBuildDataValues(t *testing.T) {
@@ -175,9 +178,9 @@ func TestListenerResilience(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cache := NewEventCache("worker-0")
-			listener := NewCloudEventProxy(cache, nil)
+			listener := NewCloudEventProxy(cache, nil, "worker-0", testBaseURL)
 
-			listener.Listen(tt.input())
+			listener.handleIncomingEvents(tt.input())
 
 			_, ok := cache.Get(ipc.TypePTPState)
 			assert.Equal(t, tt.wantCached, ok)
@@ -185,6 +188,26 @@ func TestListenerResilience(t *testing.T) {
 	}
 }
 
+func TestIntegrationHealthCheck(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
+	apiServer := httptest.NewServer(proxy.Handler())
+	defer apiServer.Close()
+	resp, err := http.Get(apiServer.URL + apiBase + "/health")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "OK", string(body))
+}
+
+// TestIntegrationEventDelivery covers the Status Notifications API (O-RAN spec v04.00 §5.1.1): on a
+// resource state change the producer POSTs the event notification to the consumer's subscribed
+// endpoint.
 func TestIntegrationEventDelivery(t *testing.T) {
 	t.Run("subscriber receives matching events", func(t *testing.T) {
 		var mu sync.Mutex
@@ -209,8 +232,10 @@ func TestIntegrationEventDelivery(t *testing.T) {
 		defer consumer.Close()
 
 		cache := NewEventCache("worker-0")
-		ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
-		proxy := NewCloudEventProxy(cache, ps)
+		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		require.NoError(t, err)
+		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+		proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
 
@@ -227,7 +252,7 @@ func TestIntegrationEventDelivery(t *testing.T) {
 		pr, pw := io.Pipe()
 		done := make(chan struct{})
 		go func() {
-			proxy.Listen(pr)
+			proxy.handleIncomingEvents(pr)
 			close(done)
 		}()
 
@@ -264,11 +289,18 @@ func TestIntegrationEventDelivery(t *testing.T) {
 	})
 }
 
+// TestIntegrationSubscriptionAPI exercises the Subscription API from the O-RAN O-Cloud Notification
+// API spec v04.00:
+//   - POST /subscriptions -> 201 and GET /subscriptions -> 200 (§4.1.2, Table 3 & Table 7)
+//   - GET /subscriptions/{id} -> 200 / 404 (§4.1.3, Table 16)
+//   - DELETE /subscriptions/{id} -> 204 (§4.1.3, Table 13)
 func TestIntegrationSubscriptionAPI(t *testing.T) {
 	t.Run("CRUD lifecycle", func(t *testing.T) {
 		cache := NewEventCache("worker-0")
-		ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
-		proxy := NewCloudEventProxy(cache, ps)
+		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		require.NoError(t, err)
+		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+		proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
 
@@ -288,6 +320,9 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 		assert.NotEmpty(t, sub.ID)
 		assert.Equal(t, testPTPLockState, sub.Resource)
 		assert.Equal(t, "http://localhost:9999/event", sub.EndpointURI)
+		// UriLocation is a mandatory SubscriptionInfo field (spec §7.1.1, Table 30) and must point at
+		// the individual subscription resource.
+		assert.Equal(t, testBaseURL+"/api/ocloudNotifications/v2/subscriptions/"+sub.ID, sub.URILocation)
 
 		resp, err = http.Get(apiServer.URL + "/api/ocloudNotifications/v2/subscriptions")
 		require.NoError(t, err)
@@ -297,6 +332,7 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&subs))
 		resp.Body.Close()
 		assert.Len(t, subs, 1)
+		assert.Equal(t, testBaseURL+"/api/ocloudNotifications/v2/subscriptions/"+subs[0].ID, subs[0].URILocation)
 
 		req, _ := http.NewRequest(http.MethodDelete, apiServer.URL+"/api/ocloudNotifications/v2/subscriptions", nil)
 		resp, err = http.DefaultClient.Do(req)
@@ -314,8 +350,10 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 
 	t.Run("get by ID", func(t *testing.T) {
 		cache := NewEventCache("worker-0")
-		ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
-		proxy := NewCloudEventProxy(cache, ps)
+		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		require.NoError(t, err)
+		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+		proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
 
@@ -342,6 +380,7 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 		resp.Body.Close()
 		assert.Equal(t, created.ID, got.ID)
 		assert.Equal(t, testPTPLockState, got.Resource)
+		assert.Equal(t, testBaseURL+"/api/ocloudNotifications/v2/subscriptions/"+got.ID, got.URILocation)
 
 		resp, err = http.Get(apiServer.URL + "/api/ocloudNotifications/v2/subscriptions/nonexistent-id")
 		require.NoError(t, err)
@@ -351,8 +390,10 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 
 	t.Run("delete by ID", func(t *testing.T) {
 		cache := NewEventCache("worker-0")
-		ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
-		proxy := NewCloudEventProxy(cache, ps)
+		d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		require.NoError(t, err)
+		ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+		proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 		apiServer := httptest.NewServer(proxy.Handler())
 		defer apiServer.Close()
 
@@ -391,10 +432,15 @@ func TestIntegrationSubscriptionAPI(t *testing.T) {
 	})
 }
 
+// TestSubscriptionValidation covers the POST /subscriptions response codes defined in the O-RAN
+// O-Cloud Notification API spec v04.00 §4.1.2, Table 7: 400 (bad request), 404 (resource not
+// available on this node), and 201 (created).
 func TestSubscriptionValidation(t *testing.T) {
 	cache := NewEventCache("worker-0")
-	ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
-	proxy := NewCloudEventProxy(cache, ps)
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 	apiServer := httptest.NewServer(proxy.Handler())
 	defer apiServer.Close()
 
@@ -421,31 +467,47 @@ func TestSubscriptionValidation(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "valid subscription",
+			name:       "unsupported resource",
 			body:       `{"EndpointUri":"http://localhost:9999/event","ResourceAddress":"/resource/a"}`,
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			// Valid suffix but another node's address: delivery would never match, so it must 404.
+			name:       "other node resource",
+			body:       `{"EndpointUri":"http://localhost:9999/event","ResourceAddress":"/cluster/node/other-node/sync/ptp-status/lock-state"}`,
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "valid subscription",
+			body:       fmt.Sprintf(`{"EndpointUri":"http://localhost:9999/event","ResourceAddress":"%s"}`, testPTPLockState),
 			wantStatus: http.StatusCreated,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp, err := http.Post(subURL, "application/json", strings.NewReader(tt.body))
-			require.NoError(t, err)
+			resp, postErr := http.Post(subURL, "application/json", strings.NewReader(tt.body))
+			require.NoError(t, postErr)
 			resp.Body.Close()
 			assert.Equal(t, tt.wantStatus, resp.StatusCode)
 		})
 	}
 }
 
+// TestIntegrationCurrentState covers the Event Pull Status Notifications API: GET
+// /{ResourceAddress}/CurrentState -> 200 with the current Event, or 404 when the resource is not
+// available on this node (O-RAN spec v04.00 §6.1.1, Table 25 & Table 29).
 func TestIntegrationCurrentState(t *testing.T) {
 	cache := NewEventCache("worker-0")
-	ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
-	proxy := NewCloudEventProxy(cache, ps)
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
 
 	pr, pw := io.Pipe()
 	done := make(chan struct{})
 	go func() {
-		proxy.Listen(pr)
+		proxy.handleIncomingEvents(pr)
 		close(done)
 	}()
 
@@ -479,4 +541,187 @@ func TestIntegrationCurrentState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	resp.Body.Close()
+}
+
+// GET /publishers is a redhat-cne "(Extensions to O-RAN API)" endpoint, not an O-RAN spec requirement
+func TestGetPublishers(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
+	apiServer := httptest.NewServer(proxy.Handler())
+	defer apiServer.Close()
+
+	resp, err := http.Get(apiServer.URL + "/api/ocloudNotifications/v2/publishers")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var pubs []publisherResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&pubs))
+	resp.Body.Close()
+
+	// One publisher per supported resource, with only ResourceAddress populated.
+	require.Len(t, pubs, len(supportedResourceSuffixes))
+	addrs := make(map[string]bool, len(pubs))
+	for _, p := range pubs {
+		assert.NotEmpty(t, p.Resource)
+		assert.Contains(t, p.Resource, "/cluster/node/worker-0/")
+		assert.Empty(t, p.ID)
+		assert.Empty(t, p.EndpointURI)
+		assert.Empty(t, p.URILocation)
+		addrs[p.Resource] = true
+	}
+	// A subscribable resource (lock-state) must be advertised.
+	assert.True(t, addrs[testPTPLockState], "expected %s among publishers", testPTPLockState)
+}
+
+// O-RAN spec v04.00 §3.1.2 requires error responses to use the RFC 7807 Problem Details object,
+// signalled by the "application/problem+json" content type.
+func TestErrorResponsesUseProblemJSON(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
+	apiServer := httptest.NewServer(proxy.Handler())
+	defer apiServer.Close()
+
+	cases := []struct {
+		name       string
+		do         func() (*http.Response, error)
+		wantStatus int
+	}{
+		{"bad request", func() (*http.Response, error) {
+			return http.Post(apiServer.URL+"/api/ocloudNotifications/v2/subscriptions", "application/json", strings.NewReader(`{}`))
+		}, http.StatusBadRequest},
+		{"subscription not found", func() (*http.Response, error) {
+			return http.Get(apiServer.URL + "/api/ocloudNotifications/v2/subscriptions/nope")
+		}, http.StatusNotFound},
+		{"current state not found", func() (*http.Response, error) {
+			return http.Get(apiServer.URL + "/api/ocloudNotifications/v2/" + testPTPLockState + "/CurrentState")
+		}, http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, doErr := tc.do()
+			require.NoError(t, doErr)
+			defer resp.Body.Close()
+			assert.Equal(t, tc.wantStatus, resp.StatusCode)
+			assert.Equal(t, "application/problem+json", resp.Header.Get("Content-Type"))
+
+			var pd problemDetails
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&pd))
+			assert.Equal(t, tc.wantStatus, pd.Status)
+			assert.NotEmpty(t, pd.Title)
+			assert.NotEmpty(t, pd.Detail)
+		})
+	}
+}
+
+// TestSubscriptionDuplicateConflict covers the 409 ("subscription resource already exists") response
+// for POST /subscriptions (O-RAN spec v04.00 §4.1.2, Table 7).
+func TestSubscriptionDuplicateConflict(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
+	apiServer := httptest.NewServer(proxy.Handler())
+	defer apiServer.Close()
+
+	subURL := apiServer.URL + "/api/ocloudNotifications/v2/subscriptions"
+	body := fmt.Sprintf(`{"EndpointUri":"http://localhost:9999/event","ResourceAddress":%q}`, testPTPLockState)
+
+	resp, err := http.Post(subURL, "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	// A second identical subscription (same resource+endpoint) must be rejected with 409.
+	resp, err = http.Post(subURL, "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	resp.Body.Close()
+}
+
+// Scopes the 409 contract (O-RAN spec v04.00 §4.1.2, Table 7): duplicate detection keys on
+// resource AND endpoint, so different clients (different endpoints) subscribing to the same
+// resource must both succeed, not get a 409.
+func TestSubscriptionDifferentClientsSameResource(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
+	apiServer := httptest.NewServer(proxy.Handler())
+	defer apiServer.Close()
+
+	subURL := apiServer.URL + "/api/ocloudNotifications/v2/subscriptions"
+	for _, endpoint := range []string{"http://localhost:9991/event", "http://localhost:9992/event"} {
+		body := fmt.Sprintf(`{"EndpointUri":%q,"ResourceAddress":%q}`, endpoint, testPTPLockState)
+		resp, postErr := http.Post(subURL, "application/json", strings.NewReader(body))
+		require.NoError(t, postErr)
+		assert.Equal(t, http.StatusCreated, resp.StatusCode, "endpoint %s should be allowed", endpoint)
+		resp.Body.Close()
+	}
+
+	// Both subscriptions should now exist.
+	resp, err := http.Get(subURL)
+	require.NoError(t, err)
+	var subs []subscriptionResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&subs))
+	resp.Body.Close()
+	assert.Len(t, subs, 2)
+}
+
+// TestSubscriptionInitialNotification covers the O-RAN spec v04.00 §4.1.2 requirement that creating a
+// subscription triggers an initial status notification to the consumer's endpoint ("An initial status
+// notification for the type of event ... shall be triggered").
+func TestSubscriptionInitialNotification(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	d, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+	require.NoError(t, err)
+	ps := NewPubSub(d, NewHTTPWriterFunc(2*time.Second))
+	proxy := NewCloudEventProxy(cache, ps, testNodeName, testBaseURL)
+
+	// Populate the cache with a current state for the resource.
+	pr, pw := io.Pipe()
+	done := make(chan struct{})
+	go func() { proxy.handleIncomingEvents(pr); close(done) }()
+	ipc.Transmit(pw, ipc.Message{
+		Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile,
+		IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked}})
+	pw.Close()
+	<-done
+
+	// The consumer endpoint captures whatever is pushed to it.
+	received := make(chan []byte, 1)
+	consumer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		received <- b
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer consumer.Close()
+
+	apiServer := httptest.NewServer(proxy.Handler())
+	defer apiServer.Close()
+
+	subBody := fmt.Sprintf(`{"EndpointUri":%q,"ResourceAddress":%q}`, consumer.URL, testPTPLockState)
+	resp, err := http.Post(apiServer.URL+"/api/ocloudNotifications/v2/subscriptions",
+		"application/json", strings.NewReader(subBody))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	// Creating the subscription must have pushed the current state to the consumer endpoint.
+	select {
+	case b := <-received:
+		var got ce.Event
+		require.NoError(t, json.Unmarshal(b, &got))
+		assert.Contains(t, got.Source(), "ptp-status/lock-state")
+		assert.NotEmpty(t, got.Data())
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not receive initial notification")
+	}
 }

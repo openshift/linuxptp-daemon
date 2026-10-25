@@ -361,7 +361,7 @@ func TestBCClock_ClockType(t *testing.T) {
 func TestBCClock_ParentDSUpdate(t *testing.T) {
 	t.Run("updates clock class and emits", func(t *testing.T) {
 		rio := &ipcRecorder{}
-		bc := &BCClock{BaseClock: BaseClock{cfgName: testPTP4lCfg, sendIPC: rio.send}}
+		bc := &BCClock{BaseClock: BaseClock{cfgName: testPTP4lCfg, sendIPC: rio.send}, iface: testEns7f0}
 
 		parentDS := protocol.ParentDataSet{
 			GrandmasterClockClass: 6,
@@ -372,6 +372,20 @@ func TestBCClock_ParentDSUpdate(t *testing.T) {
 		require.Len(t, rio.messages, 1)
 		assert.Equal(t, ipc.TypeClockClass, rio.messages[0].Type)
 		assert.Equal(t, ipc.ClockClassValue{ClockClass: 6}, rio.messages[0].Values)
+	})
+
+	t.Run("delays startup class until interface is known", func(t *testing.T) {
+		bc, rio := newTestBCClock()
+		parentDS := protocol.ParentDataSet{GrandmasterClockClass: 255}
+		bc.AddEvent(event.Event{Source: event.PMC, Data: &event.ParentDSData{ParentDataSet: parentDS}})
+		assert.Equal(t, fbprotocol.ClockClass(255), bc.clockClass)
+		assert.Empty(t, rio.messages)
+
+		bc.AddEvent(offsetEvent(testEns7f0, 50))
+		require.Len(t, rio.messages, 2)
+		assert.Equal(t, ipc.TypeClockClass, rio.messages[0].Type)
+		assert.Equal(t, testEns7f0, rio.messages[0].IFace)
+		assert.Equal(t, ipc.ClockClassValue{ClockClass: 255}, rio.messages[0].Values)
 	})
 
 	t.Run("unchanged class does not send IPC", func(t *testing.T) {
@@ -391,6 +405,7 @@ func TestBCClock_ParentDSUpdate(t *testing.T) {
 		oc, err := NewBC(testPTP4lCfg, true, event.PtpClockThreshold{})
 		require.NoError(t, err)
 		oc.SetIPC(rio.send)
+		oc.iface = testEns7f0
 
 		// A parent dataset advertising the grandmaster's class (6) must not
 		// override the OC's own 255/SlaveOnly class.

@@ -166,7 +166,10 @@ func TestAny(t *testing.T) {
 	// LOCKED event with sub-second offset and a stats window satisfying count=0
 	w := utils.NewWindow(10)
 	w.Insert(500000.0)
-	stats := EventStats{ttestTs2phcConditions: {event.TS2PHC: w}}
+	stats := EventStats{
+		Windows: map[string]map[event.EventSource]utils.ROWindow{ttestTs2phcConditions: {event.TS2PHC: w}},
+		States:  map[string]map[event.EventSource]event.PTPState{ttestTs2phcConditions: {event.TS2PHC: event.PTP_LOCKED}},
+	}
 
 	locked := event.Event{
 		Source:  event.TS2PHC,
@@ -209,7 +212,10 @@ func TestOnStateAndOffsetForCount(t *testing.T) {
 	w := utils.NewWindow(10)
 	w.Insert(500000.0)
 	w.Insert(-400000.0)
-	stats := EventStats{ttestTs2phcConditions: {event.TS2PHC: w}}
+	stats := EventStats{
+		Windows: map[string]map[event.EventSource]utils.ROWindow{ttestTs2phcConditions: {event.TS2PHC: w}},
+		States:  map[string]map[event.EventSource]event.PTPState{ttestTs2phcConditions: {event.TS2PHC: event.PTP_LOCKED}},
+	}
 	assert.True(t, c.Met(p, locked(500000), stats), "two sub-second samples including negative should meet count")
 
 	assert.False(t, c.Met(p, locked(500000), EventStats{}), "nil window should not match")
@@ -225,6 +231,79 @@ func TestOnStateAndOffsetForCount(t *testing.T) {
 	wLarge := utils.NewWindow(10)
 	wLarge.Insert(-2000000000.0)
 	wLarge.Insert(-2000000000.0)
-	statsLarge := EventStats{ttestTs2phcConditions: {event.TS2PHC: wLarge}}
+	statsLarge := EventStats{
+		Windows: map[string]map[event.EventSource]utils.ROWindow{ttestTs2phcConditions: {event.TS2PHC: wLarge}},
+		States:  stats.States,
+	}
 	assert.False(t, c.Met(p, locked(-2000000000), statsLarge), "abs(offset) above MaxOffset should not count")
+}
+
+func TestStateConditionsUseEvaluatedState(t *testing.T) {
+	p := &stubProc{}
+	w := utils.NewWindow(10)
+	w.Insert(10)
+	stats := EventStats{
+		Windows: map[string]map[event.EventSource]utils.ROWindow{ttestPtp4lConditions: {event.PHC2SYS: w}},
+		States:  map[string]map[event.EventSource]event.PTPState{ttestPtp4lConditions: {event.PHC2SYS: event.PTP_NOTSET}},
+	}
+	ev := event.Event{Source: event.PHC2SYS, CfgName: ttestPtp4lConditions, Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: 10}}
+	for _, cond := range []Condition{
+		OnProcessState{ConfigName: ttestPtp4lConditions, Source: string(event.PHC2SYS), State: event.PTP_LOCKED},
+		OnStateAndOffsetForCount{ClockID: ttestPtp4lConditions, ConfigName: ttestPtp4lConditions, Source: event.PHC2SYS, State: event.PTP_LOCKED, MaxOffset: 100},
+	} {
+		assert.False(t, cond.Met(p, ev, stats), "raw LOCKED must not bypass debounce")
+		stats.States[ttestPtp4lConditions][event.PHC2SYS] = event.PTP_LOCKED
+		ev.Data.(*event.OffsetData).State = event.PTP_FREERUN
+		assert.True(t, cond.Met(p, ev, stats), "conditions use evaluated state, not raw jitter")
+		assert.False(t, cond.Met(p, ev, EventStats{}), "missing snapshots cannot fall back to raw state")
+		stats.States[ttestPtp4lConditions][event.PHC2SYS] = event.PTP_NOTSET
+		ev.Data.(*event.OffsetData).State = event.PTP_LOCKED
+	}
+}
+
+func TestStateConditionsReconcileWithoutAnEvent(t *testing.T) {
+	p := &stubProc{}
+	w := utils.NewWindow(10)
+	w.Insert(10)
+	w.Insert(20)
+	stats := EventStats{
+		Windows: map[string]map[event.EventSource]utils.ROWindow{ttestPtp4lConditions: {event.PTP4l: w}},
+		States:  map[string]map[event.EventSource]event.PTPState{ttestPtp4lConditions: {event.PTP4l: event.PTP_LOCKED}},
+	}
+	for _, cond := range []StateAwareCondition{
+		OnProcessState{ConfigName: ttestPtp4lConditions, Source: string(event.PTP4l), State: event.PTP_LOCKED},
+		OnStateAndOffsetForCount{ClockID: ttestPtp4lConditions, ConfigName: ttestPtp4lConditions, Source: event.PTP4l, State: event.PTP_LOCKED, MaxOffset: 100, Count: 1},
+	} {
+		assert.True(t, cond.MetByCurrentState(p, nil, stats))
+		stats.States[ttestPtp4lConditions][event.PTP4l] = event.PTP_FREERUN
+		assert.False(t, cond.MetByCurrentState(p, nil, stats), "readiness is not latched across snapshots")
+		assert.False(t, cond.MetByCurrentState(p, nil, EventStats{}), "missing data is not ready")
+		stats.States[ttestPtp4lConditions][event.PTP4l] = event.PTP_LOCKED
+	}
+}
+
+func TestAllReconciliationRechecksReadinessAndRetainsEventPrerequisite(t *testing.T) {
+	p := &stubProc{}
+	gate := &All{Conditions: []Condition{
+		OnProcessState{ConfigName: ttestPtp4lConditions, Source: string(event.PHC2SYS), State: event.PTP_LOCKED},
+		OnPluginEvent{EventName: "ready"},
+	}}
+	stats := EventStats{States: map[string]map[event.EventSource]event.PTPState{ttestPtp4lConditions: {event.PHC2SYS: event.PTP_LOCKED}}}
+	assert.False(t, gate.MetByCurrentState(p, nil, stats), "the plugin event cannot be synthesized")
+	assert.False(t, gate.Met(p, event.PluginEvent("plugin", "ready"), EventStats{}), "an event alone cannot supply clock readiness")
+	stats.States[ttestPtp4lConditions][event.PHC2SYS] = event.PTP_FREERUN
+	assert.False(t, gate.MetByCurrentState(p, nil, stats), "old LOCKED must not remain latched")
+	stats.States[ttestPtp4lConditions][event.PHC2SYS] = event.PTP_LOCKED
+	assert.True(t, gate.MetByCurrentState(p, nil, stats), "the observed plugin prerequisite is retained until readiness returns")
+	assert.False(t, gate.MetByCurrentState(p, nil, stats), "a consumed event must not start another cycle")
+}
+
+func TestAnyReconciliationDoesNotReplayPluginEvents(t *testing.T) {
+	p := &stubProc{}
+	gate := Any{Conditions: []Condition{
+		OnProcessState{ConfigName: ttestPtp4lConditions, Source: string(event.PHC2SYS), State: event.PTP_LOCKED},
+		OnPluginEvent{EventName: "ready"},
+	}}
+	assert.True(t, gate.Met(p, event.PluginEvent("plugin", "ready"), EventStats{}))
+	assert.False(t, gate.MetByCurrentState(p, nil, EventStats{}), "reconciliation must not replay the transient event")
 }

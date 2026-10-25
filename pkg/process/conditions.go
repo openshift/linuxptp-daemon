@@ -11,25 +11,49 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
-// EventStats ...
-type EventStats map[string]map[event.EventSource]utils.ROWindow
+// EventStats is a detached, read-only snapshot for condition evaluation.
+// States are evaluated source states, not the raw states on incoming events.
+// ClockStates and the OS states are kept separate: a source's readiness must not
+// depend on a composite state that includes a process it is about to start.
+type EventStats struct {
+	Windows        map[string]map[event.EventSource]utils.ROWindow
+	States         map[string]map[event.EventSource]event.PTPState
+	ClockStates    map[string]event.PTPState
+	OSClockState   event.PTPState
+	OSClockE3State event.PTPState
+}
 
-// WindowRequest ...
-type WindowRequest struct {
+// StatsRequest identifies a clock source whose evaluated state and optional
+// offset history are needed. An empty Source selects all sources on that clock.
+type StatsRequest struct {
 	ClockID string
 	Source  event.EventSource
 }
 
+// SourceStateQuery reports whether the process identified by name and config
+// is currently up according to the process manager's view of process state.
+type SourceStateQuery func(name string, cfg string) bool
+
+// StateAwareCondition can be evaluated against current process/clock state
+// without replaying an event. Clock readiness is checked after data updates.
+type StateAwareCondition interface {
+	Condition
+	// MetByCurrentState returns true when the condition is already satisfied
+	// by the current state of the processes it depends on.
+	MetByCurrentState(p Process, sourceUp SourceStateQuery, stats EventStats) bool
+}
+
 // Condition is a predicate that determines whether an action should be taken on a process.
 type Condition interface {
-	// Met returns true when this condition is satisfied by the event.
+	// Met returns true when this condition is satisfied by the event and the
+	// clock manager's evaluated source states and offset windows.
 	// p is the process that owns this condition.
 	Met(p Process, ev event.Event, stats EventStats) bool
 	// String returns a human-readable description for logging.
 	String() string
-	// GetWindowRequests returns the WindowRequest so that we can request the offset window stats for.
-	// Empty slice means no stats are required for evaluation.
-	GetWindowRequests() []WindowRequest
+	// GetStatsRequests identifies the clock sources whose states/windows are
+	// required. An empty source requests every source on that clock.
+	GetStatsRequests() []StatsRequest
 }
 
 // GetCondition returns the condition for action. If no condition is
@@ -64,8 +88,13 @@ type Never struct{}
 func (c Never) Met(_ Process, _ event.Event, _ EventStats) bool { return false }
 func (c Never) String() string                                  { return "Never" }
 
-// GetWindowRequests ...
-func (c Never) GetWindowRequests() []WindowRequest { return []WindowRequest{} }
+// MetByCurrentState keeps a Never condition false during reconciliation.
+func (c Never) MetByCurrentState(_ Process, _ SourceStateQuery, _ EventStats) bool {
+	return false
+}
+
+// GetStatsRequests ...
+func (c Never) GetStatsRequests() []StatsRequest { return []StatsRequest{} }
 
 func eventEmpty(ev event.Event) bool {
 	return ev.Source == "" && ev.CfgName == "" && ev.Data == nil && !ev.Reset
@@ -90,16 +119,24 @@ func (c Immediate) Met(_ Process, _ event.Event, _ EventStats) bool {
 	return true
 }
 
+// MetByCurrentState keeps an Immediate condition true during reconciliation.
+func (c Immediate) MetByCurrentState(_ Process, _ SourceStateQuery, _ EventStats) bool {
+	return true
+}
+
 func (c Immediate) String() string {
 	return "Immediate"
 }
 
-// GetWindowRequests ...
-func (c Immediate) GetWindowRequests() []WindowRequest {
-	return []WindowRequest{}
+// GetStatsRequests ...
+func (c Immediate) GetStatsRequests() []StatsRequest {
+	return []StatsRequest{}
 }
 
 // OnStateAndOffsetForCount is a condition that checks PTP state and offset magnitude within a rolling window.
+// TODO: Move the remaining ptp4l/ts2phc source qualification into clock-owned
+// filters and let conditions inspect readiness, as phc2sys does. Keep source
+// readiness separate from overall clock state to avoid circular startup dependencies.
 type OnStateAndOffsetForCount struct {
 	ClockID    string
 	ConfigName string
@@ -110,10 +147,10 @@ type OnStateAndOffsetForCount struct {
 }
 
 // Met implements the Condition interface for OnStateAndOffsetForCount.
-// It returns true when the event's config and state match, and enough recent samples
-// in the offset window show magnitude below MaxOffset.
+// It returns true when the event's config/source and the evaluated source state
+// match, and enough recent offsets have magnitude below MaxOffset.
 func (c OnStateAndOffsetForCount) Met(p Process, ev event.Event, stats EventStats) bool {
-	if eventEmpty(ev) {
+	if !eventHasPTPState(ev.Data) || ev.Reset {
 		return false
 	}
 	related := ev.CfgName == c.ConfigName || (c.Source != "" && c.Source == ev.Source)
@@ -127,16 +164,25 @@ func (c OnStateAndOffsetForCount) Met(p Process, ev event.Event, stats EventStat
 		condLog(p, c, false, fmt.Sprintf("source want=%s got=%s", c.Source, ev.Source))
 		return false
 	}
-	data, ok := eventPTPState(ev.Data)
+	return c.MetByCurrentState(p, nil, stats)
+}
+
+// MetByCurrentState evaluates source readiness from a processed-data snapshot,
+// independently of the event that woke the process manager.
+func (c OnStateAndOffsetForCount) MetByCurrentState(p Process, _ SourceStateQuery, stats EventStats) bool {
+	if c.ConfigName == "" || c.ClockID == "" {
+		return false
+	}
+	data, ok := stats.States[c.ClockID][c.Source]
 	if !ok {
-		condLog(p, c, false, "event has no PTP state")
+		condLog(p, c, false, "no evaluated source state")
 		return false
 	}
 	if c.State != data {
 		condLog(p, c, false, fmt.Sprintf("state want=%s got=%s", c.State, data))
 		return false
 	}
-	w := stats[c.ClockID][c.Source]
+	w := stats.Windows[c.ClockID][c.Source]
 	if w == nil {
 		condLog(p, c, false, "no offset window")
 		return false
@@ -153,9 +199,9 @@ func (c OnStateAndOffsetForCount) String() string {
 	return fmt.Sprintf("OnStateAndOffsetForCount source=%s cfg=%s state=%v maxOffset=%v count=%d", c.Source, c.ConfigName, c.State, c.MaxOffset, c.Count)
 }
 
-// GetWindowRequests ...
-func (c OnStateAndOffsetForCount) GetWindowRequests() []WindowRequest {
-	return []WindowRequest{{ClockID: c.ClockID, Source: c.Source}}
+// GetStatsRequests ...
+func (c OnStateAndOffsetForCount) GetStatsRequests() []StatsRequest {
+	return []StatsRequest{{ClockID: c.ClockID, Source: c.Source}}
 }
 
 // OnProcessState is a condition that checks for a specific PTP synchronization state.
@@ -166,9 +212,9 @@ type OnProcessState struct {
 }
 
 // Met implements the Condition interface for OnProcessState.
-// It returns true when the event carries a PTP state payload with the expected state.
-func (c OnProcessState) Met(p Process, ev event.Event, _ EventStats) bool {
-	if eventEmpty(ev) {
+// It returns true when the event identifies a source whose evaluated state matches.
+func (c OnProcessState) Met(p Process, ev event.Event, stats EventStats) bool {
+	if !eventHasPTPState(ev.Data) || ev.Reset {
 		return false
 	}
 	if c.ConfigName != ev.CfgName {
@@ -177,23 +223,40 @@ func (c OnProcessState) Met(p Process, ev event.Event, _ EventStats) bool {
 		}
 		return false
 	}
-	data, ok := eventPTPState(ev.Data)
-	if !ok {
-		condLog(p, c, false, "event has no PTP state")
+	if c.Source != "" && c.Source != string(ev.Source) {
 		return false
 	}
-	met := c.State == data
-	condLog(p, c, met, fmt.Sprintf("state want=%s got=%s", c.State, data))
-	return met
+	if c.Source == "" {
+		c.Source = string(ev.Source)
+	}
+	return c.MetByCurrentState(p, nil, stats)
+}
+
+// MetByCurrentState checks the latest evaluated source state. It never derives
+// readiness from an unprocessed event or from the composite node state.
+func (c OnProcessState) MetByCurrentState(p Process, _ SourceStateQuery, stats EventStats) bool {
+	if c.ConfigName == "" {
+		return false
+	}
+	for source, state := range stats.States[c.ConfigName] {
+		if c.Source != "" && c.Source != string(source) {
+			continue
+		}
+		if state == c.State {
+			condLog(p, c, true, fmt.Sprintf("source=%s state=%s", source, state))
+			return true
+		}
+	}
+	return false
 }
 
 func (c OnProcessState) String() string {
 	return fmt.Sprintf("OnProcessState source=%s cfg=%s state=%v", c.Source, c.ConfigName, c.State)
 }
 
-// GetWindowRequests ...
-func (c OnProcessState) GetWindowRequests() []WindowRequest {
-	return []WindowRequest{}
+// GetStatsRequests ...
+func (c OnProcessState) GetStatsRequests() []StatsRequest {
+	return []StatsRequest{{ClockID: c.ConfigName, Source: event.EventSource(c.Source)}}
 }
 
 // OnProcessUp is true when the event is PROCESS_STATUS Up for Source / CfgName.
@@ -225,14 +288,24 @@ func (c OnProcessUp) Met(p Process, ev event.Event, _ EventStats) bool {
 	return met
 }
 
+// MetByCurrentState implements StateAwareCondition for OnProcessUp.
+// It returns true when the source process is currently up, which recovers
+// waiters that never observed the transient PROCESS_STATUS Up event.
+func (c OnProcessUp) MetByCurrentState(_ Process, sourceUp SourceStateQuery, _ EventStats) bool {
+	if sourceUp == nil {
+		return false
+	}
+	return sourceUp(string(c.Source), c.ConfigName)
+}
+
 // String returns the string representation of OnProcessUp.
 func (c OnProcessUp) String() string {
 	return fmt.Sprintf("OnProcessUp source=%s cfg=%s", c.Source, c.ConfigName)
 }
 
-// GetWindowRequests ...
-func (c OnProcessUp) GetWindowRequests() []WindowRequest {
-	return []WindowRequest{}
+// GetStatsRequests ...
+func (c OnProcessUp) GetStatsRequests() []StatsRequest {
+	return []StatsRequest{}
 }
 
 // All is true when every nested condition is true for the same event.
@@ -286,6 +359,25 @@ func (c *All) Met(p Process, ev event.Event, stats EventStats) bool {
 	return false
 }
 
+// MetByCurrentState rechecks every state-aware child against the same snapshot.
+// Only event-only children use latched observations; clock readiness must not
+// remain true after its source degrades while another prerequisite is pending.
+func (c *All) MetByCurrentState(p Process, sourceUp SourceStateQuery, stats EventStats) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, cond := range c.Conditions {
+		if sc, ok := cond.(StateAwareCondition); ok {
+			if !sc.MetByCurrentState(p, sourceUp, stats) {
+				return false
+			}
+		} else if !c.met[i] {
+			return false
+		}
+	}
+	c.met = nil
+	return true
+}
+
 // String returns the string representation of All.
 func (c *All) String() string {
 	c.mu.RLock()
@@ -305,15 +397,15 @@ func (c *All) String() string {
 	return "All(" + strings.Join(parts, ", ") + ")"
 }
 
-// GetWindowRequests ...
-func (c *All) GetWindowRequests() []WindowRequest {
-	seen := make(map[WindowRequest]bool)
-	var result []WindowRequest
+// GetStatsRequests ...
+func (c *All) GetStatsRequests() []StatsRequest {
+	seen := make(map[StatsRequest]bool)
+	var result []StatsRequest
 	for _, cond := range c.Conditions {
 		if cond == nil {
 			continue
 		}
-		for _, cfg := range cond.GetWindowRequests() {
+		for _, cfg := range cond.GetStatsRequests() {
 			if !seen[cfg] {
 				seen[cfg] = true
 				result = append(result, cfg)
@@ -339,6 +431,17 @@ func (c Any) Met(p Process, ev event.Event, stats EventStats) bool {
 	return false
 }
 
+// MetByCurrentState checks persistent alternatives only. Transient plugin or
+// process-down events are not synthesized during reconciliation.
+func (c Any) MetByCurrentState(p Process, sourceUp SourceStateQuery, stats EventStats) bool {
+	for _, cond := range c.Conditions {
+		if sc, ok := cond.(StateAwareCondition); ok && sc.MetByCurrentState(p, sourceUp, stats) {
+			return true
+		}
+	}
+	return false
+}
+
 // String returns the string representation of Any.
 func (c Any) String() string {
 	parts := make([]string, 0, len(c.Conditions))
@@ -352,15 +455,15 @@ func (c Any) String() string {
 	return "Any(" + strings.Join(parts, ", ") + ")"
 }
 
-// GetWindowRequests ...
-func (c Any) GetWindowRequests() []WindowRequest {
-	seen := make(map[WindowRequest]bool)
-	var result []WindowRequest
+// GetStatsRequests ...
+func (c Any) GetStatsRequests() []StatsRequest {
+	seen := make(map[StatsRequest]bool)
+	var result []StatsRequest
 	for _, cond := range c.Conditions {
 		if cond == nil {
 			continue
 		}
-		for _, cfg := range cond.GetWindowRequests() {
+		for _, cfg := range cond.GetStatsRequests() {
 			if !seen[cfg] {
 				seen[cfg] = true
 				result = append(result, cfg)
@@ -395,9 +498,9 @@ func (c OnPluginEvent) String() string {
 	return fmt.Sprintf("OnPluginEvent event=%s", c.EventName)
 }
 
-// GetWindowRequests ...
-func (c OnPluginEvent) GetWindowRequests() []WindowRequest {
-	return []WindowRequest{}
+// GetStatsRequests ...
+func (c OnPluginEvent) GetStatsRequests() []StatsRequest {
+	return []StatsRequest{}
 }
 
 // OnProcessDown is true when the event is PROCESS_STATUS Down for Source / CfgName.
@@ -434,21 +537,15 @@ func (c OnProcessDown) String() string {
 	return fmt.Sprintf("OnProcessDown source=%s cfg=%s", c.Source, c.ConfigName)
 }
 
-// GetWindowRequests ...
-func (c OnProcessDown) GetWindowRequests() []WindowRequest {
-	return []WindowRequest{}
+// GetStatsRequests ...
+func (c OnProcessDown) GetStatsRequests() []StatsRequest {
+	return []StatsRequest{}
 }
 
-func eventPTPState(data event.EventData) (event.PTPState, bool) {
-	switch d := data.(type) {
-	case *event.OffsetData:
-		return d.State, true
-	case *event.DPLLData:
-		return d.State, true
-	case *event.StateData:
-		return d.State, true
-	case *event.SyncEData:
-		return d.State, true
+func eventHasPTPState(data event.EventData) bool {
+	switch data.(type) {
+	case *event.OffsetData, *event.DPLLData, *event.StateData, *event.SyncEData:
+		return true
 	}
-	return "", false
+	return false
 }

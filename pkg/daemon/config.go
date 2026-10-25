@@ -344,6 +344,43 @@ func (conf *Ptp4lConf) ResolveInterfaceNames(resolver *network.InterfaceResolver
 	}
 }
 
+// ResolveChronydInterfaceNames resolves interface-valued chronyd directives.
+func (conf *Ptp4lConf) ResolveChronydInterfaceNames(resolver *network.InterfaceResolver) {
+	for i := range conf.sections {
+		for j := range conf.sections[i].options {
+			option := &conf.sections[i].options[j]
+			switch option.key {
+			case "binddevice", "bindacqdevice":
+				if resolved, remapped := resolver.Resolve(option.value); remapped {
+					option.value = resolved
+				}
+			case "hwtimestamp":
+				parts := strings.Fields(option.value)
+				if len(parts) > 0 && parts[0] != "*" {
+					if resolved, remapped := resolver.Resolve(parts[0]); remapped {
+						parts[0] = resolved
+						option.value = strings.Join(parts, " ")
+					}
+				}
+			}
+		}
+	}
+}
+
+// ResolveTs2PhcInterfaceNames resolves interface-valued ts2phc options.
+func (conf *Ptp4lConf) ResolveTs2PhcInterfaceNames(resolver *network.InterfaceResolver) {
+	for i := range conf.sections {
+		for j := range conf.sections[i].options {
+			option := &conf.sections[i].options[j]
+			if option.key == "ts2phc.tod_source" && option.value != "generic" && option.value != "nmea" && !strings.HasPrefix(option.value, "/") {
+				if resolved, remapped := resolver.Resolve(option.value); remapped {
+					option.value = resolved
+				}
+			}
+		}
+	}
+}
+
 func getSource(isTs2phcMaster string) event.EventSource {
 	if ts2phcMaster, err := strconv.ParseBool(strings.TrimSpace(isTs2phcMaster)); err == nil {
 		if ts2phcMaster {

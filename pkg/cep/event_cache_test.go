@@ -21,13 +21,13 @@ func TestEventCache_Get(t *testing.T) {
 func TestEventCache_GetBySource(t *testing.T) {
 	t.Run("GetBySource returns matching event", func(t *testing.T) {
 		cache := NewEventCache("worker-0")
-		proxy := NewCloudEventProxy(cache, nil)
+		proxy := NewCloudEventProxy(cache, nil, testNodeName, testBaseURL)
 
 		var buf bytes.Buffer
 		ipc.Transmit(&buf, ipc.Message{
 			Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile, IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked},
 		})
-		proxy.Listen(&buf)
+		proxy.handleIncomingEvents(&buf)
 
 		e, ok := cache.GetBySource(testPTPLockState)
 		require.True(t, ok)
@@ -185,4 +185,20 @@ func TestEventCache_Update(t *testing.T) {
 		_, ok := cache.Get(ipc.TypePTPState)
 		assert.False(t, ok)
 	})
+}
+
+func TestEventCache_ClockClassResourceIncludesInterface(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	event := cache.Update(ipc.Message{
+		Version: ipc.Version,
+		Type:    ipc.TypeClockClass,
+		Profile: testProfile,
+		IFace:   testIFace,
+		Values:  ipc.ClockClassValue{ClockClass: 6},
+	})
+
+	require.NotNil(t, event)
+	require.Len(t, event.Data.Values, 1)
+	assert.Equal(t, "/cluster/node/worker-0/ens2f0/master/clock-class", event.Data.Values[0].Resource)
+	assert.Equal(t, int64(6), event.Data.Values[0].Value)
 }

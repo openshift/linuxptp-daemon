@@ -47,7 +47,7 @@ func (c *Cache) Send(msg Message) bool {
 		return false
 	}
 	c.store[key] = msg
-	glog.V(14).Infof("Sending IPC message type=%s iface=%s value %v", msg.Type, msg.IFace, msg.Values)
+	glog.V(4).Infof("Sending IPC message type=%s profile=%s iface=%s value %v", msg.Type, msg.Profile, msg.IFace, msg.Values)
 
 	// In case of a full buffer, drop the message. The state will be recorded within the cache, but not sent
 	// This should only realistically happen if cloud-event-proxy goes down for some reason. In that case, when it comes

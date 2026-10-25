@@ -14,6 +14,18 @@ When monitoring u-blox GNSS receivers, the daemon also evaluates the receiver's
 state marks the GNSS source as lost, preventing a plausible but forged fix from
 being used to keep the clock synchronized.
 
+For HardwareConfig v2 GNSS matcher behavior and selector examples, see
+[`doc/hardwareconfig-v2-device-selection.md`](doc/hardwareconfig-v2-device-selection.md).
+When USB matching is ambiguous, daemon logs include the matching topology paths
+that can be used to narrow the selector. Ethernet GNSS matchers can combine PCI
+vendor/device IDs with interface name, PCI address, permanent MAC, and slot; an
+ambiguous match reports the candidate interfaces and slots. GNSS detection
+results are also reported in the HardwareConfig `status.sources` field, with the
+detected TTY and a description of the matching inputs on success, or an
+actionable match explanation on failure. If an explicitly configured matcher
+fails to resolve, profile setup aborts rather than starting GPSD with the default
+`/dev/gnss0` or another fallback device.
+
 ## Quick Start
 
 ### Create namespace and ServiceAccount
@@ -93,7 +105,45 @@ NAME                    READY   STATUS    RESTARTS   AGE
 linuxptp-daemon-txmpn   1/1     Running   0          105m
 ```
 
+## ts2phc Poll Monitoring
+
+The daemon explicitly tracks each configured PHC as `sink`, `source`, or
+`unmanaged`. At configuration load and process restart, all known PHCs start as
+sinks. Selection for synchronization makes a PHC a sink, unselection makes it
+unmanaged, and explicit/default reference selection makes it a source.
+Only sinks generate synthetic failure metrics for pending or missing timestamps.
+Source roles are read directly from the current cycle's timestamps, without a
+separate source cache. The source offset furthest from zero is reported with its
+sign preserved; when no other source device has a timestamp, the daemon falls
+back to the largest absolute peer difference. Offsets are in nanoseconds, and
+unmeasured offsets are NaN. NaN ts2phc samples emit state-only events so FREERUN
+is propagated without converting the missing offset to an integer or inserting
+it into event offset statistics. Unmanaged timestamps remain available for peer
+comparisons, but unknown PHCs are not added to the role map by selection or
+timestamp logs. Samples skipped as non-sinks are not reopened on reselection. Roles are per process. Timestamp batches may cross a log-second boundary: a repeated
+PHC with a new hardware timestamp identifies the next PPS edge, with a longer
+log-time gap used when that evidence is unavailable. Timeouts report unhandled
+samples without closing a partial batch, so later samples from the same edge
+are still accepted. Missing sinks are reported when a new edge is identified or
+when a later timeout group confirms an incomplete batch; timeout-only groups
+report FREERUN once per interface per group. An initial timeout before any
+timestamp remains a startup warning. Both RHEL 4.4 external-PPS logs and older reference-selection
+logs are supported. See [parser documentation](pkg/parser/README.md#ts2phc-poll-monitoring).
+
+Run the parser and focused monitoring tests with:
+
+```sh
+go test ./pkg/parser
+go test ./pkg/daemon -run '^TestTS2PHC(ConfiguredRoles|RoleTransitions|SourceOffsets|Selection|ReferenceSelection|Unselected|Reselection)' -count=1
+```
+
 ## Test Coverage
+
+Run the full unit suite without generating coverage files:
+
+```sh
+SKIP_GNSS_MONITORING=1 go test ./... --tags=unittests -count=1
+```
 
 Run `make coverage-gate` to compare test coverage of your branch against the upstream main branch. The script auto-detects the upstream remote and its tracking branch.
 

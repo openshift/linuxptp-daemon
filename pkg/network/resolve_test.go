@@ -99,6 +99,88 @@ func TestResolveProfileInterfaces_InterfaceField(t *testing.T) {
 	}
 }
 
+func TestResolveProfileInterfaces_ProcessOpts(t *testing.T) {
+	tests := []struct {
+		name string
+		opts string
+		want string
+		set  func(*ptpv1.PtpProfile, *string)
+	}{
+		{
+			name: "phc2sys",
+			opts: "-r -n 24 -N 8 -R 16 -u 0 -m -s " + testIfOld + " -i " + testIfOld + " -c " + testIf2Old,
+			want: "-r -n 24 -N 8 -R 16 -u 0 -m -s " + testIfNew + " -i " + testIfNew + " -c " + testIf2New,
+			set:  func(p *ptpv1.PtpProfile, opts *string) { p.Phc2sysOpts = opts },
+		},
+		{
+			name: "ptp4l",
+			opts: "-2 -i " + testIfOld + " -i " + testIf2Old + " -m",
+			want: "-2 -i " + testIfNew + " -i " + testIf2New + " -m",
+			set:  func(p *ptpv1.PtpProfile, opts *string) { p.Ptp4lOpts = opts },
+		},
+		{
+			name: "ts2phc",
+			opts: "-s generic -c " + testIfOld + " -s " + testIf2Old + " -c /dev/ptp0 --ts2phc.tod_source " + testIfOld + " -m --ts2phc.tod_source=" + testIf2Old,
+			want: "-s generic -c " + testIfNew + " -s " + testIf2New + " -c /dev/ptp0 --ts2phc.tod_source " + testIfNew + " -m --ts2phc.tod_source=" + testIf2New,
+			set:  func(p *ptpv1.PtpProfile, opts *string) { p.Ts2PhcOpts = opts },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewInterfaceResolverWithInterfaces([]string{testIfNew, testIf2New})
+			name := testProfile
+			opts := tt.opts
+			profile := &ptpv1.PtpProfile{Name: &name}
+			tt.set(profile, &opts)
+			r.ResolveProfileInterfaces(profile)
+			if opts != tt.want {
+				t.Errorf("expected %q, got %q", tt.want, opts)
+			}
+		})
+	}
+}
+
+func TestResolveProfileInterfaces_Ts2PhcNamedSources(t *testing.T) {
+	r := NewInterfaceResolverWithInterfaces([]string{"genericnp0", "nmeanp0"})
+	name := testProfile
+	opts := "-s generic --ts2phc.tod_source nmea --ts2phc.tod_source=generic"
+	profile := &ptpv1.PtpProfile{Name: &name, Ts2PhcOpts: &opts}
+	r.ResolveProfileInterfaces(profile)
+	if opts != "-s generic --ts2phc.tod_source nmea --ts2phc.tod_source=generic" {
+		t.Errorf("expected named sources unchanged, got %q", opts)
+	}
+}
+
+func TestResolveProfileInterfaces_ProcessDeviceAndClockNames(t *testing.T) {
+	r := NewInterfaceResolverWithInterfaces([]string{testIfNew, "/dev/ptp0np0", "CLOCK_REALTIMEnp0"})
+	name := testProfile
+	phc2sysOpts := "-s /dev/ptp0 -c CLOCK_REALTIME -i " + testIfOld
+	ts2phcOpts := "-c /dev/ptp0 --ts2phc.tod_source=/dev/ptp0"
+	profile := &ptpv1.PtpProfile{Name: &name, Phc2sysOpts: &phc2sysOpts, Ts2PhcOpts: &ts2phcOpts}
+	r.ResolveProfileInterfaces(profile)
+	if want := "-s /dev/ptp0 -c CLOCK_REALTIME -i " + testIfNew; phc2sysOpts != want {
+		t.Errorf("Phc2sysOpts: expected %q, got %q", want, phc2sysOpts)
+	}
+	if want := "-c /dev/ptp0 --ts2phc.tod_source=/dev/ptp0"; ts2phcOpts != want {
+		t.Errorf("Ts2PhcOpts: expected %q, got %q", want, ts2phcOpts)
+	}
+}
+
+func TestResolveProfileInterfaces_Phc2sysOptsNoChangeWhenNamesExist(t *testing.T) {
+	r := NewInterfaceResolverWithInterfaces([]string{testIfOld})
+	name := testProfile
+	opts := "-r -n 24 -s " + testIfOld
+	profile := &ptpv1.PtpProfile{
+		Name:        &name,
+		Phc2sysOpts: &opts,
+	}
+	r.ResolveProfileInterfaces(profile)
+
+	if *profile.Phc2sysOpts != opts {
+		t.Errorf("expected opts unchanged, got %q", *profile.Phc2sysOpts)
+	}
+}
+
 func TestResolveProfileInterfaces_PtpSettingsValues(t *testing.T) {
 	r := NewInterfaceResolverWithInterfaces([]string{testIfNew, testIf2New})
 	name := testProfile

@@ -14,6 +14,7 @@ import (
 
 const processStartTimeout = 10 * time.Second
 const processRestartTimeout = processStartTimeout
+const waitingProcessReconcileInterval = 10 * time.Second
 
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
@@ -24,6 +25,8 @@ type ProcessManager struct {
 	waitingProcess []process.Process
 	eventsIn       chan event.Event
 	eventsOut      chan event.Event
+	statsIn        <-chan process.EventStats
+	latestStats    process.EventStats // updated only from the processed-snapshot channel
 	processOnce    sync.Once
 	clockMgr       *clockmgr.ClockManager
 	daemon         *Daemon
@@ -89,6 +92,14 @@ func (pm *ProcessManager) startProcess(ctx context.Context, p process.Process) {
 func (pm *ProcessManager) StartProcesses(ctx context.Context) {
 	immediate := process.Immediate{}
 
+	// Register condition-waiting processes before starting any immediate
+	// processes: immediate starts emit process-status events from their own
+	// goroutines, and waiters must already be registered when those events
+	// are dispatched, otherwise they wait forever for an event that never
+	// re-fires (e.g. pmc waiting for a ptp4l up event that was emitted
+	// before the waiter was registered).
+	pm.waitingProcess = pm.getWaitingProcesses()
+
 	pm.forEachProcess(func(p process.Process) {
 		if p.State() != process.Created && p.State() != process.Stopped {
 			return
@@ -111,6 +122,8 @@ func (pm *ProcessManager) processEvents(ctx context.Context) {
 	if pm.waitingProcess == nil {
 		pm.waitingProcess = pm.getWaitingProcesses()
 	}
+	reconcileTicker := time.NewTicker(waitingProcessReconcileInterval)
+	defer reconcileTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -130,9 +143,23 @@ func (pm *ProcessManager) processEvents(ctx context.Context) {
 					pm.handleProcessDown(ctx, ev)
 				}
 			} else {
-				pm.eventsOut <- ev
+				select {
+				case pm.eventsOut <- ev:
+				case <-ctx.Done():
+					return
+				}
 			}
 			pm.evalActions(ctx, ev)
+		case stats, ok := <-pm.statsIn:
+			if !ok {
+				pm.statsIn = nil
+				pm.latestStats = process.EventStats{}
+				continue
+			}
+			pm.latestStats = stats
+			pm.reconcileWaiting(ctx)
+		case <-reconcileTicker.C:
+			pm.reconcileWaiting(ctx)
 		}
 	}
 }
@@ -159,32 +186,71 @@ func (pm *ProcessManager) getWaitingProcesses() []process.Process {
 	return waiting
 }
 
-// collectWindowRequests gathers all config names required by conditions on waiting processes.
-func (pm *ProcessManager) collectWindowRequests() []process.WindowRequest {
-	seen := make(map[process.WindowRequest]bool)
-	var result []process.WindowRequest
+// sourceProcessUp reports whether the process with the given name and config
+// is currently starting or running. Dependent processes are considered too.
+func (pm *ProcessManager) sourceProcessUp(name, cfg string) bool {
+	found := false
+	pm.forEachProcess(func(p process.Process) {
+		if found || p.Name() != name {
+			return
+		}
+		if cfg != "" && p.ConfigName() != cfg {
+			return
+		}
+		switch p.State() {
+		case process.Starting, process.Running:
+			found = true
+		}
+	})
+	return found
+}
 
+// reconcileWaiting evaluates persistent conditions against current process
+// state and the latest received clock snapshot. It never queries ClockManager.
+// Periodic reconciliation also recovers late or missed process prerequisites.
+func (pm *ProcessManager) reconcileWaiting(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	pm.waitingProcess = pm.getWaitingProcesses()
+	// A plugin/process event may be selected while a newer snapshot is already
+	// queued. Use that pushed value rather than evaluating an older cached state.
+	select {
+	case stats, ok := <-pm.statsIn:
+		if ok {
+			pm.latestStats = stats
+		} else {
+			pm.statsIn = nil
+			pm.latestStats = process.EventStats{}
+		}
+	default:
+	}
+	hasChanged := false
 	for _, p := range pm.waitingProcess {
-		if p == nil {
+		if p.State() == process.Starting || p.State() == process.Stopping {
 			continue
 		}
-		conds := p.Conditions()
-		if conds == nil {
+		action, defaultCondition := stateTransitionAction(p.State())
+		cond := process.GetCondition(p, action, defaultCondition)
+		sc, ok := cond.(process.StateAwareCondition)
+		if !ok {
 			continue
 		}
-		for _, cond := range conds {
-			if cond == nil {
-				continue
+		if sc.MetByCurrentState(p, pm.sourceProcessUp, pm.latestStats) {
+			switch action {
+			case process.ActionStart, process.ActionRestart:
+				glog.Infof("ProcessManager: %s condition %s satisfied by current state, starting", p.Name(), cond)
+				pm.startProcess(ctx, p)
+			case process.ActionStop:
+				glog.Infof("ProcessManager: %s stop condition %s satisfied by current state", p.Name(), cond)
+				p.Stop()
 			}
-			for _, cfg := range cond.GetWindowRequests() {
-				if !seen[cfg] {
-					seen[cfg] = true
-					result = append(result, cfg)
-				}
-			}
+			hasChanged = true
 		}
 	}
-	return result
+	if hasChanged {
+		pm.waitingProcess = pm.getWaitingProcesses()
+	}
 }
 
 // stateTransitionAction returns how a process should transition its state, and when we would prefer it to.
@@ -204,19 +270,22 @@ func stateTransitionAction(s process.State) (process.Action, process.Condition) 
 }
 
 func (pm *ProcessManager) evalActions(ctx context.Context, ev event.Event) {
+	pm.waitingProcess = pm.getWaitingProcesses()
 	if len(pm.waitingProcess) == 0 {
 		return
 	}
 
-	var stats process.EventStats
-	if pm.clockMgr != nil {
-		windowRequests := pm.collectWindowRequests()
-		stats = pm.clockMgr.GetWindows(windowRequests)
-	}
+	// This path observes transient process/plugin events (and resets composite
+	// event history). Clock readiness is evaluated only during reconciliation,
+	// using snapshots pushed after clock processing.
+	stats := process.EventStats{}
 
 	hasChanged := false
 
 	for _, p := range pm.waitingProcess {
+		if p.State() == process.Starting || p.State() == process.Stopping {
+			continue
+		}
 		action, defaultCondition := stateTransitionAction(p.State())
 		switch action {
 		case process.ActionStart, process.ActionRestart:

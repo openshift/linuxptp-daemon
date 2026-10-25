@@ -11,6 +11,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
@@ -44,7 +45,7 @@ type LeadingClockParams struct {
 	MaxInSpecOffset          uint64
 	holdoverDisabled         bool
 	lastInSpec               bool
-	inSyncThresholdCounter   int
+	inSyncFilter             utils.HysteresisFilter
 	clockID                  string
 }
 
@@ -170,6 +171,7 @@ func (c *TBC) evaluateState() {
 		c.sendIPC(ipc.Message{
 			Type:    ipc.TypeClockClass,
 			Profile: profile,
+			IFace:   c.syncState.LeadingIFace,
 			Values:  ipc.ClockClassValue{ClockClass: uint8(c.syncState.ClockClass)},
 		})
 	}
@@ -227,7 +229,7 @@ func (c *TBC) updateState() bool {
 	glog.V(14).Info("current BC state: ", c.syncState.State)
 	switch c.syncState.State {
 	case event.PTP_NOTSET, event.PTP_FREERUN:
-		if !c.isSourceLostBC() && c.inSyncCondition() {
+		if !c.freeRunCondition() && !c.isSourceLostBC() && c.inSyncCondition() {
 			c.syncState.State = event.PTP_LOCKED
 			glog.Info("BC FSM: FREERUN to LOCKED")
 			c.leadingClockData.lastInSpec = true
@@ -540,6 +542,18 @@ func (c *TBC) hasNonLeadingDPLLFault() bool {
 	return false
 }
 
+// initInSyncFilter configures the in-sync filter from the leading clock
+// thresholds (fixed per TR profile). The out-of-sync side mirrors the legacy
+// counter: a single sample above the in-sync threshold immediately revokes
+// the condition.
+func (l *LeadingClockParams) initInSyncFilter() {
+	if l.inSyncFilter.InSyncSamplesRequired() != 0 {
+		return
+	}
+	times := max(l.inSyncConditionTimes, 1)
+	l.inSyncFilter.Config(float64(l.inSyncConditionThreshold), float64(l.inSyncConditionThreshold), times, 1)
+}
+
 func (c *TBC) inSyncCondition() bool {
 	if c.leadingClockData.inSyncConditionThreshold == 0 {
 		glog.Info("Leading clock in-sync condition is pending initialization")
@@ -547,19 +561,11 @@ func (c *TBC) inSyncCondition() bool {
 	}
 
 	worstOffset := c.getLargestOffset()
-	if math.Abs(float64(worstOffset)) < float64(c.leadingClockData.inSyncConditionThreshold) {
-		c.leadingClockData.inSyncThresholdCounter++
-		if c.leadingClockData.inSyncThresholdCounter >= c.leadingClockData.inSyncConditionTimes {
-			return true
-		}
-	} else {
-		c.leadingClockData.inSyncThresholdCounter = 0
+	state, _ := c.leadingClockData.inSyncFilter.Update(float64(worstOffset))
+	if state != utils.HysteresisLow {
+		glog.Info("sync condition not reached: worst offset ", worstOffset)
 	}
-
-	glog.Info("sync condition not reached: worst offset ", worstOffset, " count ",
-		c.leadingClockData.inSyncThresholdCounter, " out of ", c.leadingClockData.inSyncConditionTimes)
-
-	return false
+	return state == utils.HysteresisLow
 }
 
 func (c *TBC) isSourceLostBC() bool {
@@ -615,7 +621,7 @@ func (c *TBC) getLargestOffset() int64 {
 			}
 			continue
 		}
-		if d.Window.IsEmpty() {
+		if d.Window == nil || d.Window.IsEmpty() {
 			continue
 		}
 		if !d.Window.IsFull() {
@@ -645,7 +651,7 @@ func (c *TBC) getLargestOffset() int64 {
 
 func (c *TBC) getCalculatedHoldoverOffset() int64 {
 	for _, d := range c.data {
-		if d.ProcessName == event.DPLL {
+		if d.ProcessName == event.DPLL && d.Window != nil {
 			return int64(d.Window.LastInserted())
 		}
 	}
@@ -669,13 +675,20 @@ func (c *TBC) freeRunCondition() bool {
 				}
 			}
 		case event.PTP4l:
-			if d.Window.IsEmpty() {
+			if d.Window == nil || d.Window.IsEmpty() {
 				continue
 			}
 			ptp4lAvgOffset := int64(d.Window.Mean())
 			if math.Abs(float64(ptp4lAvgOffset)) > float64(c.leadingClockData.toFreeRunThreshold) {
 				glog.Infof("free-run condition on PTP4l, avg offset %d", ptp4lAvgOffset)
 				return true
+			}
+		case event.TS2PHCProcessName:
+			for _, dd := range d.Details {
+				if dd.State == event.PTP_FREERUN {
+					glog.Infof("free-run condition on ts2phc interface %s", dd.IFace)
+					return true
+				}
 			}
 		}
 	}
@@ -791,5 +804,6 @@ func (c *TBC) updateLeadingClockData(ev event.Event) {
 		if data.MaxInSpecOffset != 0 {
 			c.leadingClockData.MaxInSpecOffset = data.MaxInSpecOffset
 		}
+		c.leadingClockData.initInSyncFilter()
 	}
 }

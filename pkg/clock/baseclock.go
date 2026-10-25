@@ -17,6 +17,10 @@ type DataHolder struct {
 
 // GetData returns the Data entry for the given process, creating one if needed.
 func (dh *DataHolder) GetData(processName event.EventSource) *event.Data {
+	return dh.getData(processName, true)
+}
+
+func (dh *DataHolder) getData(processName event.EventSource, withWindow bool) *event.Data {
 	dh.dataMu.Lock()
 	defer dh.dataMu.Unlock()
 	for _, d := range dh.data {
@@ -24,7 +28,10 @@ func (dh *DataHolder) GetData(processName event.EventSource) *event.Data {
 			return d
 		}
 	}
-	d := &event.Data{ProcessName: processName, State: event.PTP_UNKNOWN, Window: *utils.NewWindow(event.WindowSize)}
+	d := &event.Data{ProcessName: processName, State: event.PTP_UNKNOWN}
+	if withWindow {
+		d.Window = utils.NewWindow(event.WindowSize)
+	}
 	dh.data = append(dh.data, d)
 	return d
 }
@@ -81,6 +88,12 @@ func (c *BaseClock) ProcessData() []*event.Data {
 	return append(d, c.osClock.ProcessData()...)
 }
 
+// ProcessDataForConfig returns this clock's source data. Composite clocks
+// override it to preserve the requested member's identity.
+func (c *BaseClock) ProcessDataForConfig(_ string) []*event.Data {
+	return c.ProcessData()
+}
+
 // SetOsClock Set OsClock
 func (c *BaseClock) SetOsClock(osClock *OsClock) {
 	c.osClock = osClock
@@ -97,26 +110,4 @@ func newBaseClock(cfgName string, threshold event.PtpClockThreshold) BaseClock {
 		threshold:        threshold,
 		overallSyncState: event.PTP_NOTSET,
 	}
-}
-
-// OsClock ...
-type OsClock struct {
-	DataHolder
-	State event.PTPState
-}
-
-// Reset ...
-func (o *OsClock) Reset() {
-	o.State = event.PTP_FREERUN
-	o.DataHolder.Reset()
-}
-
-// AddEvent processes OS clock events.
-func (o *OsClock) AddEvent(ev event.Event) {
-	if _, ok := ev.Data.(*event.OffsetData); !ok || (ev.Source != event.CHRONYD && ev.Source != event.PHC2SYS) {
-		return
-	}
-	d := o.GetData(ev.Source)
-	d.AddEvent(ev)
-	d.UpdateState()
 }

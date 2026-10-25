@@ -96,7 +96,7 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 	// Zero NMEA status when GM is not locked
 	if clockState.State != event.PTP_LOCKED {
 		if od, ok := ev.Data.(*event.OffsetData); ok && od.NMEALocked != nil {
-			od.NMEALocked = event.Ptr(false)
+			od.NMEALocked = utils.ToPtr(false)
 		}
 	}
 
@@ -515,7 +515,12 @@ func (c *GM) updateState() SyncState {
 		})
 	}
 
-	if c.syncState.ClockClass != prevClass && prevClass != protocol.ClockClassUninitialized {
+	// Publish every valid clock class change, including the first computed
+	// one. A GM that boots straight into LOCKED (GNSS and DPLL already
+	// locked on the first update) otherwise never sends TypeClockClass:
+	// prevClass is still Uninitialized, so the Event API keeps no clock
+	// class current state. Only suppress the uninitialized value itself.
+	if c.syncState.ClockClass != prevClass && c.syncState.ClockClass != protocol.ClockClassUninitialized {
 		c.sendIPC(ipc.Message{
 			Type:    ipc.TypeClockClass,
 			Profile: c.cfgName,

@@ -1190,10 +1190,6 @@ func TestTBCTransitionCheck_PathSelection(t *testing.T) {
 
 			// Create ptpProcess with test conditions
 			process := &ptpProcess{
-				ExecProcess: ExecProcess{
-					eventCh:    make(chan event.Event, 1), //nolint:govet // needed for test setup
-					configName: "test-config",             //nolint:govet // needed for test setup
-				},
 				tBCAttributes: tBCProcessAttributes{
 					trIfaceNames: []string{"ens4f0"},
 					perPortState: map[string]event.PTPState{"ens4f0": event.PTP_NOTSET},
@@ -1274,6 +1270,37 @@ func setupHardwareConfigForTest(hcm *hardwareconfig.HardwareConfigManager, profi
 
 	// Update hardware config manager with the test config
 	return hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig})
+}
+
+func TestSetupGPSDAndGPSPipeFailsClosedForExplicitGNSSMatcher(t *testing.T) {
+	hardwareconfig.SetDpllPinsGetter(hardwareconfig.CreateMockDpllPinsGetter(nil, nil))
+	defer hardwareconfig.ResetDpllPinsGetter()
+
+	hcm := hardwareconfig.NewHardwareConfigManager(fake.NewClientset(), "default", nil)
+	hwConfig := ptpv2alpha1.HardwareConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gnss-hwconfig"},
+		Spec: ptpv2alpha1.HardwareConfigSpec{
+			RelatedPtpProfileName: "test-profile",
+			Profile: ptpv2alpha1.HardwareProfile{
+				ClockChain: &ptpv2alpha1.ClockChain{
+					Behavior: &ptpv2alpha1.Behavior{Sources: []ptpv2alpha1.SourceConfig{{
+						Name:       "GNSS",
+						SourceType: ptpv2alpha1.SourceTypeGNSS,
+						GNSSConfig: &ptpv2alpha1.GNSSConfig{Match: &ptpv2alpha1.GNSSMatcher{}},
+					}}},
+				},
+			},
+		},
+	}
+	require.NoError(t, hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig}))
+
+	daemon := &Daemon{hardwareConfigManager: hcm}
+	process := &ptpProcess{}
+	err := daemon.setupGPSDAndGPSPipe(&ptpv1.PtpProfile{Name: stringPointer("tgm_test-profile")}, process)
+
+	require.ErrorContains(t, err, "refusing to start GPSD with a fallback device")
+	assert.Empty(t, process.gnssSerialPort, "failed explicit selection must not assign the default GNSS port")
+	assert.Empty(t, process.depProcess, "failed explicit selection must not create GPSD or GPSPipe processes")
 }
 
 // createMockPTPStateDetectorForHardwareConfig creates a mock PTPStateDetector for hardware config testing
@@ -2615,6 +2642,53 @@ func TestPtp4lConf_ResolveInterfaceNames(t *testing.T) {
 		}
 		assert.True(t, found["[ens5f0]"], "should keep [ens5f0] unchanged")
 	})
+}
+
+func TestChronydConf_ResolveInterfaceNames(t *testing.T) {
+	conf := "binddevice ens5f0\nbindacqdevice ens5f1\nhwtimestamp ens5f0 minpoll 0\nhwtimestamp *\nallow 10.0.0.0/8"
+	profile := &ptpv1.PtpProfile{ChronydConf: &conf}
+	resolver := network.NewInterfaceResolverWithInterfaces([]string{"ens5f0np0", "ens5f1np1", "*np0"})
+	p := &ptpProcess{ExecProcess: ExecProcess{name: chronydProcessName}}
+	output, _, err := p.loadProcessConf(ptpProcessEnv{
+		nodeProfile: profile,
+		dn:          &Daemon{interfaceResolver: resolver},
+	})
+	require.NoError(t, err)
+	got, _ := output.RenderPtp4lConf()
+	lines := strings.Split(got, "\n")
+	for _, line := range []string{
+		"binddevice ens5f0np0",
+		"bindacqdevice ens5f1np1",
+		"hwtimestamp ens5f0np0 minpoll 0",
+		"hwtimestamp *",
+		"allow 10.0.0.0/8",
+	} {
+		assert.Contains(t, lines, line)
+	}
+}
+
+func TestTs2PhcConf_ResolveTodSource(t *testing.T) {
+	for _, tt := range []struct{ source, want string }{
+		{"ens5f0", "ens5f0np0"},
+		{"generic", "generic"},
+		{"nmea", "nmea"},
+		{"/dev/ptp0", "/dev/ptp0"},
+	} {
+		t.Run(tt.source, func(t *testing.T) {
+			conf := "[global]\nts2phc.tod_source " + tt.source + "\n[nmea]\nts2phc.master 1"
+			profile := &ptpv1.PtpProfile{Ts2PhcConf: &conf}
+			resolver := network.NewInterfaceResolverWithInterfaces([]string{"ens5f0np0", "genericnp0", "nmeanp0"})
+			p := &ptpProcess{ExecProcess: ExecProcess{name: ts2phcProcessName}}
+			output, _, err := p.loadProcessConf(ptpProcessEnv{
+				nodeProfile: profile,
+				dn:          &Daemon{interfaceResolver: resolver},
+			})
+			require.NoError(t, err)
+			got, _ := output.RenderPtp4lConf()
+			assert.Contains(t, strings.Split(got, "\n"), "ts2phc.tod_source "+tt.want)
+			assert.Contains(t, got, "[nmea]")
+		})
+	}
 }
 
 func TestUpdateClockStateMetrics(t *testing.T) {

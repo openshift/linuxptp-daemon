@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -147,11 +148,64 @@ func (r *InterfaceResolver) ResolveProfileInterfaces(profile *ptpv1.PtpProfile) 
 	// Config section headers ([interface]) are resolved by Ptp4lConf.ResolveInterfaceNames
 	// after parsing, inside applyNodePtpProfile — not here.
 
+	if profile.Phc2sysOpts != nil {
+		resolveProcessOpts(r, profile.Phc2sysOpts, profileName, "Phc2sysOpts", []string{"-s", "-i", "-c"})
+	}
+	if profile.Ptp4lOpts != nil {
+		resolveProcessOpts(r, profile.Ptp4lOpts, profileName, "Ptp4lOpts", []string{"-i"})
+	}
+	if profile.Ts2PhcOpts != nil {
+		resolveProcessOpts(r, profile.Ts2PhcOpts, profileName, "Ts2PhcOpts", []string{"-s", "-c", "--ts2phc.tod_source"})
+	}
+
 	if profile.PtpSettings != nil {
 		resolvePtpSettings(r, profile.PtpSettings, profileName)
 	}
 
 	resolvePluginDevices(r, profile, profileName)
+}
+
+func resolveProcessOpts(r *InterfaceResolver, opts *string, profileName, fieldName string, flags []string) {
+	args := strings.Fields(*opts)
+	changed := false
+	for i := 0; i < len(args); i++ {
+		if flag, value, inline := strings.Cut(args[i], "="); inline && strings.HasPrefix(flag, "--") && slices.Contains(flags, flag) {
+			if isNonInterfaceProcessArg(fieldName, flag, value) {
+				continue
+			}
+			if resolved, remapped := r.Resolve(value); remapped {
+				glog.Infof("Profile %s: %s %s %q -> %q", profileName, fieldName, flag, value, resolved)
+				args[i] = flag + "=" + resolved
+				changed = true
+			}
+			continue
+		}
+		if i+1 == len(args) || !slices.Contains(flags, args[i]) {
+			continue
+		}
+		if isNonInterfaceProcessArg(fieldName, args[i], args[i+1]) {
+			continue
+		}
+		if resolved, remapped := r.Resolve(args[i+1]); remapped {
+			glog.Infof("Profile %s: %s %s %q -> %q", profileName, fieldName, args[i], args[i+1], resolved)
+			args[i+1] = resolved
+			changed = true
+		}
+	}
+	if changed {
+		*opts = strings.Join(args, " ")
+	}
+}
+
+func isNonInterfaceProcessArg(fieldName, flag, value string) bool {
+	if strings.HasPrefix(value, "/") {
+		return true
+	}
+	if fieldName == "Phc2sysOpts" && strings.HasPrefix(value, "CLOCK_") {
+		return true
+	}
+	return fieldName == "Ts2PhcOpts" && (flag == "-s" || flag == "--ts2phc.tod_source") &&
+		(value == "generic" || value == "nmea")
 }
 
 func resolvePtpSettings(r *InterfaceResolver, settings map[string]string, profileName string) {

@@ -9,6 +9,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -108,6 +109,33 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 		}
 		assert.True(t, gotState, "expected TypePTPState LOCKED")
 		assert.True(t, gotClass6, "expected TypeClockClass 6 on FREERUN→LOCKED")
+	})
+
+	t.Run("initial LOCKED emits TypeClockClass 6", func(t *testing.T) {
+		gm, rio, _ := newTestGMClock()
+
+		// GNSS and DPLL are already locked on the first update: the GM goes
+		// straight to LOCKED and never passes through FREERUN.
+		gm.data = []*event.Data{
+			gmData(event.GNSS, event.PTP_LOCKED),
+			gmData(event.DPLL, event.PTP_LOCKED),
+			gmData(event.TS2PHCProcessName, event.PTP_LOCKED),
+		}
+		result := gm.updateState()
+		assert.Equal(t, event.PTP_LOCKED, result.State)
+		assert.Equal(t, fbprotocol.ClockClass6, result.ClockClass)
+
+		var gotClass6 bool
+		for _, msg := range rio.messages {
+			if msg.Type == ipc.TypeClockClass {
+				cv := msg.Values.(ipc.ClockClassValue)
+				assert.Equal(t, uint8(6), cv.ClockClass)
+				assert.Equal(t, cfg, msg.Profile)
+				assert.Equal(t, iface, msg.IFace)
+				gotClass6 = true
+			}
+		}
+		assert.True(t, gotClass6, "expected TypeClockClass 6 on first LOCKED update")
 	})
 
 	t.Run("LOCKED to HOLDOVER emits TypePTPState and TypeClockClass", func(t *testing.T) {
@@ -271,7 +299,7 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 	t.Run("skips when clockClass is uninitialized", func(t *testing.T) {
 		gm, _, pmcMock := newTestGMClock()
 		gm.announceClockClassIfChanged(
-			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: event.Int64Ptr(50)}},
+			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: utils.ToPtr[int64](50)}},
 			SyncState{State: event.PTP_LOCKED, ClockClass: protocol.ClockClassUninitialized},
 		)
 		assert.Empty(t, pmcMock.SnapshotSetCalls())
@@ -310,7 +338,7 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 		gm.announcedClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
 		gm.syncState.ClockClass = fbprotocol.ClockClass7
 		gm.announceClockClassIfChanged(
-			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: event.Int64Ptr(500)}},
+			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: utils.ToPtr[int64](500)}},
 			SyncState{State: event.PTP_HOLDOVER, ClockClass: fbprotocol.ClockClass7},
 		)
 		setCalls := pmcMock.SnapshotSetCalls()

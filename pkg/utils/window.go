@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"iter"
 	"math"
+	"slices"
 	"sync"
 
 	"gonum.org/v1/gonum/stat"
@@ -49,6 +50,20 @@ func NewWindow(size int) *Window {
 		data:    make([]float64, size),
 		weights: weights,
 		size:    size,
+	}
+}
+
+// Snapshot returns a detached read-only view of the current samples and weights.
+// Later inserts or configuration changes do not affect the snapshot.
+func (w *Window) Snapshot() ROWindow {
+	w.lock.RLock()
+	defer w.lock.RUnlock()
+	return &Window{
+		data:      slices.Clone(w.data),
+		weights:   slices.Clone(w.weights),
+		size:      w.size,
+		nextIndex: w.nextIndex,
+		full:      w.full,
 	}
 }
 

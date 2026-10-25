@@ -116,7 +116,11 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 
 		// Record the follower interface once known
 		if !sourceLost && ev.IFace != "" {
+			firstInterface := c.iface == ""
 			c.iface = ev.IFace
+			if firstInterface && c.clockClass != 0 {
+				c.emitClockClass(c.clockClass)
+			}
 		}
 
 		prev := c.syncState
@@ -256,6 +260,14 @@ func (c *BCClock) updateClockClass(clockClass fbprotocol.ClockClass) {
 		return
 	}
 	c.clockClass = clockClass
+	// Wait for the follower interface so the IPC cache has no stale, unscoped class.
+	if c.iface == "" {
+		return
+	}
+	c.emitClockClass(clockClass)
+}
+
+func (c *BCClock) emitClockClass(clockClass fbprotocol.ClockClass) {
 	c.sendIPC(ipc.Message{
 		Type:    ipc.TypeClockClass,
 		Profile: c.cfgName,
