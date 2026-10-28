@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -131,7 +132,9 @@ func setupGNRDTestEnvironment(t *testing.T) uint64 {
 	}
 	SetupMockPtpDeviceResolverWithDevices(mockDevices)
 
-	// Load pins from perla2-pins.json
+	// Load pins from perla2-pins.json; the parent device types (EEC/PPS) come
+	// from the paired device dump perla2-pins-devices.json, as a real device
+	// dump would report them
 	mockGetter, err := CreateMockDpllPinsGetterFromFile("../daemon/testdata/perla2-pins.json")
 	if !assert.NoError(t, err, "Failed to create mock getter from perla2-pins.json") {
 		t.FailNow()
@@ -299,25 +302,35 @@ func validateGNRDInitCommands(t *testing.T, dpllCommands []dpll.PinParentDeviceC
 		}
 	}
 
-	// Check GNR-D_SDP0: EEC should be disconnected, PPS should be selectable
+	// Check GNR-D_SDP0: EEC parent should be disconnected, PPS parent should be selectable.
+	// The EEC/PPS identity of each parent is resolved from the pin cache (device type
+	// from the DPLL device dump), not from the parent device ID.
 	sdp0Pin, sdp0Found := cache.GetPin(clockID, "GNR-D_SDP0")
 	if sdp0Found {
+		// Map parent device ID to its DPLL device type
+		parentTypes := make(map[uint32]uint32, len(sdp0Pin.ParentDevice))
+		for _, pd := range sdp0Pin.ParentDevice {
+			parentType, typeKnown := cache.ParentDeviceType(pd.ParentID)
+			require.True(t, typeKnown, "parent device %d must be present in the device dump", pd.ParentID)
+			parentTypes[pd.ParentID] = parentType
+		}
 		for _, cmd := range dpllCommands {
 			if cmd.ID == sdp0Pin.ID && len(cmd.PinParentCtl) > 0 {
 				for _, pc := range cmd.PinParentCtl {
-					if pc.State != nil {
-						// ParentID 0 = EEC (should be disconnected)
-						// ParentID 1 = PPS (should be selectable)
-						switch pc.PinParentID {
-						case 0:
-							assert.Equal(t, uint32(dpll.PinStateDisconnected), *pc.State,
-								"GNR-D_SDP0 EEC should be disconnected in init")
-							t.Logf("  ✓ GNR-D_SDP0 (ID=%d) EEC set to disconnected", sdp0Pin.ID)
-						case 1:
-							assert.Equal(t, uint32(dpll.PinStateSelectable), *pc.State,
-								"GNR-D_SDP0 PPS should be selectable in init")
-							t.Logf("  ✓ GNR-D_SDP0 (ID=%d) PPS set to selectable", sdp0Pin.ID)
-						}
+					if pc.State == nil {
+						continue
+					}
+					switch parentTypes[pc.PinParentID] {
+					case dpll.DpllTypeEEC:
+						assert.Equal(t, uint32(dpll.PinStateDisconnected), *pc.State,
+							"GNR-D_SDP0 EEC (device %d) should be disconnected in init", pc.PinParentID)
+						t.Logf("  ✓ GNR-D_SDP0 (ID=%d) EEC (device %d) set to disconnected", sdp0Pin.ID, pc.PinParentID)
+					case dpll.DpllTypePPS:
+						assert.Equal(t, uint32(dpll.PinStateSelectable), *pc.State,
+							"GNR-D_SDP0 PPS (device %d) should be selectable in init", pc.PinParentID)
+						t.Logf("  ✓ GNR-D_SDP0 (ID=%d) PPS (device %d) set to selectable", sdp0Pin.ID, pc.PinParentID)
+					default:
+						t.Errorf("GNR-D_SDP0 parent device %d has unknown type %d", pc.PinParentID, parentTypes[pc.PinParentID])
 					}
 				}
 			}

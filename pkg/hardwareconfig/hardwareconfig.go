@@ -986,12 +986,17 @@ func (hcm *HardwareConfigManager) buildPinFrequencyCommands(clockID uint64, boar
 			for _, parentCfg := range cmdDef.PinParentDevices {
 				// Find matching parent device in pin cache
 				for _, parent := range pin.ParentDevice {
-					// Match by device index: 0=EEC, 1=PPS
+					// Match the parent device by its actual DPLL device type
 					deviceName := ""
 					if parent.Direction == dpll.PinDirectionOutput {
-						if len(cmd.PinParentCtl) == 0 {
+						parentType, typeKnown := hcm.pinCache.ParentDeviceType(parent.ParentID)
+						switch {
+						case !typeKnown:
+							glog.Warningf("Pin %d: parent device %d not found in DPLL device dump, skipping",
+								pin.ID, parent.ParentID)
+						case parentType == dpll.DpllTypeEEC:
 							deviceName = "EEC"
-						} else {
+						case parentType == dpll.DpllTypePPS:
 							deviceName = "PPS"
 						}
 					}
@@ -1076,13 +1081,18 @@ func (hcm *HardwareConfigManager) buildPinPriorityCommand(clockID uint64, boardL
 		return dpll.PinParentDeviceCtl{}, false
 	}
 	cmd := dpll.PinParentDeviceCtl{ID: pin.ID, PinParentCtl: make([]dpll.PinControl, 0)}
-	for idx, parent := range pin.ParentDevice {
+	for _, parent := range pin.ParentDevice {
 		pc := dpll.PinControl{PinParentID: parent.ParentID}
 		if parent.Direction == dpll.PinDirectionInput {
-			// Map device index 0->EEC, 1->PPS as in legacy implementation
-			if idx == 0 && eecPrio != nil {
+			// Match the parent device by its actual DPLL device type
+			parentType, typeKnown := hcm.pinCache.ParentDeviceType(parent.ParentID)
+			switch {
+			case !typeKnown:
+				glog.Warningf("Pin %d: parent device %d not found in DPLL device dump, skipping priority for it",
+					pin.ID, parent.ParentID)
+			case parentType == dpll.DpllTypeEEC && eecPrio != nil:
 				pc.Prio = eecPrio
-			} else if idx == 1 && ppsPrio != nil {
+			case parentType == dpll.DpllTypePPS && ppsPrio != nil:
 				pc.Prio = ppsPrio
 			}
 		}
@@ -1118,21 +1128,36 @@ func (hcm *HardwareConfigManager) buildPinCommandFromDefaults(subsystem ptpv2alp
 	if overrides != nil {
 		pin, ok := hcm.pinCache.GetPin(clockID, label)
 		if ok {
+			// Map parent device ID to its direction from the pin dump
+			parentDirections := make(map[uint32]uint32, len(pin.ParentDevice))
+			for _, pd := range pin.ParentDevice {
+				parentDirections[pd.ParentID] = pd.Direction
+			}
 			for idx := range cmd.PinParentCtl {
 				parent := cmd.PinParentCtl[idx]
-				if idx < len(pin.ParentDevice) && pin.ParentDevice[idx].Direction == dpll.PinDirectionOutput {
-					if overrides.EEC != nil && overrides.EEC.State != "" {
-						if stateVal, stateErr := GetPinStateUint32(overrides.EEC.State); stateErr == nil {
-							parent.State = &stateVal
-						}
-					}
-					if overrides.PPS != nil && overrides.PPS.State != "" {
-						if stateVal, stateErr := GetPinStateUint32(overrides.PPS.State); stateErr == nil {
-							parent.State = &stateVal
-						}
-					}
-					cmd.PinParentCtl[idx] = parent
+				if parentDirections[parent.PinParentID] != dpll.PinDirectionOutput {
+					continue
 				}
+				parentType, typeKnown := hcm.pinCache.ParentDeviceType(parent.PinParentID)
+				var stateStr string
+				switch {
+				case !typeKnown:
+					glog.Warningf("Pin %d: parent device %d not found in DPLL device dump, skipping state override",
+						pin.ID, parent.PinParentID)
+				case parentType == dpll.DpllTypeEEC && overrides.EEC != nil:
+					stateStr = overrides.EEC.State
+				case parentType == dpll.DpllTypePPS && overrides.PPS != nil:
+					stateStr = overrides.PPS.State
+				}
+				if stateStr != "" {
+					stateVal, stateErr := GetPinStateUint32(stateStr)
+					if stateErr != nil {
+						glog.Warningf("Pin %s: invalid state '%s' for parent device %d: %v", label, stateStr, parent.PinParentID, stateErr)
+					} else {
+						parent.State = &stateVal
+					}
+				}
+				cmd.PinParentCtl[idx] = parent
 			}
 		}
 	}
@@ -1259,8 +1284,13 @@ func (hcm *HardwareConfigManager) createPinCommandForDPLLDesiredState(dpllDesire
 			PinParentID: parentDevice.ParentID,
 		}
 
-		isEEC := parentDevice.ParentID&0x1 == 0 // EEC parent device has even ParentID
-		isPPS := parentDevice.ParentID&0x1 == 1 // PPS parent device has odd ParentID
+		parentType, typeKnown := hcm.pinCache.ParentDeviceType(parentDevice.ParentID)
+		isEEC := typeKnown && parentType == dpll.DpllTypeEEC
+		isPPS := typeKnown && parentType == dpll.DpllTypePPS
+		if !typeKnown {
+			glog.Warningf("Pin %d: parent device %d not found in DPLL device dump, skipping EEC/PPS desired state for it",
+				pin.ID, parentDevice.ParentID)
+		}
 
 		if parentDevice.Direction == dpll.PinDirectionInput {
 			// Input pins support both priority AND state changes
