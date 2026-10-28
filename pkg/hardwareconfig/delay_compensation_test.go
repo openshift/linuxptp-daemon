@@ -8,6 +8,45 @@ import (
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 )
 
+const (
+	testPackageLabelREF0N      = "REF0N"
+	testPackageLabelREF4P      = "REF4P"
+	testConditionInitializeTBC = "Initialize T-BC"
+)
+
+func TestVendorDelayCompensationUsesPackageLabels(t *testing.T) {
+	for _, tc := range []struct {
+		hwDefPath  string
+		input1kHz  string
+		input1Hz   string
+		output1Hz  string
+		output1kHz string
+		esync      string
+	}{
+		{hwDefPath: HwDefDellXR8720t, input1kHz: "REF0P", input1Hz: testPackageLabelREF0N, output1Hz: "OUT8N", output1kHz: "OUT8P", esync: "OUT2N"},
+		{hwDefPath: HwDefHPEEL140Gen12, input1kHz: "REF0P", input1Hz: testPackageLabelREF0N, output1Hz: "OUT8N", output1kHz: "OUT8P", esync: "OUT2P"},
+	} {
+		t.Run(tc.hwDefPath, func(t *testing.T) {
+			hwDefaults, err := LoadHardwareDefaults(tc.hwDefPath, nil)
+			if !assert.NoError(t, err) || !assert.NotNil(t, hwDefaults) {
+				return
+			}
+
+			labels := make(map[string]string)
+			for _, component := range hwDefaults.DelayCompensation.Components {
+				if component.CompensationPoint != nil {
+					labels[component.ID] = component.CompensationPoint.Name
+				}
+			}
+			assert.Equal(t, tc.input1kHz, labels["DPLL phase in 1kHz"])
+			assert.Equal(t, tc.input1Hz, labels["DPLL phase in 1Hz"])
+			assert.Equal(t, tc.output1Hz, labels["DPLL phase out 1Hz"])
+			assert.Equal(t, tc.output1kHz, labels["DPLL phase out 1kHz"])
+			assert.Equal(t, tc.esync, labels["DPLL ESync out"])
+		})
+	}
+}
+
 func TestResolvePhaseAdjustments(t *testing.T) {
 	tests := []struct {
 		name                string
