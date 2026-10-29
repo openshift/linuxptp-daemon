@@ -19,14 +19,13 @@ const (
 	testInterface0 = "eth0"
 	testInterface1 = "eth1"
 	testPHC0       = "/dev/ptp0"
-	testPHC1       = "/dev/ptp1"
 	testE825Device = "eno8703"
 )
 
 // TestNew covers successful registration under the plugin name and rejection of another name.
 func TestNew(t *testing.T) {
 	got, data := New(pluginName)
-	if got == nil || data == nil || got.Name != pluginName || got.OnPTPConfigChange == nil {
+	if got == nil || data == nil || got.Name != pluginName || !got.RunsWithHardwareConfig || got.OnPTPConfigChange == nil {
 		t.Fatalf("unexpected plugin registration: plugin=%+v data=%v", got, data)
 	}
 	if otherPlugin, otherData := New("other"); otherPlugin != nil || otherData != nil {
@@ -69,77 +68,49 @@ func TestTimeReceiverInterfaces(t *testing.T) {
 	}
 }
 
-// TestValidateE825PHC covers direct and aliased device matches, missing e825 configuration,
-// and e825 devices exposing a different PHC.
-func TestValidateE825PHC(t *testing.T) {
-	old := phcIDForIface
-	t.Cleanup(func() { phcIDForIface = old })
-	tests := []struct {
-		name    string
-		profile *ptpv1.PtpProfile
-		phcs    map[string]string
-		wantErr bool
-	}{
-		{
-			name:    "e825 device exposes the TR PHC",
-			profile: selectedProfile(t, "[eth0]\nmasterOnly 0\n", []string{testInterface0}),
-			phcs:    map[string]string{testInterface0: testPHC0},
-		},
-		{
-			name:    "different interface name exposes the same PHC",
-			profile: selectedProfile(t, "[eno8303]\nmasterOnly 0\n", []string{testE825Device}),
-			phcs:    map[string]string{"eno8303": testPHC0, testE825Device: testPHC0},
-		},
-		{
-			name:    "missing e825 configuration",
-			profile: profileWithPlugins("[eth0]\nmasterOnly 0\n", map[string]*apiextensions.JSON{pluginName: {Raw: []byte(`{}`)}}),
-			wantErr: true,
-		},
-		{
-			name:    "e825 devices expose another PHC",
-			profile: selectedProfile(t, "[eth0]\nmasterOnly 0\n", []string{testInterface1}),
-			phcs:    map[string]string{testInterface0: testPHC0, testInterface1: testPHC1},
-			wantErr: true,
-		},
+// TestLeadingInterface covers the HardwareConfig-resolved leading interface and
+// the e825 device fallback.
+func TestLeadingInterface(t *testing.T) {
+	hardwareConfig := profileWithPlugins("[eth0]\nmasterOnly 0\n", map[string]*apiextensions.JSON{
+		pluginName: {Raw: []byte(`{}`)},
+	})
+	hardwareConfig.PtpSettings = map[string]string{"leadingInterface": "eno1"}
+	if got := leadingInterface(hardwareConfig); got != "eno1" {
+		t.Fatalf("leadingInterface() = %q, want %q", got, "eno1")
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			phcIDForIface = func(iface string) string { return test.phcs[iface] }
-			err := validateE825PHC(test.profile, testPHC0)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("validateE825PHC() error = %v, wantErr %v", err, test.wantErr)
-			}
-		})
+
+	e825 := profileWithPlugins("[eth0]\nmasterOnly 0\n", map[string]*apiextensions.JSON{
+		pluginName: {Raw: []byte(`{}`)},
+		"e825":     {Raw: []byte(`{"devices":["eno8703","eno8704"]}`)},
+	})
+	if got := leadingInterface(e825); got != testE825Device {
+		t.Fatalf("leadingInterface() = %q, want %q", got, testE825Device)
 	}
 }
 
-// TestSharedPHC covers one or multiple interfaces on one PHC, unresolved PHCs, and mixed PHCs.
-func TestSharedPHC(t *testing.T) {
+func TestLeadingPHC(t *testing.T) {
 	old := phcIDForIface
 	t.Cleanup(func() { phcIDForIface = old })
-	tests := []struct {
-		name       string
-		devices    map[string]string
-		interfaces []string
-		want       string
-		wantErr    bool
-	}{
-		{name: "one interface", devices: map[string]string{testInterface0: testPHC0}, interfaces: []string{testInterface0}, want: testPHC0},
-		{name: "multiple interfaces share PHC", devices: map[string]string{testInterface0: testPHC0, testInterface1: testPHC0}, interfaces: []string{testInterface0, testInterface1}, want: testPHC0},
-		{name: "unresolved PHC", devices: map[string]string{testInterface0: ""}, interfaces: []string{testInterface0}, wantErr: true},
-		{name: "different PHCs", devices: map[string]string{testInterface0: testPHC0, testInterface1: testPHC1}, interfaces: []string{testInterface0, testInterface1}, wantErr: true},
+	phcIDForIface = func(iface string) string {
+		if iface == "eno1" {
+			return testPHC0
+		}
+		return ""
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			phcIDForIface = func(iface string) string { return test.devices[iface] }
-			got, err := sharedPHC(test.interfaces)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("sharedPHC() error = %v, wantErr %v", err, test.wantErr)
-			}
-			if got != test.want {
-				t.Fatalf("sharedPHC() = %q, want %q", got, test.want)
-			}
-		})
+
+	profile := profileWithPlugins("[eth0]\nmasterOnly 0\n", map[string]*apiextensions.JSON{
+		pluginName: {Raw: []byte(`{}`)},
+	})
+	profile.PtpSettings = map[string]string{"leadingInterface": "eno1"}
+	if phc, err := leadingPHC(profile); err != nil || phc != testPHC0 {
+		t.Fatalf("leadingPHC() = (%q, %v), want (%q, nil)", phc, err, testPHC0)
+	}
+
+	missing := profileWithPlugins("[eth0]\nmasterOnly 0\n", map[string]*apiextensions.JSON{
+		pluginName: {Raw: []byte(`{}`)},
+	})
+	if _, err := leadingPHC(missing); err == nil {
+		t.Fatal("leadingPHC() accepted a profile with no leading interface")
 	}
 }
 
@@ -249,8 +220,9 @@ func TestReadPHCTimeNegativeValue(t *testing.T) {
 	}
 }
 
-// TestOnPTPConfigChangeValidationDoesNotRunCommands covers missing TR ports, e825 mismatch, unresolved PHC,
-// and multiple PHCs, confirming validation fails before external commands run.
+// TestOnPTPConfigChangeValidationDoesNotRunCommands covers missing TR ports,
+// unresolved PHCs, and multiple PHCs, confirming validation fails before
+// external commands run.
 func TestOnPTPConfigChangeValidationDoesNotRunCommands(t *testing.T) {
 	installFakeCommands(t, "#!/bin/sh\ntouch \"$COMMAND_MARKER\"\nexit 1\n", "#!/bin/sh\ntouch \"$COMMAND_MARKER\"\nexit 1\n")
 	marker := filepath.Join(t.TempDir(), "command-ran")
@@ -269,36 +241,22 @@ func TestOnPTPConfigChangeValidationDoesNotRunCommands(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "e825 device exposes another PHC",
-			profile: selectedProfile(t, "[eth0]\nmasterOnly 0\n", []string{testInterface1}),
-			resolver: func(iface string) string {
-				if iface == testInterface0 {
-					return testPHC0
-				}
-				return testPHC1
-			},
-			wantErr: true,
-		},
-		{
-			name:     "unresolved PHC",
+			name:     "unresolved leading PHC",
 			profile:  selectedProfile(t, "[eth0]\nmasterOnly 0\n", []string{testInterface0}),
 			resolver: func(string) string { return "" },
 			wantErr:  true,
 		},
 		{
-			name:    "interfaces on different PHCs",
-			profile: selectedProfile(t, "[eth0]\nmasterOnly 0\n[eth1]\nmasterOnly 0\n", []string{testInterface0, testInterface1}),
-			resolver: func(iface string) string {
-				if iface == testInterface0 {
-					return testPHC0
-				}
-				return testPHC1
-			},
+			name: "no leading interface",
+			profile: profileWithPlugins("[eth0]\nmasterOnly 0\n", map[string]*apiextensions.JSON{
+				pluginName: {Raw: []byte(`{}`)},
+			}),
 			wantErr: true,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			_ = os.Remove(marker)
 			phcIDForIface = test.resolver
 			if test.resolver == nil {
 				phcIDForIface = func(string) string { return testPHC0 }
@@ -314,9 +272,9 @@ func TestOnPTPConfigChangeValidationDoesNotRunCommands(t *testing.T) {
 	}
 }
 
-// TestOnPTPConfigChangeMeasuresAndSetsSharedPHC covers zero-delay filtering, single-sample selection,
-// corrected-time calculation, shared-PHC selection, and waiting for phc_ctl set to finish.
-func TestOnPTPConfigChangeMeasuresAndSetsSharedPHC(t *testing.T) {
+// TestOnPTPConfigChangeMeasuresAndSetsPHC covers zero-delay filtering, single-sample selection,
+// corrected-time calculation, leading-interface PHC selection, and waiting for phc_ctl set to finish.
+func TestOnPTPConfigChangeMeasuresAndSetsPHC(t *testing.T) {
 	var samples strings.Builder
 	samples.WriteString("printf 'ptp4l: master offset 999 s0 freq +0 path delay 0\\n'\n")
 	samples.WriteString("i=1\nwhile [ \"$i\" -le 16 ]; do\n")
