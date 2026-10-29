@@ -3160,10 +3160,8 @@ func TestLiveGate_TimeoutReturnsTrue(t *testing.T) {
 	}
 }
 
-// TestSocketWriter_Drain verifies that lines buffered in lineCh while
-// the gate was closed are drained (discarded) by the socket-writer and
-// NOT forwarded to the socket. Only lines produced after the drain
-// should appear on the CEP side.
+// TestSocketWriter_Drain verifies that buffered HA selections reach CEP as
+// profile status while stale offset samples are discarded.
 func TestSocketWriter_Drain(t *testing.T) {
 	socketPath := shortTestSocketPath(t)
 	listener, err := net.Listen("unix", socketPath)
@@ -3174,17 +3172,25 @@ func TestSocketWriter_Drain(t *testing.T) {
 		liveGate: &liveGate{},
 	}
 	dn.liveGate.Reset()
+	p := &ptpProcess{
+		name:       phc2sysProcessName,
+		configName: "phc2sys.0.config",
+		haProfile: map[string][]string{
+			"master1": {"ens1f0"},
+			"master2": {"ens2f0"},
+		},
+	}
 
 	lineCh := make(chan string, 256)
 
 	staleLines := []string{
-		"ptp4l[0.001]: [ptp4l.0.config] master offset 999 s2 freq -5000 path delay 200",
-		"ptp4l[0.002]: [ptp4l.0.config] master offset 998 s2 freq -4999 path delay 201",
-		"ptp4l[0.003]: [ptp4l.0.config] master offset 997 s2 freq -4998 path delay 202",
+		"phc2sys[0.001]: [phc2sys.0.config] CLOCK_REALTIME phc offset 999 s2 freq -5000 delay 200",
+		"phc2sys[0.002]: [phc2sys.0.config] selecting ens1f0 as domain source clock",
+		"phc2sys[0.003]: [phc2sys.0.config] selecting ens2f0 as out-of-domain source clock",
 	}
 	liveLines := []string{
-		"ptp4l[10.000]: [ptp4l.0.config] master offset 3 s2 freq -998 path delay 99",
-		"ptp4l[11.000]: [ptp4l.0.config] master offset 2 s2 freq -997 path delay 100",
+		"phc2sys[10.000]: [phc2sys.0.config] CLOCK_REALTIME phc offset 3 s2 freq -998 delay 99",
+		"phc2sys[11.000]: [phc2sys.0.config] CLOCK_REALTIME phc offset 2 s2 freq -997 delay 100",
 	}
 
 	// Buffer stale lines BEFORE the gate opens.
@@ -3219,23 +3225,15 @@ func TestSocketWriter_Drain(t *testing.T) {
 			return
 		}
 		defer c.Close()
+		p.c = c
 
 		dn.liveGate.Wait(liveGateTimeout)
 		fmt.Fprintf(c, "%s\n", liveStartCommand)
 
-		// Drain stale lines (same logic as daemon.go drainLoop)
-		drained := 0
-	drainLoop:
-		for {
-			select {
-			case _, ok := <-lineCh:
-				if !ok {
-					return
-				}
-				drained++
-			default:
-				break drainLoop
-			}
+		// Drain buffered lines using the socket writer's implementation.
+		drained, closed := p.drainBufferedLines(lineCh)
+		if closed {
+			return
 		}
 		t.Logf("drained %d stale lines", drained)
 
@@ -3272,8 +3270,10 @@ func TestSocketWriter_Drain(t *testing.T) {
 
 		// LIVE_START should be first
 		assert.Equal(t, liveStartCommand, msgs[0], "first message should be CMD LIVE_START")
+		assert.Equal(t, 2, strings.Count(strings.Join(msgs, "\n"), "ptp_ha_profile master1 state 0"))
+		assert.Equal(t, 1, strings.Count(strings.Join(msgs, "\n"), "ptp_ha_profile master2 state 1"))
 
-		// Stale lines must NOT appear
+		// Buffered source lines must NOT appear.
 		for _, stale := range staleLines {
 			for _, m := range msgs {
 				assert.NotEqual(t, stale, m, "stale line should have been drained, not forwarded")

@@ -1843,6 +1843,24 @@ func (p *ptpProcess) runScanner(cmdReader io.Reader, lineCh chan<- string, pm *p
 	close(lineCh)
 }
 
+func (p *ptpProcess) drainBufferedLines(lineCh <-chan string) (int, bool) {
+	drained := 0
+	for {
+		select {
+		case output, ok := <-lineCh:
+			if !ok {
+				return drained, true
+			}
+			if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
+				p.announceHAFailOver(p.c, output)
+			}
+			drained++
+		default:
+			return drained, false
+		}
+	}
+}
+
 // runSocketWriter connects to the event socket, waits for the live gate
 // (replay) to complete, drains stale lines, then forwards live lines to
 // CEP. On write failure it reconnects automatically.
@@ -1871,20 +1889,11 @@ connect:
 	}
 	glog.V(14).Infof("socket-writer[%s]: LIVE_START sent, draining stale buffer", p.name)
 	{
-		drained := 0
-	drainLoop:
-		for {
-			select {
-			case _, ok := <-lineCh:
-				if !ok {
-					glog.V(14).Infof("socket-writer[%s]: lineCh closed during drain", p.name)
-					doneCh <- struct{}{}
-					return
-				}
-				drained++
-			default:
-				break drainLoop
-			}
+		drained, closed := p.drainBufferedLines(lineCh)
+		if closed {
+			glog.V(14).Infof("socket-writer[%s]: lineCh closed during drain", p.name)
+			doneCh <- struct{}{}
+			return
 		}
 		glog.V(14).Infof("socket-writer[%s]: drained %d stale lines, sending processStatus UP", p.name, drained)
 	}
