@@ -816,6 +816,26 @@ func TestFreeRunCondition(t *testing.T) {
 			threshold:    0,
 			expected:     true,
 		},
+		{
+			name: "TS2PHC freerun on leading interface does not trigger free run",
+			data: []*event.Data{
+				{ProcessName: event.DPLL, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_HOLDOVER}}},
+				{ProcessName: event.TS2PHCProcessName, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_FREERUN}}},
+			},
+			LeadingIFace: testIFace1,
+			threshold:    10,
+			expected:     false,
+		},
+		{
+			name: "TS2PHC freerun on non-leading interface triggers free run",
+			data: []*event.Data{
+				{ProcessName: event.DPLL, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_HOLDOVER}}},
+				{ProcessName: event.TS2PHCProcessName, Details: []*event.DataDetails{{IFace: testEno8703, State: event.PTP_FREERUN}}},
+			},
+			LeadingIFace: testIFace1,
+			threshold:    10,
+			expected:     true,
+		},
 	}
 
 	for _, tt := range tests {
