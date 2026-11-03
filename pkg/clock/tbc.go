@@ -770,7 +770,10 @@ func (c *TBC) freeRunCondition() bool {
 			}
 		case event.TS2PHCProcessName:
 			for _, dd := range d.Details {
-				if dd.State == event.PTP_FREERUN {
+				// ts2phc reports `s0` when leading interface enters holdover. This is a
+				// transient condition that should not drop the clock state to freerun.
+				// Exclude leading interface from ts2phc freerun condition
+				if dd.State == event.PTP_FREERUN && dd.IFace != c.syncState.LeadingIFace {
 					glog.Infof("free-run condition on ts2phc interface %s", dd.IFace)
 					return true
 				}
