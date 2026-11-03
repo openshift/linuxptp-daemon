@@ -27,7 +27,8 @@ type fixedStateClock struct {
 
 func (c fixedStateClock) GetState() event.PTPState { return c.state }
 
-func snapshotStatsForTest(m *ClockManager, requests []process.StatsRequest) process.EventStats {
+// SnapshotStatsForTest exposes filtered snapshots only to tests, not production callers.
+func SnapshotStatsForTest(m *ClockManager, requests []process.StatsRequest) process.EventStats {
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
 	return m.snapshotStats(requests)
@@ -254,7 +255,7 @@ func TestClockManager_SnapshotStatsPrefersMatchingProcess(t *testing.T) {
 	cm.GetClock("ts2phc.0.config").GetData(event.TS2PHC).AddEvent(ts2phcEv)
 	cm.GetClock("ts2phc.0.config").GetData(event.TS2PHC).AddEvent(ts2phcEv)
 
-	stats := snapshotStatsForTest(cm, []process.StatsRequest{{ClockID: "ptp4l.0.config", Source: event.PTP4l}, {ClockID: "ts2phc.0.config", Source: event.TS2PHC}})
+	stats := SnapshotStatsForTest(cm, []process.StatsRequest{{ClockID: "ptp4l.0.config", Source: event.PTP4l}, {ClockID: "ts2phc.0.config", Source: event.TS2PHC}})
 	windows := stats.Windows
 	require.NotNil(t, windows["ptp4l.0.config"])
 	require.NotNil(t, windows["ts2phc.0.config"])
@@ -421,7 +422,7 @@ func TestClockManager_PHC2SYS_SnapshotStatsWithoutWindow(t *testing.T) {
 	requests := []process.StatsRequest{
 		{ClockID: "ptp4l.0.config", Source: event.PHC2SYS},
 	}
-	stats := snapshotStatsForTest(cm, requests)
+	stats := SnapshotStatsForTest(cm, requests)
 	assert.Equal(t, event.PTP_LOCKED, stats.States["ptp4l.0.config"][event.PHC2SYS])
 	assert.Nil(t, stats.Windows["ptp4l.0.config"][event.PHC2SYS])
 

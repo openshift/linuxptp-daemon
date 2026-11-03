@@ -58,7 +58,7 @@ github.com/fxamacker/cbor/v2
 # github.com/ghodss/yaml v1.0.0
 ## explicit
 github.com/ghodss/yaml
-# github.com/go-logr/logr v1.4.3
+# github.com/go-logr/logr v1.4.4
 ## explicit; go 1.18
 github.com/go-logr/logr
 # github.com/go-ole/go-ole v1.2.6
@@ -168,7 +168,7 @@ github.com/jaypipes/pcidb
 # github.com/json-iterator/go v1.1.12
 ## explicit; go 1.12
 github.com/json-iterator/go
-# github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20261012195116-aff849dbf0b0
+# github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20261020135448-b50437799d8f
 ## explicit; go 1.26.0
 github.com/k8snetworkplumbingwg/ptp-operator/api/v1
 github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1

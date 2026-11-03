@@ -7,6 +7,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
@@ -76,6 +77,48 @@ func TestStatsUpdatesReconcileAlreadyReadyClock(t *testing.T) {
 	ct.StartPM()
 	require.Eventually(t, func() bool { return waiter.Starts() == 1 }, time.Second, time.Millisecond,
 		"the retained snapshot must recover already-satisfied prerequisites without a query")
+}
+
+func TestSourceQualificationStartupAndRestart(t *testing.T) {
+	ct := NewCondiitonsTester(t, event.TBC, ptp4lConfig)
+	ct.cm.ConfigureOSClockFilter(clock.OSClockFilterConfig{InSyncThreshold: 50, OutOfSyncThreshold: 100, Samples: 1})
+	generation, err := ct.cm.ConfigureSourceQualification(ptp4lConfig, []string{"tr0"}, utils.QualificationConfig{
+		QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
+	require.NoError(t, err)
+	setQualified := func(qualified bool) {
+		if qualified {
+			ct.cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: ptp4lConfig, IFace: "tr0", Data: &event.PTPSourceObservation{
+				Generation: generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave)}})
+		}
+		ct.cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: ptp4lConfig, IFace: "tr0", Data: &event.PTPSourceObservation{
+			Generation: generation, ServoState: "s2", Offset: 10, SourceLost: !qualified}})
+	}
+	setQualified(true)
+	setQualified(false) // no historical TRUE may release the pending process
+	waiter := ct.AddProcess(&stubProcess{
+		name: ts2phcProcessName, cfgName: "ts2phc.0.config", state: process.Created,
+		conds: map[process.Action]process.Condition{
+			process.ActionStart: &process.All{Conditions: []process.Condition{
+				process.OnSourceQualified{ConfigName: ptp4lConfig},
+				process.OnProcessState{ConfigName: ptp4lConfig, Source: string(event.PHC2SYS), State: event.PTP_LOCKED},
+			}},
+		},
+	})
+	ct.cm.ProcessEvent(event.Event{Source: event.PHC2SYS, CfgName: ptp4lConfig, IFace: clockRealTime, Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: 10}})
+	ct.pm.reconcileWaiting(context.Background())
+	require.Zero(t, waiter.Starts())
+	setQualified(true)
+	ct.pm.reconcileWaiting(context.Background())
+	require.Equal(t, 1, waiter.Starts())
+	setQualified(false)
+	ct.pm.reconcileWaiting(context.Background())
+	require.Zero(t, waiter.Stops(), "qualification is not a downstream kill policy")
+	// Existing process-down recovery deliberately bypasses initial gates.
+	waiter.mu.Lock()
+	waiter.state = process.Dead
+	waiter.mu.Unlock()
+	ct.pm.handleProcessDown(context.Background(), event.ProcessStatusEvent(event.TS2PHC, "ts2phc.0.config", event.TBC, "", PtpProcessDown))
+	require.Equal(t, 2, waiter.Starts())
 }
 
 func TestStatsUpdatesDoNotLatchDegradedReadiness(t *testing.T) {

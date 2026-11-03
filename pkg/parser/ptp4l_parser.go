@@ -181,9 +181,9 @@ func extractEventPTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
 		portID = 0
 	}
 
-	// TODO: Pass port name up if provided
 	return &PTPEvent{
 		PortID:     portID,
+		Iface:      parsed.PortName,
 		Role:       role,
 		ClockState: clockState,
 		Raw:        parsed.Raw,

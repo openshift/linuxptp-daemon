@@ -55,6 +55,32 @@ type ClockManager struct {
 	osClockConfigs map[string]struct{}
 }
 
+// ConfigureSourceQualification sets policy for the active upstream PTP input of
+// cfg's ptp4l instance, not aggregate lock or the remote GM's time reference.
+// Configure before process startup; runtime observations use the event channel.
+func (m *ClockManager) ConfigureSourceQualification(cfg string, ports []string, policy utils.QualificationConfig) (uint64, error) {
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+	clk, ok := m.clocks[cfg].(*clock.TBC)
+	if !ok {
+		return 0, fmt.Errorf("source qualification requires a T-BC clock for %s", cfg)
+	}
+	generation, err := clk.ConfigureSourceQualification(ports, policy)
+	m.publishStats()
+	return generation, err
+}
+
+// SourceQualification snapshots the upstream identity/epoch for a new process
+// run. Startup conditions continue to consume the retained stats channel.
+func (m *ClockManager) SourceQualification(cfg string) (event.SourceQualification, bool) {
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+	if clk, ok := m.clocks[cfg].(*clock.TBC); ok {
+		return clk.SourceQualification(cfg)
+	}
+	return event.SourceQualification{}, false
+}
+
 type metricKey struct {
 	cfgName  string
 	process  string
@@ -189,15 +215,21 @@ func (m *ClockManager) AddClock(clk clock.Clock) error {
 // snapshotStats builds a detached snapshot while clockManagementMu is held.
 func (m *ClockManager) snapshotStats(requests []process.StatsRequest) process.EventStats {
 	stats := process.EventStats{
-		Windows:        make(map[string]map[event.EventSource]utils.ROWindow),
-		States:         make(map[string]map[event.EventSource]event.PTPState),
-		ClockStates:    make(map[string]event.PTPState),
-		OSClockState:   m.osClock.State,
-		OSClockE3State: m.osClock.E3State,
+		Windows:         make(map[string]map[event.EventSource]utils.ROWindow),
+		States:          make(map[string]map[event.EventSource]event.PTPState),
+		ClockStates:     make(map[string]event.PTPState),
+		OSClockState:    m.osClock.State,
+		OSClockE3State:  m.osClock.E3State,
+		SourceQualified: make(map[string]bool),
 	}
 	for _, req := range requests {
 		var data []*event.Data
 		if clk := m.GetClock(req.ClockID); clk != nil {
+			if tbc, ok := clk.(*clock.TBC); ok {
+				if result, exists := tbc.SourceQualification(req.ClockID); exists && (req.Source == "" || req.Source == result.SourceType) {
+					stats.SourceQualified[req.ClockID] = result.Qualified && !m.IsApplying()
+				}
+			}
 			// HA member config names resolve to the HA composite in m.clocks.
 			// Its inherited ProcessData contains only composite/OS data, not
 			// the members' ptp4l states and windows. Preserve those per-member
@@ -355,6 +387,20 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 func (m *ClockManager) ProcessEvent(ev event.Event) {
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
+	if observation, ok := ev.Data.(*event.PTPSourceObservation); ok {
+		result := event.SourceQualification{}
+		if clk, exists := m.clocks[ev.CfgName].(*clock.TBC); exists && !m.IsApplying() {
+			result = clk.ObserveSource(ev, observation)
+		}
+		m.publishStats()
+		// Rejected observations also get a reply; a removed/replaced clock must
+		// not strand its old scanner. Never wait for hardware or a receiver.
+		select {
+		case observation.Reply <- result:
+		default:
+		}
+		return
+	}
 	if ev.Reset {
 		m.reset(ev)
 		m.publishStats()
@@ -427,7 +473,11 @@ func (m *ClockManager) reset(ev event.Event) {
 		m.ipcCache.Clear()
 	}
 	if clk := m.GetClock(ev.CfgName); clk != nil {
-		clk.Reset()
+		if tbc, ok := clk.(*clock.TBC); ok {
+			tbc.ResetSource(ev.Source)
+		} else {
+			clk.Reset()
+		}
 	}
 	m.osClock.E3State = event.PTP_NOTSET
 	if ev.Source == event.TS2PHC {

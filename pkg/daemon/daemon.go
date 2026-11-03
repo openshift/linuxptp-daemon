@@ -873,6 +873,11 @@ func clockCfgName(runID int) string {
 // ...) for a profile given its resolved clock type. It is shared by standalone
 // profiles and the member/HA profiles assembled by assembleHAClock.
 func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topology *ProfileTopology, clockType event.ClockType, leadingNic string, upstreamPorts []string) error {
+	// Validate before constructing any process or applying dependent hardware
+	// setup; a partially supplied source policy must fail closed.
+	if _, err := resolveSourceQualificationPolicy(nodeProfile); err != nil {
+		return err
+	}
 	env := ptpProcessEnv{
 		runID:         runID,
 		nodeProfile:   nodeProfile,
@@ -898,6 +903,9 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 		case ptp4lProcessName:
 			var ptpProc *ptpProcess
 			ptpProc, err = NewPtp4lProcess(env)
+			if err != nil {
+				return fmt.Errorf("failed to create ptp4l: %w", err)
+			}
 			// Skip PMC creation for controlled profiles
 			if controllingProfile, isControlled := (*nodeProfile).PtpSettings["controllingProfile"]; isControlled && controllingProfile != "" {
 				// See DownstreamIWF
@@ -911,7 +919,11 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 			}
 			dprocess = ptpProc
 		case phc2sysProcessName:
-			dn.processManager.clockMgr.ConfigureOSClockFilter(osClockFilterConfig(nodeProfile))
+			osFilter := osClockFilterConfig(nodeProfile)
+			dn.processManager.clockMgr.ConfigureOSClockFilter(osFilter)
+			if clockType == event.TBC && nodeProfile.PtpSettings["controllingProfile"] == "" {
+				updateOSClockThresholdMetrics(Threshold, NodeName, *nodeProfile.Name, osFilter)
+			}
 			dprocess, err = NewPhc2sysProcess(env)
 		case ts2phcProcessName:
 			if manager := leap.GetManager(); manager != nil {
@@ -1307,6 +1319,11 @@ func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.Clock
 				inSyncConditionTh, inSyncConditionTimes, flags,
 				processConfigFor(dprocess, clockType, dn.processManager.eventsIn), nodeProfile)
 			glog.Infof("depending on %s", dpllDaemon.DependsOn())
+			updateTBCDPLLThresholdMetrics(Threshold, NodeName, nodeProfile, iface, flags, tbcDPLLThresholds{
+				inSyncThreshold: inSyncConditionTh, inSyncSamples: inSyncConditionTimes,
+				maxInSpecOffset: maxInSpecOffset, localMaxHoldoverOffset: localMaxHoldoverOffSet,
+				localHoldoverTimeout: localHoldoverTimeout,
+			})
 			// Set hardwareconfig handler if hardwareconfig manager is available
 			dpllDaemon.SetHardwareConfigHandler(func(devices []*dpllnl.DoDeviceGetReply) error {
 				return dn.hardwareConfigManager.ProcessDPLLDeviceNotifications(devices)

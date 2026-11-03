@@ -9,6 +9,7 @@ import (
 	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 type ValueType string
@@ -175,6 +176,38 @@ func (d *OffsetData) String() string {
 	}
 	parts = append(parts, fmt.Sprintf("%s %d", OFFSET, d.Offset), string(d.State))
 	return strings.Join(parts, " ")
+}
+
+// PTPSourceObservation is a fresh upstream PTP fact, before offset averaging.
+// Event identifies the local contributor, config and physical interface. Reply
+// must be buffered (capacity one); it lets the scanner apply hardware changes
+// after clock evaluation, without running hardware I/O under the manager lock.
+type PTPSourceObservation struct {
+	Generation uint64
+	PortRole   *parserconstants.PTPPortRole
+	Offset     float64
+	ServoState string
+	SourceLost bool
+	Reply      chan SourceQualification
+}
+
+func (*PTPSourceObservation) eventData() {}
+
+func (d *PTPSourceObservation) String() string {
+	return fmt.Sprintf("PTP source generation=%d role=%v servo=%s offset=%v lost=%t", d.Generation, d.PortRole, d.ServoState, d.Offset, d.SourceLost)
+}
+
+// SourceQualification identifies the active upstream PTP input of one profile's
+// ptp4l instance, not aggregate clock lock or the remote GM's time reference.
+// SourceType identifies the local contributor; the embedded Source identifies
+// the evaluated/reset input. IFace labels the last selected PTP port for control.
+// An empty SourceType means the observation was rejected or unrelated. Generation
+// prevents an old scanner from affecting a replacement profile or reset clock.
+type SourceQualification struct {
+	SourceType EventSource
+	IFace      string
+	Generation uint64
+	utils.QualificationResult
 }
 
 // DPLLData is a DPLL status sample. Offset/PhaseStatus/FrequencyStatus are nil when FlagNo* is set.

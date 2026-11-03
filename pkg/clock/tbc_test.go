@@ -37,6 +37,45 @@ const (
 
 var leapOnce sync.Once
 
+func TestSourceQualificationIndependentOfAggregateInSync(t *testing.T) {
+	t.Parallel()
+	for _, worstProcess := range []event.EventSource{event.PTP4l, event.DPLL, event.TS2PHC} {
+		t.Run(string(worstProcess), func(t *testing.T) {
+			t.Parallel()
+			source, err := utils.NewQualificationState(utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 2, DisqualifiedSamples: 1})
+			require.NoError(t, err)
+			sample := utils.QualificationSample{Source: PTPPortSource{Port: "tr0"}, SourceAvailable: true, Offset: 50}
+			source.Evaluate(sample)
+			require.True(t, source.Evaluate(sample).Qualified)
+			bc := newPMCTestTBCClock(nil)
+			bc.leadingClockData.inSyncConditionThreshold = 100
+			bc.leadingClockData.inSyncConditionTimes = 3
+			bc.leadingClockData.initInSyncFilter()
+			bc.syncState.LeadingIFace = "tr0"
+			for _, processName := range []event.EventSource{event.PTP4l, event.DPLL, event.TS2PHC} {
+				offset := int64(10)
+				if processName == worstProcess {
+					offset = 500
+				}
+				window := utils.NewWindow(1)
+				window.Insert(float64(offset))
+				bc.data = append(bc.data, &event.Data{ProcessName: processName, Window: window, Details: []*event.DataDetails{{IFace: "tr0", Offset: offset, Time: time.Now().UnixMilli()}}})
+			}
+			require.False(t, bc.inSyncCondition(), "worst-case offset still gates aggregate InSync")
+			require.True(t, source.Qualified(), "aggregate failure cannot change upstream qualification")
+			for _, data := range bc.data {
+				data.Details[0].Offset = 10
+			}
+			fillBCDataWindows(bc, 10)
+			require.False(t, bc.inSyncCondition())
+			require.False(t, bc.inSyncCondition())
+			require.True(t, bc.inSyncCondition(), "aggregate retains its own three-sample window")
+			sample.Offset = 201
+			require.False(t, source.Evaluate(sample).Qualified, "source has its own one-sample disqualification window")
+		})
+	}
+}
+
 func ensureLeapMocked(t *testing.T) {
 	t.Helper()
 	leapOnce.Do(func() {

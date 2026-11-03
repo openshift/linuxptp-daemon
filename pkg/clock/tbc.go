@@ -3,12 +3,14 @@ package clock
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -87,6 +89,7 @@ type TBC struct {
 	// request, a Reset, or a replaced clock) is recognized as stale and dropped.
 	// It is only read and written on the serialized state loop.
 	announceToken uint64
+	ptpSource     *ptpSourceQualification
 }
 
 // NewTBC creates a new Telecom Boundary clock
@@ -108,6 +111,23 @@ func NewTBC(cfgName string, getUtcOffset func() int, pmcClient pmc.Client) (*TBC
 	}, nil
 }
 
+// ConfigureSourceQualification installs the upstream policy before processes
+// start. Runtime observations are evaluated only on the clock's event loop.
+func (c *TBC) ConfigureSourceQualification(configuredUpstreamPorts []string, policy utils.QualificationConfig) (uint64, error) {
+	state, err := utils.NewQualificationState(policy)
+	if err == nil && len(configuredUpstreamPorts) == 0 {
+		err = fmt.Errorf("source qualification requires upstream TR ports")
+	}
+	c.ptpSource = nil // Invalid replacements fail closed as well.
+	if err != nil {
+		return 0, err
+	}
+	c.ptpSource = &ptpSourceQualification{
+		state: state, configuredUpstreamPorts: slices.Clone(configuredUpstreamPorts), generation: sourceGeneration.Add(1),
+	}
+	return c.ptpSource.generation, nil
+}
+
 // SetIPC sets the IPC sender function
 func (c *TBC) SetIPC(f func(message ipc.Message)) {
 	c.sendIPC = f
@@ -126,6 +146,17 @@ func (c *TBC) ClockClass() fbprotocol.ClockClass { return c.syncState.ClockClass
 
 // GetState returns the current PTP synchronization state.
 func (c *TBC) GetState() event.PTPState { return c.syncState.State }
+
+// SourceQualification returns clock-owned upstream readiness, independently of
+// aggregate InSync. Config aliases do not identify additional upstream inputs.
+func (c *TBC) SourceQualification(cfg string) (event.SourceQualification, bool) {
+	q := c.ptpSource
+	if q == nil || cfg != c.cfgName {
+		return event.SourceQualification{}, false
+	}
+	return event.SourceQualification{SourceType: event.PTP4l, IFace: q.lastSelectedPort, Generation: q.generation,
+		QualificationResult: utils.QualificationResult{Source: q.source(), Qualified: q.state.Qualified()}}, true
+}
 
 // AddEvent processes an event and updates clock state.
 func (c *TBC) AddEvent(ev event.Event) SyncState {
@@ -150,6 +181,47 @@ func (c *TBC) AddEvent(ev event.Event) SyncState {
 		c.evaluateState()
 		return c.syncState
 	}
+}
+
+// ObserveSource evaluates a raw observation on the serialized clock loop. The
+// last selected port remains identifiable during loss; availability is separate.
+func (c *TBC) ObserveSource(ev event.Event, observation *event.PTPSourceObservation) event.SourceQualification {
+	q := c.ptpSource
+	if q == nil || ev.Source != event.PTP4l || ev.CfgName != c.cfgName || observation.Generation != q.generation {
+		return event.SourceQualification{}
+	}
+	var result utils.QualificationResult
+	switch {
+	case observation.SourceLost:
+		q.available = false
+		result = q.state.Reset()
+	case observation.PortRole != nil:
+		role := *observation.PortRole
+		if !slices.Contains(q.configuredUpstreamPorts, ev.IFace) || role == parserconstants.PortRoleUnknown {
+			return event.SourceQualification{}
+		}
+		if role == parserconstants.PortRoleSlave {
+			if q.lastSelectedPort == ev.IFace && q.available {
+				return event.SourceQualification{}
+			}
+			q.lastSelectedPort, q.available = ev.IFace, true
+			// Old upstream details must not masquerade as a still-locked source.
+			d := c.GetData(event.PTP4l)
+			d.Details, d.Window = nil, utils.NewWindow(event.WindowSize)
+		} else if q.lastSelectedPort == ev.IFace && q.available {
+			q.available = false
+		} else {
+			return event.SourceQualification{}
+		}
+		result = q.state.Reset()
+	default:
+		if observation.ServoState == "" || (ev.IFace != "" && ev.IFace != "master" && ev.IFace != q.lastSelectedPort) {
+			return event.SourceQualification{}
+		}
+		result = q.state.Evaluate(utils.QualificationSample{Source: q.source(), Offset: observation.Offset, ServoState: observation.ServoState,
+			SourceAvailable: q.available && (observation.ServoState == "s2" || observation.ServoState == "s3")})
+	}
+	return event.SourceQualification{SourceType: event.PTP4l, IFace: q.lastSelectedPort, Generation: q.generation, QualificationResult: result}
 }
 
 func (c *TBC) evaluateState() {
@@ -343,6 +415,19 @@ func (c *TBC) updateState() bool {
 
 // Reset resets the clock state.
 func (c *TBC) Reset() {
+	c.ResetSource("")
+}
+
+// ResetSource invalidates the upstream publisher only for PTP/all-source resets.
+func (c *TBC) ResetSource(source event.EventSource) {
+	c.resetAggregate()
+	if q := c.ptpSource; q != nil && (source == "" || source == event.PTP4l) {
+		q.state.Reset()
+		q.lastSelectedPort, q.available, q.generation = "", false, sourceGeneration.Add(1)
+	}
+}
+
+func (c *TBC) resetAggregate() {
 	c.BaseClock.Reset()
 	c.leadingClockData = newLeadingClockParams()
 	c.syncState = SyncState{

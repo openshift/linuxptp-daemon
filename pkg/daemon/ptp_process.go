@@ -105,6 +105,7 @@ type ptpProcess struct {
 	tbcStateDetector      *hardwareconfig.PTPStateDetector // Cached PTP state detector instance
 	offset                float64
 	gnssSerialPort        string
+	sourceQualification   *sourceQualificationRuntime
 }
 
 func (p *ptpProcess) Profile() *ptpv1.PtpProfile {
@@ -138,6 +139,11 @@ func (p *ptpProcess) prepareTBCResources() {
 // tBCTransitionCheck performs ultra-fast T-BC transition detection (called 16x/second)
 // Uses cached values and optimized processing to minimize performance impact
 func (p *ptpProcess) tBCTransitionCheck(output string, pm *plugin.PluginManager) {
+	if p.sourceQualification != nil {
+		// Parsed source observations already drive the opted-in policy. Never
+		// also run the per-log-line legacy moving-average gate.
+		return
+	}
 	// TODO: I thinks belongs on a clock object.
 
 	// Use cached hardwareconfig availability (no expensive lookups)
@@ -345,7 +351,7 @@ func (p *ptpProcess) runScanner(cmdReader io.Reader) {
 	}()
 }
 
-func (p *ptpProcess) Start(_ context.Context) error {
+func (p *ptpProcess) Start(ctx context.Context) error {
 	p.execMutex.Lock()
 	st := p.state
 	switch st {
@@ -364,6 +370,16 @@ func (p *ptpProcess) Start(_ context.Context) error {
 	p.state = process.Starting
 	p.execMutex.Unlock()
 
+	if q := p.sourceQualification; q != nil {
+		result, exists := p.dn.processManager.clockMgr.SourceQualification(p.configName)
+		if !exists {
+			p.setState(st)
+			return fmt.Errorf("source qualification is not configured for %s", p.configName)
+		}
+		q.mu.Lock()
+		q.generation, q.ctx = result.Generation, ctx
+		q.mu.Unlock()
+	}
 	p.run()
 	return nil
 }
@@ -375,6 +391,7 @@ func (p *ptpProcess) run() {
 			// Mark run as complete then wait for all the other go routines.
 			p.wg.Done()
 			p.wg.Wait()
+			p.invalidateSourceQualification()
 
 			if p.State() == process.Stopping {
 				p.setState(process.Stopped)
@@ -1048,6 +1065,10 @@ func getPtp4lConfig(runID int) string {
 
 // NewPtp4lProcess creates a new ptp4l process instance.
 func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
+	policy, err := resolveSourceQualificationPolicy(env.nodeProfile)
+	if err != nil {
+		return nil, err
+	}
 	configFile := getPtp4lConfig(env.runID)
 	p := newPtpProcess(
 		ptp4lProcessName,
@@ -1107,6 +1128,13 @@ func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		}
 		p.tBCAttributes.offsetEventWindow = utils.NewWindow(offsetEventWindowSize)
 		p.prepareTBCResources()
+	}
+	if policy.enabled {
+		if err = p.configureSourceQualification(policy); err != nil {
+			return nil, err
+		}
+	} else if env.clockType == event.TBC {
+		glog.Infof("Source qualification profile=%s config=%s policy=legacy", getProfileName(env.nodeProfile), p.configName)
 	}
 	return p, nil
 }
@@ -1178,6 +1206,14 @@ func haPtp4lConfigs(topology *ProfileTopology) []string {
 
 // TODO: Add comment explaining the conditions and why we have them
 func phc2sysOffsetStartCondition(env ptpProcessEnv) process.Condition {
+	policy, err := resolveSourceQualificationPolicy(env.nodeProfile)
+	if err != nil {
+		glog.Errorf("phc2sys source policy: %v", err)
+		return process.Never{}
+	}
+	if policy.enabled {
+		return sourceQualifiedStartCondition(env)
+	}
 	base := process.OnStateAndOffsetForCount{
 		State:     event.PTP_LOCKED,
 		MaxOffset: 1e9,
@@ -1307,12 +1343,24 @@ func ts2phcConditionsForTBC(p *ptpProcess, env ptpProcessEnv) map[process.Action
 			Count:      offsetSampleCount,
 		},
 	}
+	policy, err := resolveSourceQualificationPolicy(env.nodeProfile)
+	if err != nil {
+		glog.Errorf("ts2phc source policy: %v", err)
+		return map[process.Action]process.Condition{process.ActionStart: process.Never{}}
+	}
+	if policy.enabled {
+		startConditions = []process.Condition{sourceQualifiedStartCondition(env)}
+	}
 
 	// Add phc2sys dependency only if phc2sys is configured
 	// p.haProfile is already set at this point from ApplyHaProfiles
 	if shouldWaitForPhc2sys(env.nodeProfile, p.haProfile) {
 		cfgName := fmt.Sprintf("ptp4l.%d.config", env.runID)
-		if env.topology.haProfile != "" {
+		if policy.enabled && len(listHAMemberProfiles(env.nodeProfile)) > 0 {
+			// Match NewPhc2sysProcess's message tag, not the presence of an
+			// unrelated HA group elsewhere in this node's topology.
+			cfgName = fmt.Sprintf("phc2sys.%d.config", env.runID)
+		} else if !policy.enabled && env.topology != nil && env.topology.haProfile != "" {
 			cfgName = fmt.Sprintf("phc2sys.%d.config", env.runID)
 		}
 
@@ -1363,9 +1411,17 @@ func cfgNameFromMessageTag(messageTag string) string {
 
 func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
 	if nodeProfile.PtpClockThreshold != nil {
+		// Deep-copy optional source settings so policy resolution cannot mutate
+		// the profile or erase the distinction between omission and explicit zero.
+		th := nodeProfile.PtpClockThreshold.DeepCopy()
 		return &ptpv1.PtpClockThreshold{
-			HoldOverTimeout:    nodeProfile.PtpClockThreshold.HoldOverTimeout,
-			MaxOffsetThreshold: nodeProfile.PtpClockThreshold.MaxOffsetThreshold,
+			HoldOverTimeout:                th.HoldOverTimeout,
+			MaxOffsetThreshold:             th.MaxOffsetThreshold,
+			PtpSourceQualifiedThreshold:    th.PtpSourceQualifiedThreshold,
+			PtpSourceDisqualifiedThreshold: th.PtpSourceDisqualifiedThreshold,
+			PtpSourceQualifiedSamples:      th.PtpSourceQualifiedSamples,
+			PtpSourceDisqualifiedSamples:   th.PtpSourceDisqualifiedSamples,
+			PtpSourceUseS3:                 th.PtpSourceUseS3,
 		}
 	} else if isNtpFailoverEnabled(nodeProfile) {
 		return &ptpv1.PtpClockThreshold{

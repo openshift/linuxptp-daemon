@@ -16,11 +16,12 @@ import (
 // ClockStates and the OS states are kept separate: a source's readiness must not
 // depend on a composite state that includes a process it is about to start.
 type EventStats struct {
-	Windows        map[string]map[event.EventSource]utils.ROWindow
-	States         map[string]map[event.EventSource]event.PTPState
-	ClockStates    map[string]event.PTPState
-	OSClockState   event.PTPState
-	OSClockE3State event.PTPState
+	Windows         map[string]map[event.EventSource]utils.ROWindow
+	States          map[string]map[event.EventSource]event.PTPState
+	ClockStates     map[string]event.PTPState
+	OSClockState    event.PTPState
+	OSClockE3State  event.PTPState
+	SourceQualified map[string]bool // explicit upstream readiness, not composite clock lock
 }
 
 // StatsRequest identifies a clock source whose evaluated state and optional
@@ -202,6 +203,31 @@ func (c OnStateAndOffsetForCount) String() string {
 // GetStatsRequests ...
 func (c OnStateAndOffsetForCount) GetStatsRequests() []StatsRequest {
 	return []StatsRequest{{ClockID: c.ClockID, Source: c.Source}}
+}
+
+// OnSourceQualified requires the retained qualification of the identified upstream.
+// It never interprets a raw log/process event as evaluated readiness.
+type OnSourceQualified struct {
+	ConfigName string
+}
+
+// Met checks only a processed snapshot; transient wakeups alone cannot release startup.
+func (c OnSourceQualified) Met(_ Process, ev event.Event, stats EventStats) bool {
+	return !ev.Reset && ev.CfgName == c.ConfigName && stats.SourceQualified[c.ConfigName]
+}
+
+// MetByCurrentState permits reconciliation without replaying qualification samples.
+func (c OnSourceQualified) MetByCurrentState(_ Process, _ SourceStateQuery, stats EventStats) bool {
+	return c.ConfigName != "" && stats.SourceQualified[c.ConfigName]
+}
+
+func (c OnSourceQualified) String() string {
+	return fmt.Sprintf("OnSourceQualified cfg=%s", c.ConfigName)
+}
+
+// GetStatsRequests selects only the corresponding upstream configuration.
+func (c OnSourceQualified) GetStatsRequests() []StatsRequest {
+	return []StatsRequest{{ClockID: c.ConfigName, Source: event.PTP4l}}
 }
 
 // OnProcessState is a condition that checks for a specific PTP synchronization state.
