@@ -374,7 +374,7 @@ func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 	eventManager := clockmgr.Init("testnode", eChannel, nil, nil, clockClassGauge, nil)
 	startEventProcessor(t, eventManager)
 
-	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock)
+	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock, "ptp4.1.config")
 	require.NoError(t, err)
 	addErr := eventManager.AddClock(tbcClk)
 	assert.NoError(t, addErr)
@@ -415,7 +415,7 @@ func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 
 	// First PTP4l event carries downstream port configuration
 	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.StateData{
-		State: event.PTP_LOCKED, ControlledPortsConfig: testBCCfgPTP4l, ClockID: testClockID,
+		State: event.PTP_LOCKED, ClockID: testClockID,
 	})
 	time.Sleep(100 * time.Millisecond)
 
@@ -526,7 +526,7 @@ func TestTBCClockClassMetric(t *testing.T) {
 	eventManager := clockmgr.Init("testnode", eChannel, offsetGauge, clockStateGauge, clockClassGauge, nil)
 	startEventProcessor(t, eventManager)
 
-	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock)
+	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock, "ptp4.1.config")
 	require.NoError(t, err)
 	addErr := eventManager.AddClock(tbcClk)
 	assert.NoError(t, addErr)
@@ -563,7 +563,7 @@ func TestTBCClockClassMetric(t *testing.T) {
 
 	// Fill PTP4l window
 	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.StateData{
-		State: event.PTP_LOCKED, ControlledPortsConfig: testBCCfgPTP4l, ClockID: testClockID,
+		State: event.PTP_LOCKED, ClockID: testClockID,
 	})
 	time.Sleep(100 * time.Millisecond)
 
@@ -723,7 +723,7 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 	require.NoError(t, addErr)
 
 	// Register T-BC clock
-	tbcClk, err := clock.NewTBC(tbcPTP4l, leap.GetUtcOffset, pmcMock)
+	tbcClk, err := clock.NewTBC(tbcPTP4l, leap.GetUtcOffset, pmcMock, "ptp4.1.config")
 	tbcClk.SetConfiguredLeadingInterface(tbcIface)
 
 	require.NoError(t, err)
@@ -899,7 +899,7 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 	}
 
 	eChannel <- tbcEvent(tbcPTP4l, event.PTP4l, &event.StateData{
-		State: event.PTP_LOCKED, ControlledPortsConfig: tbcPTP4l, ClockID: testClockID,
+		State: event.PTP_LOCKED, ClockID: testClockID,
 	})
 	time.Sleep(100 * time.Millisecond)
 
@@ -1037,7 +1037,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	defer cleanup()
 
 	// Register two TBCClocks
-	tbcClk1, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock)
+	tbcClk1, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock, testBCCfgPTP4l)
 	require.NoError(t, err)
 	err = eventManager.AddClock(tbcClk1)
 	require.NoError(t, err)
@@ -1050,7 +1050,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	}
 
 	secondTBCCfgName := "ptp4l.1.config"
-	tbcClk2, err := clock.NewTBC(secondTBCCfgName, leap.GetUtcOffset, pmcMock)
+	tbcClk2, err := clock.NewTBC(secondTBCCfgName, leap.GetUtcOffset, pmcMock, secondTBCCfgName)
 	require.NoError(t, err)
 	err = eventManager.AddClock(tbcClk2)
 	require.NoError(t, err)
@@ -1079,9 +1079,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 		}
 
-		eChannel <- bcEvent(cfgPTP4l, event.PTP4l, &event.StateData{
-			State: event.PTP_LOCKED, ControlledPortsConfig: cfgPTP4l, ClockID: testClockID,
-		})
+		eChannel <- bcEvent(cfgPTP4l, event.PTP4l, &event.StateData{})
 		time.Sleep(100 * time.Millisecond)
 
 		for i := 0; i < 10; i++ {
@@ -1254,7 +1252,7 @@ func TestSyncEIPCIntegration(t *testing.T) {
 	socketCh, cleanup := startIPCSocketListener(t, cache)
 	defer cleanup()
 
-	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock)
+	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock, "ptp4.1.config")
 	require.NoError(t, err)
 	err = eventManager.AddClock(tbcClk)
 	require.NoError(t, err)
@@ -1357,7 +1355,7 @@ func TestApplyingSkipsTBCEvents(t *testing.T) {
 	em := clockmgr.Init("node", eChannel, nil, nil, nil, nil)
 
 	pmcMock := &pmc.MockClient{}
-	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock)
+	tbcClk, err := clock.NewTBC(testBCCfgPTP4l, leap.GetUtcOffset, pmcMock, "ptp4.1.config")
 	require.NoError(t, err)
 	err = em.AddClock(tbcClk)
 	require.NoError(t, err)

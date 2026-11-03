@@ -50,7 +50,7 @@ func TestSourceQualificationSnapshots(t *testing.T) {
 
 func qualificationPublisher(t *testing.T, m *clockmgr.ClockManager) func(bool) {
 	t.Helper()
-	clk, err := clock.NewTBC("ptp4l.0.config", m.GetUtcOffset, &pmc.MockClient{})
+	clk, err := clock.NewTBC("ptp4l.0.config", m.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 	require.NoError(t, err)
 	require.NoError(t, m.AddClock(clk))
 	generation, err := m.ConfigureSourceQualification("ptp4l.0.config", []string{"tr0"}, utils.QualificationConfig{

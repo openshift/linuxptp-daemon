@@ -42,7 +42,6 @@ const (
 	InSyncConditionThreshold  ValueType = "in-sync-th"
 	InSyncConditionTimes      ValueType = "in-sync-times"
 	ToFreeRunThreshold        ValueType = "free-run_th"
-	ControlledPortsConfig     ValueType = "controlled-ports-config"
 	ClockIDKey                ValueType = "clock-id"
 	MaxInSpecOffset           ValueType = "max-in-spec"
 )
@@ -285,12 +284,11 @@ func (d *SyncEData) String() string {
 	return strings.Join(parts, " ")
 }
 
-// StateData is a lock/holdover transition. ClockID and ControlledPortsConfig are set on T-BC transitions.
+// StateData is a lock/holdover transition. ClockID set on T-BC transitions.
 type StateData struct {
-	State                 PTPState
-	SourceLost            bool
-	ControlledPortsConfig string
-	ClockID               string
+	State      PTPState
+	SourceLost bool
+	ClockID    string
 }
 
 func (*StateData) eventData() {}
@@ -299,9 +297,6 @@ func (d *StateData) String() string {
 	parts := make([]string, 0, 3)
 	if d.ClockID != "" {
 		parts = append(parts, fmt.Sprintf("%s %s", ClockIDKey, d.ClockID))
-	}
-	if d.ControlledPortsConfig != "" {
-		parts = append(parts, fmt.Sprintf("%s %s", ControlledPortsConfig, d.ControlledPortsConfig))
 	}
 	parts = append(parts, string(d.State))
 	return strings.Join(parts, " ")
