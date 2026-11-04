@@ -377,15 +377,28 @@ func Test_applyProfile_TBC(t *testing.T) {
 	// Signal that no hardware configs are expected for this test
 	_ = dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
 
-	for _, test := range tests {
-		mkPath(t)
+	profiles := make([]ptpv1.PtpProfile, len(tests))
+	for i, test := range tests {
 		profile, err := loadProfile(test.dataFile)
-		assert.NoError(t, err)
-		// Will assert inside in case of error:
-		topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
 		require.NoError(t, err)
-		err = dn.applyNodePtpProfile(0, profile, &topology)
+		profiles[i] = *profile
+	}
+	topology, err := NewProfileTopology(profiles)
+	require.NoError(t, err)
+	assert.Equal(t, *profiles[0].Name, topology.controlledBy(&profiles[1]))
+	assert.Equal(t, *profiles[1].Name, topology.controlling(&profiles[0]))
+
+	for runID, test := range tests {
+		mkPath(t)
+		err = dn.applyNodePtpProfile(runID, &profiles[runID], &topology)
 		assert.NoError(t, err)
+		if runID == 0 {
+			assert.Nil(t, dn.processManager.clockMgr.GetClock(clockCfgName(runID)), "controlled profile must not register a separate clock")
+		} else {
+			controllerClock := dn.processManager.clockMgr.GetClock(clockCfgName(runID))
+			require.NotNil(t, controllerClock)
+			assert.Equal(t, event.TBC, controllerClock.ClockType())
+		}
 
 		// Ensure for T-BC that phc2sys has a non-Immediate start condition (delayed start)
 		actualProcesses := []string{}
@@ -886,6 +899,48 @@ func TestNewProfileTopology(t *testing.T) {
 
 		_, err := NewProfileTopology(profiles)
 		require.Error(t, err)
+	})
+	t.Run("missing controller fails", func(t *testing.T) {
+		profiles := []ptpv1.PtpProfile{
+			{Name: stringPointer("controlled"), PtpSettings: map[string]string{"controllingProfile": "missing"}},
+		}
+		_, err := NewProfileTopology(profiles)
+		require.ErrorContains(t, err, "referenced controlling profiles")
+	})
+	t.Run("shared controller fails", func(t *testing.T) {
+		profiles := []ptpv1.PtpProfile{
+			{Name: stringPointer("controller")},
+			{Name: stringPointer("first"), PtpSettings: map[string]string{"controllingProfile": "controller"}},
+			{Name: stringPointer("second"), PtpSettings: map[string]string{"controllingProfile": "controller"}},
+		}
+		_, err := NewProfileTopology(profiles)
+		require.ErrorContains(t, err, "multiple profiles being controlled by the same controller")
+	})
+	for _, tc := range []struct {
+		name     string
+		profiles []ptpv1.PtpProfile
+	}{
+		{"self reference", []ptpv1.PtpProfile{
+			{Name: stringPointer("a"), PtpSettings: map[string]string{"controllingProfile": "a"}},
+		}},
+		{"two profile cycle", []ptpv1.PtpProfile{
+			{Name: stringPointer("a"), PtpSettings: map[string]string{"controllingProfile": "b"}},
+			{Name: stringPointer("b"), PtpSettings: map[string]string{"controllingProfile": "a"}},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewProfileTopology(tc.profiles)
+			require.ErrorContains(t, err, "cyclic controllingProfile")
+		})
+	}
+	t.Run("controller chain fails", func(t *testing.T) {
+		profiles := []ptpv1.PtpProfile{
+			{Name: stringPointer("a")},
+			{Name: stringPointer("b"), PtpSettings: map[string]string{"controllingProfile": "a"}},
+			{Name: stringPointer("c"), PtpSettings: map[string]string{"controllingProfile": "b"}},
+		}
+		_, err := NewProfileTopology(profiles)
+		require.ErrorContains(t, err, "controller chain is unsupported")
 	})
 }
 

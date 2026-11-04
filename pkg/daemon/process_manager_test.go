@@ -169,7 +169,7 @@ func NewCondiitonsTester(t *testing.T, clockType event.ClockType, cfgNames ...st
 			clk, err = clock.NewGM(n, cm.GetUtcOffset, &pmc.MockClient{})
 			assert.NoError(t, err)
 		case event.TBC:
-			clk, err = clock.NewTBC(n, cm.GetUtcOffset, &pmc.MockClient{})
+			clk, err = clock.NewTBC(n, cm.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 			assert.NoError(t, err)
 		case event.BC:
 			clk, err = clock.NewBC(n, false, event.PtpClockThreshold{})

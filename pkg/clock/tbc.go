@@ -40,7 +40,6 @@ type LeadingClockParams struct {
 	downstreamParentDataSet  *protocol.ParentDataSet
 
 	leadingInterface         string
-	controlledPortsConfig    string
 	inSyncConditionThreshold int
 	inSyncConditionTimes     int
 	toFreeRunThreshold       int
@@ -88,12 +87,14 @@ type TBC struct {
 	// request, so a fetch result carrying an out-of-date token (from a superseded
 	// request, a Reset, or a replaced clock) is recognized as stale and dropped.
 	// It is only read and written on the serialized state loop.
-	announceToken uint64
-	ptpSource     *ptpSourceQualification
+	announceToken         uint64
+	ptpSource             *ptpSourceQualification
+	controlledPortsConfig string
+	isTTSC                bool
 }
 
 // NewTBC creates a new Telecom Boundary clock
-func NewTBC(cfgName string, getUtcOffset func() int, pmcClient pmc.Client) (*TBC, error) {
+func NewTBC(cfgName string, getUtcOffset func() int, pmcClient pmc.Client, controlledProfile string) (*TBC, error) {
 	if pmcClient == nil {
 		return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", event.TBC, cfgName)
 	}
@@ -106,8 +107,10 @@ func NewTBC(cfgName string, getUtcOffset func() int, pmcClient pmc.Client) (*TBC
 			ClockClass:    protocol.ClockClassUninitialized,
 			ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 		},
-		leadingClockData: newLeadingClockParams(),
-		announceToken:    nextAnnounceToken(),
+		leadingClockData:      newLeadingClockParams(),
+		announceToken:         nextAnnounceToken(),
+		controlledPortsConfig: controlledProfile,
+		isTTSC:                controlledProfile == "",
 	}, nil
 }
 
@@ -295,9 +298,6 @@ func (c *TBC) updateState() bool {
 		glog.Info(c.status())
 		return false
 	}
-
-	isTTSC := c.leadingClockData.clockID != "" && c.leadingClockData.controlledPortsConfig == ""
-
 	glog.V(14).Info("current BC state: ", c.syncState.State)
 	switch c.syncState.State {
 	case event.PTP_NOTSET, event.PTP_FREERUN:
@@ -336,7 +336,7 @@ func (c *TBC) updateState() bool {
 			}
 			if c.leadingClockData.upstreamParentDataSet.GrandmasterClockClass == uint8(protocol.ClockClassFreerun) {
 				updateDownstreamData = false // Don't propagate uptream free run and instead let future call move to holdover/freerun
-			} else if !isTTSC {
+			} else if !c.isTTSC {
 				upstreamClass := fbprotocol.ClockClass(c.leadingClockData.upstreamParentDataSet.GrandmasterClockClass)
 				upstreamAccuracy := fbprotocol.ClockAccuracy(c.leadingClockData.upstreamParentDataSet.GrandmasterClockAccuracy)
 				if c.syncState.ClockClass != upstreamClass || c.syncState.ClockAccuracy != upstreamAccuracy {
@@ -394,15 +394,10 @@ func (c *TBC) updateState() bool {
 		c.syncState.ClockOffset = c.getLargestOffset()
 	}
 
-	if isTTSC && c.syncState.ClockClass != fbprotocol.ClockClassSlaveOnly {
+	if c.isTTSC && c.syncState.ClockClass != fbprotocol.ClockClassSlaveOnly {
 		c.syncState.ClockClass = fbprotocol.ClockClassSlaveOnly
 	}
-	var needsDownstreamUpdate bool
-	if updateDownstreamData && c.syncState.ClockClass != protocol.ClockClassUninitialized {
-		if !isTTSC {
-			needsDownstreamUpdate = true
-		}
-	}
+
 	logTime := time.Now().Unix()
 	if c.syncState.LastLoggedTime != logTime {
 		glog.Info(c.status())
@@ -410,7 +405,7 @@ func (c *TBC) updateState() bool {
 		glog.Infof("dpll State %s, tsphc state %s, BC state %s, BC offset %d",
 			dpllState, ts2phcState, c.syncState.State, c.syncState.ClockOffset)
 	}
-	return needsDownstreamUpdate
+	return (!c.isTTSC && updateDownstreamData && c.syncState.ClockClass != protocol.ClockClassUninitialized)
 }
 
 // Reset resets the clock state.
@@ -466,7 +461,7 @@ func (c *TBC) updateDownstreamData(cfgName string) {
 // for free-run (acquiring), holdover within / out of the specification
 func (c *TBC) announceLocalData(cfgName string) {
 	clockID := c.leadingClockData.clockID
-	controlledPortsConfig := c.leadingClockData.controlledPortsConfig
+	controlledPortsConfig := c.controlledPortsConfig
 	downstreamTimeProperties := c.leadingClockData.downstreamTimeProperties
 	clockClass := c.syncState.ClockClass
 
@@ -583,7 +578,7 @@ func (c *TBC) handleDownstreamAnnounceIWF(msg *event.ParentTimeCurrentDS) {
 		GrandmasterIdentity: upstreamData.ParentDataSet.GrandmasterIdentity,
 		StepsRemoved:        upstreamData.CurrentDS.StepsRemoved,
 	}
-	controlledPortsConfig := c.leadingClockData.controlledPortsConfig
+	controlledPortsConfig := c.controlledPortsConfig
 	glog.Infof("%++v", es)
 
 	// TODO: This is synchronous for now for simplicity, to be handled in a follow-up PR
@@ -862,9 +857,6 @@ func (c *TBC) updateLeadingClockData(ev event.Event) {
 	case *event.StateData:
 		if ev.Source != event.PTP4lProcessName {
 			return
-		}
-		if data.ControlledPortsConfig != "" {
-			c.leadingClockData.controlledPortsConfig = data.ControlledPortsConfig
 		}
 		if data.ClockID != "" {
 			c.leadingClockData.clockID = data.ClockID

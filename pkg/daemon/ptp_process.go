@@ -843,10 +843,9 @@ func (p *ptpProcess) sendPtp4lStateEvent() {
 		Time:      time.Now().UnixMilli(),
 		Reset:     false,
 		Data: &event.StateData{
-			State:                 p.tBCAttributes.lastReportedState,
-			SourceLost:            p.tBCAttributes.lastReportedState != event.PTP_LOCKED,
-			ControlledPortsConfig: p.tBCAttributes.ttPortsConfigFile,
-			ClockID:               clockID,
+			State:      p.tBCAttributes.lastReportedState,
+			SourceLost: p.tBCAttributes.lastReportedState != event.PTP_LOCKED,
+			ClockID:    clockID,
 		},
 	}:
 	default:
@@ -854,7 +853,6 @@ func (p *ptpProcess) sendPtp4lStateEvent() {
 }
 
 type tBCProcessAttributes struct {
-	ttPortsConfigFile string
 	trPortsConfigFile string
 	trIfaceNames      []string
 	perPortState      map[string]event.PTPState
@@ -1093,12 +1091,7 @@ func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		}
 	}
 	p.cmd = buildCmd(buildPtpCmdLine(ptp4lProcessName, p.configPath, opts, env.nodeProfile))
-	controlledConfigFile := ""
-	if controlledID, ok := env.nodeProfile.PtpSettings["controlledId"]; ok {
-		controlledConfigFile = fmt.Sprintf("ptp4l.%s.config", controlledID)
-	}
 	p.tBCAttributes = tBCProcessAttributes{
-		ttPortsConfigFile: controlledConfigFile,
 		trPortsConfigFile: configFile,
 		lastReportedState: event.PTP_NOTSET,
 		lastAppliedState:  event.PTP_NOTSET,

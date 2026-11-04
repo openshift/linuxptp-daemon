@@ -226,7 +226,7 @@ func TestSourceQualificationPropagatesPluginFailure(t *testing.T) {
 			}},
 		}},
 	}
-	clk, err := clock.NewTBC(p.configName, p.dn.processManager.clockMgr.GetUtcOffset, &pmc.MockClient{})
+	clk, err := clock.NewTBC(p.configName, p.dn.processManager.clockMgr.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 	require.NoError(t, err)
 	require.NoError(t, p.dn.processManager.clockMgr.AddClock(clk))
 	policy, err := resolveSourceQualificationPolicy(profile)
@@ -257,7 +257,7 @@ func TestSourceQualificationParsedPipeline(t *testing.T) {
 		PtpClockThreshold: &ptpv1.PtpClockThreshold{MaxOffsetThreshold: 100, PtpSourceQualifiedThreshold: utils.ToPtr(int64(20)), PtpSourceDisqualifiedThreshold: utils.ToPtr(int64(40)), PtpSourceQualifiedSamples: utils.ToPtr(int64(2))}}
 	events := make(chan event.Event, 20)
 	cm := clockmgr.Init("node", events, nil, nil, nil, nil)
-	clk, err := clock.NewTBC("ptp4l.0.config", cm.GetUtcOffset, &pmc.MockClient{})
+	clk, err := clock.NewTBC("ptp4l.0.config", cm.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 	require.NoError(t, err)
 	require.NoError(t, cm.AddClock(clk))
 	var hooks []string
@@ -314,7 +314,7 @@ func TestSourceQualificationParsedPipeline(t *testing.T) {
 func attachQualificationClock(t *testing.T, p *ptpProcess, policy utils.QualificationConfig) *clockmgr.ClockManager {
 	t.Helper()
 	cm := clockmgr.Init("test", p.eventCh, nil, nil, nil, nil)
-	clk, err := clock.NewTBC(p.configName, cm.GetUtcOffset, &pmc.MockClient{})
+	clk, err := clock.NewTBC(p.configName, cm.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 	require.NoError(t, err)
 	require.NoError(t, cm.AddClock(clk))
 	generation, err := cm.ConfigureSourceQualification(p.configName, p.tBCAttributes.trIfaceNames, policy)
@@ -336,7 +336,7 @@ func startQualificationClock(t *testing.T, cm *clockmgr.ClockManager) context.Co
 func TestSourceQualificationHardwareDoesNotBlockEventPipeline(t *testing.T) {
 	in, out := make(chan event.Event, 20), make(chan event.Event, 20)
 	cm := clockmgr.Init("test", out, nil, nil, nil, nil)
-	clk, err := clock.NewTBC("ptp4l.0.config", cm.GetUtcOffset, &pmc.MockClient{})
+	clk, err := clock.NewTBC("ptp4l.0.config", cm.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 	require.NoError(t, err)
 	require.NoError(t, cm.AddClock(clk))
 	generation, err := cm.ConfigureSourceQualification("ptp4l.0.config", []string{"tr0"}, utils.QualificationConfig{
