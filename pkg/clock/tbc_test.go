@@ -154,6 +154,63 @@ func TestNewTBCProfileMode(t *testing.T) {
 	}
 }
 
+func TestUpdateTSCState(t *testing.T) {
+	newClock := func(t *testing.T) *TBC {
+		t.Helper()
+		mock := &pmc.MockClient{}
+		t.Cleanup(func() {
+			assert.Empty(t, mock.SnapshotGetCalls(), "T-TSC must not read downstream PMC data")
+			assert.Empty(t, mock.SnapshotSetCalls(), "T-TSC must not update downstream PMC data")
+		})
+		bc, err := NewTBC(testPTP4lCfg, stubUtcOffset, mock, "")
+		require.NoError(t, err)
+		bc.SetIPC(func(ipc.Message) {})
+		bc.SetEventLoopbackFunc(func(event.Event) {})
+		bc.SetOsClock(&OsClock{State: event.PTP_NOTSET})
+		bc.leadingClockData = tbcLeadingClockParams()
+		bc.syncState.State = event.PTP_FREERUN
+		bc.syncState.ClockClass = protocol.ClockClassFreerun
+		return bc
+	}
+	lock := func(bc *TBC) SyncState {
+		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+		bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_LOCKED, 10, false))
+		fillBCDataWindows(bc, 10)
+		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+		return bc.AddEvent(event.Event{Source: event.PMC, Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}}})
+	}
+
+	t.Run("FREERUN", func(t *testing.T) {
+		bc := newClock(t)
+		state := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+		assert.Equal(t, event.PTP_FREERUN, state.State)
+		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
+	})
+	t.Run("FREERUN to LOCKED", func(t *testing.T) {
+		state := lock(newClock(t))
+		assert.Equal(t, event.PTP_LOCKED, state.State)
+		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
+	})
+	t.Run("LOCKED to HOLDOVER", func(t *testing.T) {
+		bc := newClock(t)
+		require.Equal(t, event.PTP_LOCKED, lock(bc).State)
+		state := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+		assert.Equal(t, event.PTP_HOLDOVER, state.State)
+		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
+	})
+	t.Run("HOLDOVER in-spec to out-of-spec", func(t *testing.T) {
+		bc := newClock(t)
+		require.Equal(t, event.PTP_LOCKED, lock(bc).State)
+		holdover := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+		require.Equal(t, event.PTP_HOLDOVER, holdover.State)
+		require.Equal(t, fbprotocol.ClockClassSlaveOnly, holdover.ClockClass)
+		fillBCDataWindows(bc, 600)
+		state := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_HOLDOVER, 600, false))
+		assert.Equal(t, event.PTP_HOLDOVER, state.State)
+		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
+	})
+}
+
 // --- announceLocalData ---
 
 func TestAnnounceLocalData_Freerun_SetsGMSettingsAndEGP(t *testing.T) {
