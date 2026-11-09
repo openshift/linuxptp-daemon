@@ -121,5 +121,5 @@ func (o *OsClock) updateState(offset float64, rawState event.PTPState) event.PTP
 // FREERUN or NOTSET. A NOTSET input yields NOTSET, which is internal and must
 // not be emitted. OsClock starts in the externally valid FREERUN state.
 func DeriveOSClockState(e1, phc2sys event.PTPState) event.PTPState {
-	return WorstOfState(e1, phc2sys)
+	return event.WorstOfState(e1, phc2sys)
 }

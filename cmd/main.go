@@ -161,7 +161,7 @@ func main() {
 	}
 	go lm.Run()
 
-	defer close(lm.Close)
+	defer lm.Stop()
 
 	tracker := &daemon.ReadyTracker{}
 

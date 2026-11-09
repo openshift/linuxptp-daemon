@@ -139,7 +139,7 @@ func defaultLeapSourceOptions() LeapSourceOptions {
 
 // updateLeapManagerSources configures the LeapManager with the given leap source options.
 func updateLeapManagerSources(sources LeapSourceOptions) {
-	if leap.LeapMgr != nil {
-		leap.LeapMgr.SetAllowedLeapSources(sources.AllowedLeapSources())
+	if manager := leap.GetManager(); manager != nil {
+		manager.SetAllowedLeapSources(sources.AllowedLeapSources())
 	}
 }

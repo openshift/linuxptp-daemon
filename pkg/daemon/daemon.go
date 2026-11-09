@@ -501,7 +501,8 @@ type ProfileTopology struct {
 	// haProfile is the name of the HA profile
 	haProfile string
 	//haMembers is a list of clocks that make up the HA profile
-	haMembers []string
+	haMembers           []string
+	controllingProfiles map[string]string
 }
 
 // isHAProfile reports whether profileName is an HA profile that contains member clocks.
@@ -517,6 +518,23 @@ func (t *ProfileTopology) isHAMember(profileName string) bool {
 // haMemberNames returns the member profile names across all HA profiles.
 func (t *ProfileTopology) haMemberNames() []string {
 	return t.haMembers
+}
+
+func (t *ProfileTopology) controlledBy(nodeProfile *ptpv1.PtpProfile) string {
+	if controlled, ok := t.controllingProfiles[getProfileName(nodeProfile)]; ok {
+		return controlled
+	}
+	return ""
+}
+
+func (t *ProfileTopology) controlling(nodeProfile *ptpv1.PtpProfile) string {
+	expectedControlled := getProfileName(nodeProfile)
+	for controller, controlled := range t.controllingProfiles {
+		if controlled == expectedControlled {
+			return controller
+		}
+	}
+	return ""
 }
 
 // listHAMemberProfiles lists all profiles that are a member of the given profile.
@@ -535,12 +553,20 @@ func listHAMemberProfiles(nodeProfile *ptpv1.PtpProfile) []string {
 // NewProfileTopology returns the ProfileTopology for a set of PTP profiles
 func NewProfileTopology(nodeProfiles []ptpv1.PtpProfile) (ProfileTopology, error) {
 	result := ProfileTopology{
-		profileRunID: map[string]int{},
+		profileRunID:        map[string]int{},
+		controllingProfiles: map[string]string{},
 	}
 
 	for runID, profile := range nodeProfiles {
 		profileName := getProfileName(&profile)
 		result.profileRunID[profileName] = runID
+
+		if controller := profile.PtpSettings["controllingProfile"]; controller != "" {
+			if controlled, ok := result.controllingProfiles[controller]; ok {
+				return ProfileTopology{}, fmt.Errorf("multiple profiles being controlled by the same controller: %s and %s are both controlled by %s", controlled, profileName, controller)
+			}
+			result.controllingProfiles[controller] = profileName
+		}
 
 		if processShouldRun(&profile, phc2sysProcessName) {
 			result.phc2sysProfiles = append(result.phc2sysProfiles, profileName)
@@ -567,6 +593,30 @@ func NewProfileTopology(nodeProfiles []ptpv1.PtpProfile) (ProfileTopology, error
 		}
 		if len(missing) > 0 {
 			return ProfileTopology{}, fmt.Errorf("HA Profile %s is missing the following referenced profiles: %s", result.haProfile, strings.Join(missing, ", "))
+		}
+	}
+
+	var missingController []string
+	for controller := range result.controllingProfiles {
+		if !slices.Contains(seen, controller) {
+			missingController = append(missingController, controller)
+		}
+	}
+	if len(missingController) > 0 {
+		return ProfileTopology{}, fmt.Errorf("referenced controlling profiles %s are missing", strings.Join(missingController, ""))
+	}
+	for controller := range result.controllingProfiles {
+		visited := map[string]bool{}
+		for name := controller; name != ""; name = result.controllingProfiles[name] {
+			if visited[name] {
+				return ProfileTopology{}, fmt.Errorf("cyclic controllingProfile reference at %s", name)
+			}
+			visited[name] = true
+		}
+	}
+	for controller, controlled := range result.controllingProfiles {
+		if _, controlsAnother := result.controllingProfiles[controlled]; controlsAnother {
+			return ProfileTopology{}, fmt.Errorf("controller chain is unsupported: %s controls %s, which controls another profile", controller, controlled)
 		}
 	}
 
@@ -834,8 +884,17 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, 
 			return err
 		}
 	case event.TBC:
+		if topology.controlling(nodeProfile) != "" {
+			break
+		}
+
 		var tbc *clock.TBC
-		if tbc, err = clock.NewTBC(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
+		controlledPortsConfig := ""
+		if controlledProfileName := topology.controlledBy(nodeProfile); controlledProfileName != "" {
+			controlledPortsConfig = getPtp4lConfig(topology.profileRunID[controlledProfileName])
+		}
+
+		if tbc, err = clock.NewTBC(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient(), controlledPortsConfig); err != nil {
 			return err
 		}
 		c = tbc
@@ -854,8 +913,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, 
 		return fmt.Errorf("unsupported clock type %q for config %s", clockType, clockCfgName)
 	}
 
-	if err = dn.processManager.clockMgr.AddClock(c); err != nil {
-		return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
+	if c != nil { // T-BC's follower profile skips clock creation.
+		if err = dn.processManager.clockMgr.AddClock(c); err != nil {
+			return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
+		}
 	}
 
 	if err = dn.createProcesses(runID, nodeProfile, topology, clockType, leadingNic, upstreamPorts); err != nil {
@@ -873,6 +934,11 @@ func clockCfgName(runID int) string {
 // ...) for a profile given its resolved clock type. It is shared by standalone
 // profiles and the member/HA profiles assembled by assembleHAClock.
 func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topology *ProfileTopology, clockType event.ClockType, leadingNic string, upstreamPorts []string) error {
+	// Validate before constructing any process or applying dependent hardware
+	// setup; a partially supplied source policy must fail closed.
+	if _, err := resolveSourceQualificationPolicy(nodeProfile); err != nil {
+		return err
+	}
 	env := ptpProcessEnv{
 		runID:         runID,
 		nodeProfile:   nodeProfile,
@@ -898,6 +964,9 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 		case ptp4lProcessName:
 			var ptpProc *ptpProcess
 			ptpProc, err = NewPtp4lProcess(env)
+			if err != nil {
+				return fmt.Errorf("failed to create ptp4l: %w", err)
+			}
 			// Skip PMC creation for controlled profiles
 			if controllingProfile, isControlled := (*nodeProfile).PtpSettings["controllingProfile"]; isControlled && controllingProfile != "" {
 				// See DownstreamIWF
@@ -911,11 +980,15 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 			}
 			dprocess = ptpProc
 		case phc2sysProcessName:
-			dn.processManager.clockMgr.ConfigureOSClockFilter(osClockFilterConfig(nodeProfile))
+			osFilter := osClockFilterConfig(nodeProfile)
+			dn.processManager.clockMgr.ConfigureOSClockFilter(osFilter)
+			if clockType == event.TBC && nodeProfile.PtpSettings["controllingProfile"] == "" {
+				updateOSClockThresholdMetrics(Threshold, NodeName, *nodeProfile.Name, osFilter)
+			}
 			dprocess, err = NewPhc2sysProcess(env)
 		case ts2phcProcessName:
-			if leap.LeapMgr != nil {
-				leap.LeapMgr.SetPtp4lConfigPath(clockCfgName(runID))
+			if manager := leap.GetManager(); manager != nil {
+				manager.SetPtp4lConfigPath(clockCfgName(runID))
 			}
 			var ts2phcProc *ptpProcess
 			ts2phcProc, err = NewTs2phcProcess(env)
@@ -1307,6 +1380,11 @@ func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.Clock
 				inSyncConditionTh, inSyncConditionTimes, flags,
 				processConfigFor(dprocess, clockType, dn.processManager.eventsIn), nodeProfile)
 			glog.Infof("depending on %s", dpllDaemon.DependsOn())
+			updateTBCDPLLThresholdMetrics(Threshold, NodeName, nodeProfile, iface, flags, tbcDPLLThresholds{
+				inSyncThreshold: inSyncConditionTh, inSyncSamples: inSyncConditionTimes,
+				maxInSpecOffset: maxInSpecOffset, localMaxHoldoverOffset: localMaxHoldoverOffSet,
+				localHoldoverTimeout: localHoldoverTimeout,
+			})
 			// Set hardwareconfig handler if hardwareconfig manager is available
 			dpllDaemon.SetHardwareConfigHandler(func(devices []*dpllnl.DoDeviceGetReply) error {
 				return dn.hardwareConfigManager.ProcessDPLLDeviceNotifications(devices)

@@ -13,6 +13,25 @@ const (
 	statsTestEns1f0Iface = "ens1f0"
 )
 
+func TestWorstOfState(t *testing.T) {
+	tests := []struct {
+		name     string
+		a, b     event.PTPState
+		expected event.PTPState
+	}{
+		{"both locked", event.PTP_LOCKED, event.PTP_LOCKED, event.PTP_LOCKED},
+		{"freerun wins", event.PTP_LOCKED, event.PTP_FREERUN, event.PTP_FREERUN},
+		{"holdover wins", event.PTP_LOCKED, event.PTP_HOLDOVER, event.PTP_HOLDOVER},
+		{"freerun is worse than holdover", event.PTP_HOLDOVER, event.PTP_FREERUN, event.PTP_FREERUN},
+		{"notset propagates", event.PTP_NOTSET, event.PTP_LOCKED, event.PTP_NOTSET},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, event.WorstOfState(tt.a, tt.b))
+		})
+	}
+}
+
 type testDataSet struct {
 	data        map[string][]*event.Data
 	wantedState event.PTPState

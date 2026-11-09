@@ -169,7 +169,7 @@ func NewCondiitonsTester(t *testing.T, clockType event.ClockType, cfgNames ...st
 			clk, err = clock.NewGM(n, cm.GetUtcOffset, &pmc.MockClient{})
 			assert.NoError(t, err)
 		case event.TBC:
-			clk, err = clock.NewTBC(n, cm.GetUtcOffset, &pmc.MockClient{})
+			clk, err = clock.NewTBC(n, cm.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 			assert.NoError(t, err)
 		case event.BC:
 			clk, err = clock.NewBC(n, false, event.PtpClockThreshold{})
@@ -1124,7 +1124,7 @@ func TestTBC_Ts2phcWithPhc2sysUnlocksThroughProcessManager(t *testing.T) {
 				{ClockID: ptp4lConfig, Source: event.PTP4l},
 				{ClockID: ptp4lConfig, Source: event.PHC2SYS},
 			}, requests)
-			stats := ct.cm.GetStats(requests)
+			stats := ct.pm.latestStats
 			assert.Equal(t, event.PTP_LOCKED, stats.States[ptp4lConfig][event.PHC2SYS])
 			assert.Nil(t, stats.Windows[ptp4lConfig][event.PHC2SYS])
 		})

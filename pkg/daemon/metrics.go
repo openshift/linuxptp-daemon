@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -61,6 +63,19 @@ const (
 const (
 	PtpProcessDown int64 = 0
 	PtpProcessUp   int64 = 1
+)
+
+const (
+	thresholdSourceQualified           = "ptpSourceQualifiedThreshold"
+	thresholdSourceDisqualified        = "ptpSourceDisqualifiedThreshold"
+	thresholdSourceQualifiedSamples    = "ptpSourceQualifiedSamples"
+	thresholdSourceDisqualifiedSamples = "ptpSourceDisqualifiedSamples"
+	thresholdSourceUseS3               = "ptpSourceUseS3"
+	thresholdSysInSync                 = "SysOffsetInSyncThreshold"
+	thresholdSysOutOfSync              = "SysOffsetOutOfSyncThreshold"
+	thresholdSysSamples                = "SysOffsetSamples"
+	thresholdInSync                    = "inSyncConditionThreshold"
+	thresholdInSyncTimes               = "inSyncConditionTimes"
 )
 
 type ptpPortRole int
@@ -201,16 +216,15 @@ var (
 				"   network_option2 ePRTC: {0, 0x1, 0x21}, PRTC:  {1, 0x1, 0x20}, PRS:   {2, 0x1, 0xFF}, STU:   {3, 0x0, 0xFF}, ST2:   {4, 0x7, 0xFF}, TNC:   {5, 0x4, 0xFF}, ST3E:  {6, 0xD, 0xFF}, EEC2:  {7, 0xA, 0xFF}, PROV:  {8, 0xE, 0xFF}, QL-DUS: {9,0xF,0xFF}",
 		}, []string{"process", "node", "profile", "network_option", "iface", "device", "ql_type"})
 
-	// Threshold exposes the configured ptp clock thresholds for each profile
-	// (offset bounds in ns, holdover timeout in seconds). It is a read-back of
-	// the profile's PtpClockThreshold, not a live measurement, so it only
-	// changes when the profile configuration is (re)applied.
+	// Threshold reads back effective policy, not live offsets or sample runs.
+	// T-BC settings come from source/OS filters and the resolved leader DPLL;
+	// BC/OC retain their legacy clock-threshold read-back.
 	Threshold = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: PTPNamespace,
 			Subsystem: PTPSubsystem,
 			Name:      thresholdMetric,
-			Help:      "Configured PTP clock thresholds per profile (offset bounds in ns, holdover timeout in secs)",
+			Help:      "Effective PTP policy settings per profile (offsets in ns, timeouts in seconds, sample counts, boolean flags as 0/1)",
 		}, []string{thresholdMetric, "node", "profile"})
 )
 
@@ -241,18 +255,102 @@ func RegisterMetrics(nodeName string) {
 
 }
 
-// updatePTPThresholdMetrics resolves the profile's clock thresholds (max/min
-// offset in ns, holdover timeout in secs) applying the same defaulting as
-// cloud-event-proxy's UpdatePTPThreshold, then publishes them as the read-back
-// openshift_ptp_threshold gauge.
+// updatePTPThresholdMetrics starts the profile's read-back on every apply. Actual
+// OS and DPLL settings are added where those consumers are configured.
 func updatePTPThresholdMetrics(nodeProfile *ptpv1.PtpProfile, th event.PtpClockThreshold) {
+	updateProfileThresholdMetrics(Threshold, NodeName, nodeProfile, th)
+}
+
+func updateProfileThresholdMetrics(gauge *prometheus.GaugeVec, node string, nodeProfile *ptpv1.PtpProfile, th event.PtpClockThreshold) {
 	profile := *nodeProfile.Name
-	Threshold.With(prometheus.Labels{
-		thresholdMetric: "MaxOffsetThreshold", "node": NodeName, "profile": profile}).Set(float64(th.MaxOffsetThreshold))
-	Threshold.With(prometheus.Labels{
-		thresholdMetric: "MinOffsetThreshold", "node": NodeName, "profile": profile}).Set(float64(th.MinOffsetThreshold))
-	Threshold.With(prometheus.Labels{
-		thresholdMetric: "HoldOverTimeout", "node": NodeName, "profile": profile}).Set(float64(th.HoldOverTimeout))
+	// Also clear stale OS/DPLL/source series when a profile changes role or
+	// removes a process. Other profiles and nodes are left untouched.
+	gauge.DeletePartialMatch(prometheus.Labels{"node": node, "profile": profile})
+	if nodeProfile.PtpSettings["controllingProfile"] != "" {
+		// A controlled TT-only profile has no independent source/clock policy.
+		return
+	}
+	if profileClockType(nodeProfile) == TBC {
+		policy, err := resolveSourceQualificationPolicy(nodeProfile)
+		if err != nil {
+			glog.Errorf("Source qualification threshold read-back profile=%s: %v", profile, err)
+			return
+		}
+		updateSourceQualificationMetrics(gauge, node, profile, policy)
+		return
+	}
+	for name, value := range map[string]int64{
+		"MaxOffsetThreshold": th.MaxOffsetThreshold,
+		"MinOffsetThreshold": th.MinOffsetThreshold,
+		"HoldOverTimeout":    th.HoldOverTimeout,
+	} {
+		gauge.With(prometheus.Labels{thresholdMetric: name, "node": node, "profile": profile}).Set(float64(value))
+	}
+}
+
+// updateSourceQualificationMetrics reads back only an active policy. Clearing a
+// profile or selecting legacy policy must not leave unused source sample counts.
+func updateSourceQualificationMetrics(gauge *prometheus.GaugeVec, node, profile string, policy sourceQualificationPolicy) {
+	var useS3 int64
+	if policy.config.UseS3 {
+		useS3 = 1
+	}
+	for name, value := range map[string]int64{
+		thresholdSourceQualified:           policy.config.QualifiedThreshold,
+		thresholdSourceDisqualified:        policy.config.DisqualifiedThreshold,
+		thresholdSourceQualifiedSamples:    int64(policy.config.QualifiedSamples),
+		thresholdSourceDisqualifiedSamples: int64(policy.config.DisqualifiedSamples),
+		thresholdSourceUseS3:               useS3,
+	} {
+		labels := prometheus.Labels{thresholdMetric: name, "node": node, "profile": profile}
+		if policy.enabled {
+			gauge.With(labels).Set(float64(value))
+		} else {
+			gauge.Delete(labels)
+		}
+	}
+}
+
+func updateOSClockThresholdMetrics(gauge *prometheus.GaugeVec, node, profile string, cfg clock.OSClockFilterConfig) {
+	for name, value := range map[string]float64{
+		thresholdSysInSync:    cfg.InSyncThreshold,
+		thresholdSysOutOfSync: cfg.OutOfSyncThreshold,
+		thresholdSysSamples:   float64(cfg.Samples),
+	} {
+		gauge.With(prometheus.Labels{thresholdMetric: name, "node": node, "profile": profile}).Set(value)
+	}
+}
+
+// tbcDPLLThresholds is populated from the very same resolved values passed to
+// NewDpll, after HardwareConfig overrides and phase-only follower handling.
+type tbcDPLLThresholds struct {
+	inSyncThreshold        uint64
+	inSyncSamples          uint64
+	maxInSpecOffset        uint64
+	localMaxHoldoverOffset uint64
+	localHoldoverTimeout   uint64
+}
+
+func updateTBCDPLLThresholdMetrics(gauge *prometheus.GaugeVec, node string, profile *ptpv1.PtpProfile, iface config.Iface, flags dpll.Flag, cfg tbcDPLLThresholds) {
+	if profileClockType(profile) != TBC || profile.PtpSettings["controllingProfile"] != "" ||
+		flags&dpll.FlagOnlyPhaseStatus == dpll.FlagOnlyPhaseStatus {
+		return
+	}
+	// HardwareConfig identifies the leader by its PTP input. Legacy plugin
+	// profiles can identify it explicitly even when ts2phc marks it as PPS.
+	leadingInterface := profile.PtpSettings["leadingInterface"]
+	if iface.Source != event.PTP4l && (leadingInterface == "" || iface.Name != leadingInterface) {
+		return
+	}
+	for name, value := range map[string]uint64{
+		thresholdInSync:                cfg.inSyncThreshold,
+		thresholdInSyncTimes:           cfg.inSyncSamples,
+		dpll.MaxInSpecOffsetStr:        cfg.maxInSpecOffset,
+		dpll.LocalMaxHoldoverOffSetStr: cfg.localMaxHoldoverOffset,
+		dpll.LocalHoldoverTimeoutStr:   cfg.localHoldoverTimeout,
+	} {
+		gauge.With(prometheus.Labels{thresholdMetric: name, "node": node, "profile": *profile.Name}).Set(float64(value))
+	}
 }
 
 // InitializeOffsetMaps ... initialize maps

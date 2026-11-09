@@ -7,11 +7,42 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type observedProcessStateCondition struct {
+	process.OnProcessState
+	observed chan event.PTPState
+}
+
+func (c observedProcessStateCondition) MetByCurrentState(p process.Process, sourceUp process.SourceStateQuery, stats process.EventStats) bool {
+	state := stats.States[c.ConfigName][event.EventSource(c.Source)]
+	select {
+	case c.observed <- state:
+	default:
+	}
+	return c.OnProcessState.MetByCurrentState(p, sourceUp, stats)
+}
+
+func waitForObservedState(t *testing.T, states <-chan event.PTPState, expected event.PTPState) {
+	t.Helper()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case state := <-states:
+			if state == expected {
+				return
+			}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for evaluated state %s", expected)
+		}
+	}
+}
 
 func TestStatsUpdatesWaitForClockConsumer(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC, ptp4lConfig)
@@ -26,8 +57,6 @@ func TestStatsUpdatesWaitForClockConsumer(t *testing.T) {
 	ct.SendOffset(event.PHC2SYS, ptp4lConfig, event.PTP_LOCKED, 10)
 	require.Eventually(t, func() bool { return len(ct.pm.eventsOut) == 1 }, time.Second, time.Millisecond,
 		"raw data must go through the clock-manager channel")
-	stats := ct.cm.GetStats([]process.StatsRequest{{ClockID: ptp4lConfig, Source: event.PHC2SYS}})
-	assert.Empty(t, stats.States[ptp4lConfig])
 	assert.Zero(t, waiter.Starts(), "forwarding a sample is not the same as evaluating it")
 
 	ct.StartCM()
@@ -50,26 +79,73 @@ func TestStatsUpdatesReconcileAlreadyReadyClock(t *testing.T) {
 		"the retained snapshot must recover already-satisfied prerequisites without a query")
 }
 
+func TestSourceQualificationStartupAndRestart(t *testing.T) {
+	ct := NewCondiitonsTester(t, event.TBC, ptp4lConfig)
+	ct.cm.ConfigureOSClockFilter(clock.OSClockFilterConfig{InSyncThreshold: 50, OutOfSyncThreshold: 100, Samples: 1})
+	generation, err := ct.cm.ConfigureSourceQualification(ptp4lConfig, []string{"tr0"}, utils.QualificationConfig{
+		QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
+	require.NoError(t, err)
+	setQualified := func(qualified bool) {
+		if qualified {
+			ct.cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: ptp4lConfig, IFace: "tr0", Data: &event.PTPSourceObservation{
+				Generation: generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave)}})
+		}
+		ct.cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: ptp4lConfig, IFace: "tr0", Data: &event.PTPSourceObservation{
+			Generation: generation, ServoState: "s2", Offset: 10, SourceLost: !qualified}})
+	}
+	setQualified(true)
+	setQualified(false) // no historical TRUE may release the pending process
+	waiter := ct.AddProcess(&stubProcess{
+		name: ts2phcProcessName, cfgName: "ts2phc.0.config", state: process.Created,
+		conds: map[process.Action]process.Condition{
+			process.ActionStart: &process.All{Conditions: []process.Condition{
+				process.OnSourceQualified{ConfigName: ptp4lConfig},
+				process.OnProcessState{ConfigName: ptp4lConfig, Source: string(event.PHC2SYS), State: event.PTP_LOCKED},
+			}},
+		},
+	})
+	ct.cm.ProcessEvent(event.Event{Source: event.PHC2SYS, CfgName: ptp4lConfig, IFace: clockRealTime, Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: 10}})
+	ct.pm.reconcileWaiting(context.Background())
+	require.Zero(t, waiter.Starts())
+	setQualified(true)
+	ct.pm.reconcileWaiting(context.Background())
+	require.Equal(t, 1, waiter.Starts())
+	setQualified(false)
+	ct.pm.reconcileWaiting(context.Background())
+	require.Zero(t, waiter.Stops(), "qualification is not a downstream kill policy")
+	// Existing process-down recovery deliberately bypasses initial gates.
+	waiter.mu.Lock()
+	waiter.state = process.Dead
+	waiter.mu.Unlock()
+	ct.pm.handleProcessDown(context.Background(), event.ProcessStatusEvent(event.TS2PHC, "ts2phc.0.config", event.TBC, "", PtpProcessDown))
+	require.Equal(t, 2, waiter.Starts())
+}
+
 func TestStatsUpdatesDoNotLatchDegradedReadiness(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC, ptp4lConfig)
 	ct.cm.ConfigureOSClockFilter(clock.OSClockFilterConfig{InSyncThreshold: 50, OutOfSyncThreshold: 100, Samples: 1})
+	observedStates := make(chan event.PTPState, 10)
 	waiter := ct.AddProcess(&stubProcess{
 		name: "mixed-waiter", state: process.Created,
 		conds: map[process.Action]process.Condition{
 			process.ActionStart: &process.All{Conditions: []process.Condition{
-				process.OnProcessState{ConfigName: ptp4lConfig, Source: string(event.PHC2SYS), State: event.PTP_LOCKED},
+				observedProcessStateCondition{
+					OnProcessState: process.OnProcessState{ConfigName: ptp4lConfig, Source: string(event.PHC2SYS), State: event.PTP_LOCKED},
+					observed:       observedStates,
+				},
 				process.OnPluginEvent{EventName: "ready"},
 			}},
 		},
 	})
 	ct.Start()
 	ct.SendOffset(event.PHC2SYS, ptp4lConfig, event.PTP_LOCKED, 10)
+	waitForObservedState(t, observedStates, event.PTP_LOCKED)
 	ct.SendOffset(event.PHC2SYS, ptp4lConfig, event.PTP_FREERUN, 200)
-	requests := []process.StatsRequest{{ClockID: ptp4lConfig, Source: event.PHC2SYS}}
-	require.Eventually(t, func() bool { return ct.cm.GetStats(requests).States[ptp4lConfig][event.PHC2SYS] == event.PTP_FREERUN }, time.Second, time.Millisecond)
+	waitForObservedState(t, observedStates, event.PTP_FREERUN)
 	ct.SendPluginEvent("plugin", "ready")
 	assert.Zero(t, waiter.Starts(), "a previously ready clock cannot satisfy the conjunction after degradation")
 	ct.SendOffset(event.PHC2SYS, ptp4lConfig, event.PTP_LOCKED, 10)
+	waitForObservedState(t, observedStates, event.PTP_LOCKED)
 	require.Eventually(t, func() bool { return waiter.Starts() == 1 }, time.Second, time.Millisecond)
 }
 

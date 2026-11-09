@@ -368,6 +368,9 @@ func (pm *ProcessManager) stopAllProcesses() {
 		glog.Infof("Stopping %s", p.Name())
 		p.Stop()
 		if p, ok := p.(*ptpProcess); ok {
+			if p.sourceQualification != nil {
+				p.sourceQualification.close()
+			}
 			p.depProcess = nil
 			p.hasCollectedMetrics = false
 

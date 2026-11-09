@@ -435,9 +435,9 @@ func (g *GPSD) processGNSSMessage(message ublox.Message) bool {
 
 // processTimeLs forwards leap-second data to the leap manager when available.
 func processTimeLs(timels ublox.TimeLs) {
-	if leap.LeapMgr != nil {
+	if manager := leap.GetManager(); manager != nil {
 		select {
-		case leap.LeapMgr.UbloxLsInd <- timels:
+		case manager.UbloxLsInd <- timels:
 		case <-time.After(100 * time.Millisecond):
 			glog.Infof("failed to send leap event updates")
 		}

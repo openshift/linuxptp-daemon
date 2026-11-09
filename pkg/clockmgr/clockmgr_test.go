@@ -2,6 +2,7 @@ package clockmgr
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,6 +19,43 @@ import (
 )
 
 const testClockmgrPtp4lConfig = "ptp4l.0.config"
+
+type fixedStateClock struct {
+	clock.Clock
+	state event.PTPState
+}
+
+func (c fixedStateClock) GetState() event.PTPState { return c.state }
+
+// SnapshotStatsForTest exposes filtered snapshots only to tests, not production callers.
+func SnapshotStatsForTest(m *ClockManager, requests []process.StatsRequest) process.EventStats {
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+	return m.snapshotStats(requests)
+}
+
+func TestClockManager_WorstClockState(t *testing.T) {
+	tests := []struct {
+		name     string
+		states   []event.PTPState
+		expected event.PTPState
+	}{
+		{"no clocks", nil, event.PTP_NOTSET},
+		{"unset states ignored", []event.PTPState{event.PTP_NOTSET, event.PTP_UNKNOWN}, event.PTP_NOTSET},
+		{"locked", []event.PTPState{event.PTP_NOTSET, event.PTP_LOCKED}, event.PTP_LOCKED},
+		{"holdover wins", []event.PTPState{event.PTP_LOCKED, event.PTP_HOLDOVER}, event.PTP_HOLDOVER},
+		{"freerun wins", []event.PTPState{event.PTP_LOCKED, event.PTP_HOLDOVER, event.PTP_FREERUN}, event.PTP_FREERUN},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cm := &ClockManager{clocks: make(map[string]clock.Clock, len(tt.states))}
+			for i, state := range tt.states {
+				cm.clocks[fmt.Sprintf("clock-%d", i)] = fixedStateClock{state: state}
+			}
+			assert.Equal(t, tt.expected, cm.worstClockState())
+		})
+	}
+}
 
 // GetPTPState returns the stored PTP state for source under cfgName.
 func (m *ClockManager) GetPTPState(source event.EventSource, cfgName string) event.PTPState {
@@ -192,7 +230,7 @@ func TestClockManager_EmitClockClassAndIPCCach_OC(t *testing.T) {
 	assert.True(t, found, "clock class IPC should be cached after ParentDS update")
 }
 
-func TestClockManager_GetWindowsPrefersMatchingProcess(t *testing.T) {
+func TestClockManager_SnapshotStatsPrefersMatchingProcess(t *testing.T) {
 	cm := Init("test-node", make(chan event.Event), nil, nil, nil, nil)
 	bc1, err := clock.NewBC("ptp4l.0.config", true, event.PtpClockThreshold{})
 	require.NoError(t, err)
@@ -217,7 +255,8 @@ func TestClockManager_GetWindowsPrefersMatchingProcess(t *testing.T) {
 	cm.GetClock("ts2phc.0.config").GetData(event.TS2PHC).AddEvent(ts2phcEv)
 	cm.GetClock("ts2phc.0.config").GetData(event.TS2PHC).AddEvent(ts2phcEv)
 
-	windows := cm.GetWindows([]process.StatsRequest{{ClockID: "ptp4l.0.config", Source: event.PTP4l}, {ClockID: "ts2phc.0.config", Source: event.TS2PHC}})
+	stats := SnapshotStatsForTest(cm, []process.StatsRequest{{ClockID: "ptp4l.0.config", Source: event.PTP4l}, {ClockID: "ts2phc.0.config", Source: event.TS2PHC}})
+	windows := stats.Windows
 	require.NotNil(t, windows["ptp4l.0.config"])
 	require.NotNil(t, windows["ts2phc.0.config"])
 	assert.Equal(t, float64(10), windows["ptp4l.0.config"][event.PTP4l].LastInserted())
@@ -360,7 +399,7 @@ func TestClockManager_PHC2SYS_SharedAcrossMultipleClocks(t *testing.T) {
 	}
 }
 
-func TestClockManager_PHC2SYS_GetStatsWithoutWindow(t *testing.T) {
+func TestClockManager_PHC2SYS_SnapshotStatsWithoutWindow(t *testing.T) {
 	cm := Init("test-node", make(chan event.Event), nil, nil, nil, nil)
 	clk, err := clock.NewBC("ptp4l.0.config", true, event.PtpClockThreshold{})
 	require.NoError(t, err)
@@ -383,10 +422,9 @@ func TestClockManager_PHC2SYS_GetStatsWithoutWindow(t *testing.T) {
 	requests := []process.StatsRequest{
 		{ClockID: "ptp4l.0.config", Source: event.PHC2SYS},
 	}
-	stats := cm.GetStats(requests)
+	stats := SnapshotStatsForTest(cm, requests)
 	assert.Equal(t, event.PTP_LOCKED, stats.States["ptp4l.0.config"][event.PHC2SYS])
 	assert.Nil(t, stats.Windows["ptp4l.0.config"][event.PHC2SYS])
-	assert.Nil(t, cm.GetWindows(requests)["ptp4l.0.config"][event.PHC2SYS])
 
 	// Also verify directly from ProcessData
 	var phc2sysData *event.Data

@@ -12,7 +12,7 @@ require (
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
 	github.com/google/uuid v1.6.0
 	github.com/jaypipes/ghw v0.12.0
-	github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20261012195116-aff849dbf0b0
+	github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20261020135448-b50437799d8f
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.8.0
 	github.com/prometheus/client_golang v1.23.2
@@ -43,7 +43,7 @@ require (
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
-	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect

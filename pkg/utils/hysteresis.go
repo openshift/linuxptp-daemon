@@ -112,6 +112,9 @@ func (f *HysteresisFilter) OutOfSyncSamplesRequired() int {
 	return f.outOfSyncSamplesRequired
 }
 
+// Samples returns the consecutive run length, or zero after a band sample/reset.
+func (f *HysteresisFilter) Samples() int { return max(f.inSyncCount, f.outOfSyncCount) }
+
 // State returns the filter's current state.
 func (f *HysteresisFilter) State() HysteresisState {
 	return f.lastState

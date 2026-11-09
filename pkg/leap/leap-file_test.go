@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,9 +12,12 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	fake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestMain(m *testing.M) {
@@ -440,7 +444,7 @@ func Test_New_Good(t *testing.T) {
 	assert.Equal(t, 1, len(lm.leapFile.LeapEvents))
 	offset := GetUtcOffset()
 	assert.Equal(t, 37, offset)
-	LeapMgr = nil
+	lm.Stop()
 }
 
 func Test_Run(t *testing.T) {
@@ -460,7 +464,7 @@ func Test_Run(t *testing.T) {
 
 	assert.NoError(t, err)
 	go lm.Run()
-	assert.NotNil(t, LeapMgr)
+	assert.Same(t, lm, GetManager())
 	var timeLs = &ublox.TimeLs{
 		SrcOfCurrLs:   2,
 		CurrLs:        19,
@@ -472,14 +476,170 @@ func Test_Run(t *testing.T) {
 		Valid:         3,
 	}
 	select {
-	case LeapMgr.UbloxLsInd <- *timeLs:
+	case lm.UbloxLsInd <- *timeLs:
 	case <-time.After(100 * time.Millisecond):
 		assert.FailNow(t, "failed to send event to leap manager")
 	}
-	time.Sleep(100 * time.Millisecond)
-	offset := GetUtcOffset()
-	assert.Equal(t, 38, offset)
-	close(LeapMgr.Close)
-	time.Sleep(100 * time.Millisecond)
-	assert.Nil(t, LeapMgr)
+	assert.Eventually(t, func() bool { return GetUtcOffset() == 38 }, time.Second, time.Millisecond)
+	lm.Stop()
+	assert.Nil(t, GetManager())
+}
+
+func TestManagerLifecycle(t *testing.T) {
+	for _, startWorker := range []bool{false, true} {
+		t.Run(fmt.Sprintf("startWorker=%t", startWorker), func(t *testing.T) {
+			require.NoError(t, MockLeapFile())
+			manager := GetManager()
+			require.NotNil(t, manager)
+			manager.Stop()
+			manager, err := New(manager.client, manager.namespace)
+			require.NoError(t, err)
+			defer manager.Stop()
+			if startWorker {
+				go manager.Run()
+			}
+			var workers sync.WaitGroup
+			for range 8 {
+				workers.Go(func() {
+					registered, newErr := New(manager.client, manager.namespace)
+					assert.NoError(t, newErr)
+					assert.Same(t, manager, registered)
+					assert.Same(t, manager, GetManager())
+					assert.Equal(t, 37, GetUtcOffset())
+				})
+			}
+			workers.Wait()
+			for range 8 {
+				workers.Go(manager.Stop)
+			}
+			workers.Wait()
+			assert.Nil(t, GetManager())
+			manager.Run()
+			assert.Nil(t, GetManager())
+		})
+	}
+}
+
+func TestManagerConcurrentOffsetUpdates(t *testing.T) {
+	require.NoError(t, MockLeapFile())
+	manager := GetManager()
+	require.NotNil(t, manager)
+	defer manager.Stop()
+	var workers sync.WaitGroup
+	workers.Go(func() {
+		for index := range 100 {
+			manager.handleLeapIndication(&ublox.TimeLs{
+				SrcOfCurrLs: ublox.LeapSourceGPS,
+				CurrLs:      int8(18 + index%2),
+				Valid:       curreLsValidMask | timeToLsEventValidMask,
+			})
+		}
+	})
+	workers.Go(func() {
+		for range 100 {
+			sources := map[uint8]bool{ublox.LeapSourceGPS: true}
+			manager.SetAllowedLeapSources(sources)
+			sources[ublox.LeapSourceGPS] = false
+			manager.SetPtp4lConfigPath("ptp4l.0.config")
+		}
+	})
+	for range 4 {
+		workers.Go(func() {
+			for range 100 {
+				assert.Contains(t, []int{37, 38}, GetUtcOffset())
+				manager.IsLeapInWindow(time.Now().UTC(), -time.Hour, -time.Second)
+			}
+		})
+	}
+	workers.Wait()
+	assert.Equal(t, 38, GetUtcOffset())
+}
+
+func TestManagerConcurrentPublicationAndRemoval(t *testing.T) {
+	require.NoError(t, MockLeapFile())
+	previous := GetManager()
+	require.NotNil(t, previous)
+	previous.Stop()
+	var workers sync.WaitGroup
+	managers := make(chan *LeapManager, 8)
+	for range cap(managers) {
+		workers.Go(func() {
+			manager, err := New(previous.client, previous.namespace)
+			assert.NoError(t, err)
+			managers <- manager
+		})
+	}
+	workers.Wait()
+	close(managers)
+	manager := GetManager()
+	require.NotNil(t, manager)
+	defer manager.Stop()
+	for registered := range managers {
+		assert.Same(t, manager, registered)
+	}
+	previous.Run()
+	assert.Same(t, manager, GetManager())
+	go manager.Run()
+	for range 4 {
+		workers.Go(func() {
+			for range 100 {
+				if registered := GetManager(); registered != nil {
+					assert.Same(t, manager, registered)
+				}
+			}
+		})
+	}
+	workers.Go(manager.Stop)
+	workers.Wait()
+	assert.Nil(t, GetManager())
+}
+
+func TestManagerOffsetReadDuringConfigMapUpdate(t *testing.T) {
+	require.NoError(t, MockLeapFile())
+	manager := GetManager()
+	require.NotNil(t, manager)
+	defer manager.Stop()
+	client, ok := manager.client.(*fake.Clientset)
+	require.True(t, ok)
+	updating := make(chan struct{})
+	release := make(chan struct{})
+	client.PrependReactor("update", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+		close(updating)
+		<-release
+		return false, nil, nil
+	})
+	updated := make(chan struct{})
+	var readDone chan struct{}
+	go func() {
+		defer close(updated)
+		manager.handleLeapIndication(&ublox.TimeLs{
+			SrcOfCurrLs: ublox.LeapSourceGPS,
+			CurrLs:      19,
+			Valid:       curreLsValidMask | timeToLsEventValidMask,
+		})
+	}()
+	defer func() {
+		close(release)
+		<-updated
+		if readDone != nil {
+			<-readDone
+		}
+	}()
+	select {
+	case <-updating:
+	case <-time.After(time.Second):
+		t.Fatal("leap update did not reach the configmap client")
+	}
+	offset := make(chan int, 1)
+	readDone = make(chan struct{})
+	go func() {
+		defer close(readDone)
+		offset <- GetUtcOffset()
+	}()
+	select {
+	case value := <-offset:
+		assert.Equal(t, 38, value)
+	case <-time.After(time.Second):
+		t.Error("UTC read blocked on configmap I/O")
+	}
 }

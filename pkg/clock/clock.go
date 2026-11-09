@@ -23,7 +23,6 @@ type Clock interface {
 	SetEventLoopbackFunc(f func(event.Event))
 	GetData(processName event.EventSource) *event.Data
 	ProcessData() []*event.Data
-	ProcessDataForConfig(cfgName string) []*event.Data
 	SetOsClock(*OsClock)
 }
 
@@ -45,7 +44,7 @@ type SyncState struct {
 }
 
 func emitOverallSyncStateIfChanged(sendIPC func(ipc.Message), overallSyncState *event.PTPState, clockState, osClockState event.PTPState, profile string) {
-	next := WorstOfState(clockState, osClockState)
+	next := event.WorstOfState(clockState, osClockState)
 	if next != *overallSyncState {
 		*overallSyncState = next
 		sendIPC(ipc.Message{
@@ -54,37 +53,4 @@ func emitOverallSyncStateIfChanged(sendIPC func(ipc.Message), overallSyncState *
 			Values:  ipc.SyncStateValue{State: event.PtpStateToIPCState(next)},
 		})
 	}
-}
-
-// WorstOfState returns the more degraded of two PTP states using the O-RAN
-// priority FREERUN > HOLDOVER > LOCKED. A NOTSET input propagates as NOTSET.
-func WorstOfState(a, b event.PTPState) event.PTPState {
-	if a == event.PTP_NOTSET || b == event.PTP_NOTSET {
-		return event.PTP_NOTSET
-	}
-	if a == event.PTP_FREERUN || b == event.PTP_FREERUN {
-		return event.PTP_FREERUN
-	}
-	if a == event.PTP_HOLDOVER || b == event.PTP_HOLDOVER {
-		return event.PTP_HOLDOVER
-	}
-	return event.PTP_LOCKED
-}
-
-// WorstOfPtpStates returns the most degraded non-NOTSET state among states;
-// NOTSET/UNKNOWN entries are ignored. Returns NOTSET when no clock reports a
-// real state.
-func WorstOfPtpStates(states []event.PTPState) event.PTPState {
-	worst := event.PTP_NOTSET
-	for _, s := range states {
-		if s == event.PTP_NOTSET || s == event.PTP_UNKNOWN {
-			continue
-		}
-		if worst == event.PTP_NOTSET {
-			worst = s
-			continue
-		}
-		worst = WorstOfState(worst, s)
-	}
-	return worst
 }

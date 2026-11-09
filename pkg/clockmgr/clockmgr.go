@@ -55,6 +55,32 @@ type ClockManager struct {
 	osClockConfigs map[string]struct{}
 }
 
+// ConfigureSourceQualification sets policy for the active upstream PTP input of
+// cfg's ptp4l instance, not aggregate lock or the remote GM's time reference.
+// Configure before process startup; runtime observations use the event channel.
+func (m *ClockManager) ConfigureSourceQualification(cfg string, ports []string, policy utils.QualificationConfig) (uint64, error) {
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+	clk, ok := m.clocks[cfg].(*clock.TBC)
+	if !ok {
+		return 0, fmt.Errorf("source qualification requires a T-BC clock for %s", cfg)
+	}
+	generation, err := clk.ConfigureSourceQualification(ports, policy)
+	m.publishStats()
+	return generation, err
+}
+
+// SourceQualification snapshots the upstream identity/epoch for a new process
+// run. Startup conditions continue to consume the retained stats channel.
+func (m *ClockManager) SourceQualification(cfg string) (event.SourceQualification, bool) {
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+	if clk, ok := m.clocks[cfg].(*clock.TBC); ok {
+		return clk.SourceQualification(cfg)
+	}
+	return event.SourceQualification{}, false
+}
+
 type metricKey struct {
 	cfgName  string
 	process  string
@@ -65,6 +91,12 @@ type metricKey struct {
 type metricEntry struct {
 	gauge  *prometheus.GaugeVec
 	labels prometheus.Labels
+}
+
+// clockConfigDataProvider lets composite clocks return member-specific data
+// without adding config-specific behavior to every Clock implementation.
+type clockConfigDataProvider interface {
+	ProcessDataForConfig(cfgName string) []*event.Data
 }
 
 // SetHAMetric injects the openshift_ptp_ha_profile_status gauge. It is set
@@ -180,34 +212,34 @@ func (m *ClockManager) AddClock(clk clock.Clock) error {
 	return nil
 }
 
-// GetWindows returns read-only offset windows for the requested clock sources.
-func (m *ClockManager) GetWindows(requests []process.StatsRequest) map[string]map[event.EventSource]utils.ROWindow {
-	return m.GetStats(requests).Windows
-}
-
-// GetStats snapshots evaluated states and offset windows for
-// the requested sources. OS samples are available even without a registered PTP
-// clock. A request with no source selects every source on that clock.
-// Sources without offset history expose their evaluated state only.
-func (m *ClockManager) GetStats(requests []process.StatsRequest) process.EventStats {
-	m.clockManagementMu.Lock()
-	defer m.clockManagementMu.Unlock()
-	return m.snapshotStats(requests)
-}
-
 // snapshotStats builds a detached snapshot while clockManagementMu is held.
 func (m *ClockManager) snapshotStats(requests []process.StatsRequest) process.EventStats {
 	stats := process.EventStats{
-		Windows:        make(map[string]map[event.EventSource]utils.ROWindow),
-		States:         make(map[string]map[event.EventSource]event.PTPState),
-		ClockStates:    make(map[string]event.PTPState),
-		OSClockState:   m.osClock.State,
-		OSClockE3State: m.osClock.E3State,
+		Windows:         make(map[string]map[event.EventSource]utils.ROWindow),
+		States:          make(map[string]map[event.EventSource]event.PTPState),
+		ClockStates:     make(map[string]event.PTPState),
+		OSClockState:    m.osClock.State,
+		OSClockE3State:  m.osClock.E3State,
+		SourceQualified: make(map[string]bool),
 	}
 	for _, req := range requests {
 		var data []*event.Data
 		if clk := m.GetClock(req.ClockID); clk != nil {
-			data = clk.ProcessDataForConfig(req.ClockID)
+			if tbc, ok := clk.(*clock.TBC); ok {
+				if result, exists := tbc.SourceQualification(req.ClockID); exists && (req.Source == "" || req.Source == result.SourceType) {
+					stats.SourceQualified[req.ClockID] = result.Qualified && !m.IsApplying()
+				}
+			}
+			// HA member config names resolve to the HA composite in m.clocks.
+			// Its inherited ProcessData contains only composite/OS data, not
+			// the members' ptp4l states and windows. Preserve those per-member
+			// samples so phc2sys startup can qualify any healthy HA member;
+			// otherwise its offset-window conditions never become ready.
+			if provider, ok := clk.(clockConfigDataProvider); ok {
+				data = provider.ProcessDataForConfig(req.ClockID)
+			} else {
+				data = clk.ProcessData()
+			}
 			stats.ClockStates[req.ClockID] = clk.GetState()
 		} else {
 			data = m.osClock.ProcessData()
@@ -292,14 +324,23 @@ func (m *ClockManager) handleOSClockEvent(ev event.Event) bool {
 	return true
 }
 
-// worstClockState returns the most degraded non-NOTSET state across the
-// registered clocks, or NOTSET when no clock reports a real state.
+// worstClockState returns the most degraded state across registered clocks
+// (FREERUN > HOLDOVER > LOCKED), or NOTSET if all states are unset/unknown.
 func (m *ClockManager) worstClockState() event.PTPState {
-	states := make([]event.PTPState, 0, len(m.clocks))
+	worst := event.PTP_NOTSET
 	for _, clk := range m.clocks {
-		states = append(states, clk.GetState())
+		switch clk.GetState() {
+		case event.PTP_FREERUN:
+			return event.PTP_FREERUN // Nothing can be worse.
+		case event.PTP_HOLDOVER:
+			worst = event.PTP_HOLDOVER
+		case event.PTP_LOCKED:
+			if worst == event.PTP_NOTSET {
+				worst = event.PTP_LOCKED
+			}
+		}
 	}
-	return clock.WorstOfPtpStates(states)
+	return worst
 }
 
 // emitOSClockState derives the node-wide E3 OS-clock state as worst-of(E1,
@@ -346,6 +387,20 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 func (m *ClockManager) ProcessEvent(ev event.Event) {
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
+	if observation, ok := ev.Data.(*event.PTPSourceObservation); ok {
+		result := event.SourceQualification{}
+		if clk, exists := m.clocks[ev.CfgName].(*clock.TBC); exists && !m.IsApplying() {
+			result = clk.ObserveSource(ev, observation)
+		}
+		m.publishStats()
+		// Rejected observations also get a reply; a removed/replaced clock must
+		// not strand its old scanner. Never wait for hardware or a receiver.
+		select {
+		case observation.Reply <- result:
+		default:
+		}
+		return
+	}
 	if ev.Reset {
 		m.reset(ev)
 		m.publishStats()
@@ -418,7 +473,11 @@ func (m *ClockManager) reset(ev event.Event) {
 		m.ipcCache.Clear()
 	}
 	if clk := m.GetClock(ev.CfgName); clk != nil {
-		clk.Reset()
+		if tbc, ok := clk.(*clock.TBC); ok {
+			tbc.ResetSource(ev.Source)
+		} else {
+			clk.Reset()
+		}
 	}
 	m.osClock.E3State = event.PTP_NOTSET
 	if ev.Source == event.TS2PHC {

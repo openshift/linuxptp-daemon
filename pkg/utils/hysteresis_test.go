@@ -2,6 +2,8 @@ package utils
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestHysteresisFilterConfig(t *testing.T) {
@@ -169,4 +171,17 @@ func TestHysteresisFilterAsymmetricCounts(t *testing.T) {
 	if f.State() != HysteresisLow {
 		t.Fatalf("state=%v, want Low after a fresh full streak", f.State())
 	}
+}
+
+func TestHysteresisFilterSamples(t *testing.T) {
+	f := NewHysteresisFilter(100, 200, 2, 3)
+	for _, tc := range []struct {
+		offset float64
+		want   int
+	}{{50, 1}, {-100, 2}, {150, 0}, {201, 1}, {-250, 2}, {100, 1}} {
+		f.Update(tc.offset)
+		require.Equal(t, tc.want, f.Samples(), "offset=%v", tc.offset)
+	}
+	f.Reset()
+	require.Equal(t, 0, f.Samples(), "reset must clear evidence")
 }

@@ -1,12 +1,43 @@
 package parser
 
 import (
+	"fmt"
 	"regexp"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestPTP4LRawServoStatePreservesAggregateMapping(t *testing.T) {
+	t.Parallel()
+	for _, servo := range []string{"s2", "s3"} {
+		t.Run(servo, func(t *testing.T) {
+			t.Parallel()
+			metrics, portEvent, err := NewPTP4LExtractor().Extract(fmt.Sprintf("ptp4l[365195.391]: [ptp4l.0.config] master offset -1 %s freq -3972 path delay 89", servo))
+			require.NoError(t, err)
+			require.Nil(t, portEvent)
+			require.NotNil(t, metrics)
+			require.Equal(t, servo, metrics.ServoState)
+			require.Equal(t, constants.ClockStateLocked, metrics.ClockState)
+		})
+	}
+	metrics, _, err := NewPTP4LExtractor().Extract("ptp4l[74737.942]: [ptp4l.0.config] rms 53 max 74 freq -16642 +/- 40 delay 1089 +/- 20")
+	require.NoError(t, err)
+	require.NotNil(t, metrics)
+	require.Empty(t, metrics.ServoState, "summary lines are not fresh servo samples")
+}
+
+func TestPTP4LPortNameForQualification(t *testing.T) {
+	t.Parallel()
+	_, portEvent, err := NewPTP4LExtractor().Extract("ptp4l[4268779.809]: [ptp4l.0.config] port 1 (tr1): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED")
+	require.NoError(t, err)
+	require.NotNil(t, portEvent)
+	require.Equal(t, "tr1", portEvent.Iface, "preserve the parsed physical name rather than guessing from a port number")
+	require.Equal(t, 1, portEvent.PortID)
+}
 
 func TestPTP4LParser(t *testing.T) {
 	tests := []struct {

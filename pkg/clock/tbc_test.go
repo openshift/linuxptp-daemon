@@ -37,6 +37,45 @@ const (
 
 var leapOnce sync.Once
 
+func TestSourceQualificationIndependentOfAggregateInSync(t *testing.T) {
+	t.Parallel()
+	for _, worstProcess := range []event.EventSource{event.PTP4l, event.DPLL, event.TS2PHC} {
+		t.Run(string(worstProcess), func(t *testing.T) {
+			t.Parallel()
+			source, err := utils.NewQualificationState(utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 2, DisqualifiedSamples: 1})
+			require.NoError(t, err)
+			sample := utils.QualificationSample{Source: PTPPortSource{Port: "tr0"}, SourceAvailable: true, Offset: 50}
+			source.Evaluate(sample)
+			require.True(t, source.Evaluate(sample).Qualified)
+			bc := newPMCTestTBCClock(nil)
+			bc.leadingClockData.inSyncConditionThreshold = 100
+			bc.leadingClockData.inSyncConditionTimes = 3
+			bc.leadingClockData.initInSyncFilter()
+			bc.syncState.LeadingIFace = "tr0"
+			for _, processName := range []event.EventSource{event.PTP4l, event.DPLL, event.TS2PHC} {
+				offset := int64(10)
+				if processName == worstProcess {
+					offset = 500
+				}
+				window := utils.NewWindow(1)
+				window.Insert(float64(offset))
+				bc.data = append(bc.data, &event.Data{ProcessName: processName, Window: window, Details: []*event.DataDetails{{IFace: "tr0", Offset: offset, Time: time.Now().UnixMilli()}}})
+			}
+			require.False(t, bc.inSyncCondition(), "worst-case offset still gates aggregate InSync")
+			require.True(t, source.Qualified(), "aggregate failure cannot change upstream qualification")
+			for _, data := range bc.data {
+				data.Details[0].Offset = 10
+			}
+			fillBCDataWindows(bc, 10)
+			require.False(t, bc.inSyncCondition())
+			require.False(t, bc.inSyncCondition())
+			require.True(t, bc.inSyncCondition(), "aggregate retains its own three-sample window")
+			sample.Offset = 201
+			require.False(t, source.Evaluate(sample).Qualified, "source has its own one-sample disqualification window")
+		})
+	}
+}
+
 func ensureLeapMocked(t *testing.T) {
 	t.Helper()
 	leapOnce.Do(func() {
@@ -94,15 +133,93 @@ func filterSetCalls(calls []pmc.SetCall, method string) []pmc.SetCall {
 	return out
 }
 
+func TestNewTBCProfileMode(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		controlledProfile string
+		wantClass         fbprotocol.ClockClass
+	}{
+		{"standalone", "", fbprotocol.ClockClassSlaveOnly},
+		{"controller", testControlledCfg, protocol.ClockClassFreerun},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bc, err := NewTBC(testPTP4lCfg, stubUtcOffset, &pmc.MockClient{}, tc.controlledProfile)
+			require.NoError(t, err)
+			bc.SetConfiguredLeadingInterface(testLeadingNIC)
+			bc.syncState.State = event.PTP_LOCKED
+			bc.data = []*event.Data{{ProcessName: event.DPLL}}
+			bc.updateState()
+			assert.Equal(t, tc.wantClass, bc.ClockClass())
+		})
+	}
+}
+
+func TestUpdateTSCState(t *testing.T) {
+	newClock := func(t *testing.T) *TBC {
+		t.Helper()
+		mock := &pmc.MockClient{}
+		t.Cleanup(func() {
+			assert.Empty(t, mock.SnapshotGetCalls(), "T-TSC must not read downstream PMC data")
+			assert.Empty(t, mock.SnapshotSetCalls(), "T-TSC must not update downstream PMC data")
+		})
+		bc, err := NewTBC(testPTP4lCfg, stubUtcOffset, mock, "")
+		require.NoError(t, err)
+		bc.SetIPC(func(ipc.Message) {})
+		bc.SetEventLoopbackFunc(func(event.Event) {})
+		bc.SetOsClock(&OsClock{State: event.PTP_NOTSET})
+		bc.leadingClockData = tbcLeadingClockParams()
+		bc.syncState.State = event.PTP_FREERUN
+		bc.syncState.ClockClass = protocol.ClockClassFreerun
+		return bc
+	}
+	lock := func(bc *TBC) SyncState {
+		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+		bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_LOCKED, 10, false))
+		fillBCDataWindows(bc, 10)
+		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+		return bc.AddEvent(event.Event{Source: event.PMC, Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}}})
+	}
+
+	t.Run("FREERUN", func(t *testing.T) {
+		bc := newClock(t)
+		state := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+		assert.Equal(t, event.PTP_FREERUN, state.State)
+		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
+	})
+	t.Run("FREERUN to LOCKED", func(t *testing.T) {
+		state := lock(newClock(t))
+		assert.Equal(t, event.PTP_LOCKED, state.State)
+		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
+	})
+	t.Run("LOCKED to HOLDOVER", func(t *testing.T) {
+		bc := newClock(t)
+		require.Equal(t, event.PTP_LOCKED, lock(bc).State)
+		state := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+		assert.Equal(t, event.PTP_HOLDOVER, state.State)
+		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
+	})
+	t.Run("HOLDOVER in-spec to out-of-spec", func(t *testing.T) {
+		bc := newClock(t)
+		require.Equal(t, event.PTP_LOCKED, lock(bc).State)
+		holdover := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+		require.Equal(t, event.PTP_HOLDOVER, holdover.State)
+		require.Equal(t, fbprotocol.ClockClassSlaveOnly, holdover.ClockClass)
+		fillBCDataWindows(bc, 600)
+		state := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_HOLDOVER, 600, false))
+		assert.Equal(t, event.PTP_HOLDOVER, state.State)
+		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
+	})
+}
+
 // --- announceLocalData ---
 
 func TestAnnounceLocalData_Freerun_SetsGMSettingsAndEGP(t *testing.T) {
 	ensureLeapMocked(t)
 	mock := &pmc.MockClient{}
-	bc := newPMCTestTBCClock(mock)
 	cfgName := testCfgName
+	bc, err := NewTBC(cfgName, stubUtcOffset, mock, testControlledCfg)
+	require.NoError(t, err)
 	bc.leadingClockData.clockID = "001122.fffe.334455"
-	bc.leadingClockData.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{
 		State:      event.PTP_FREERUN,
 		ClockClass: protocol.ClockClassFreerun,
@@ -152,7 +269,7 @@ func TestAnnounceLocalData_Holdover135_SetsTimeProperties(t *testing.T) {
 	bc := newPMCTestTBCClock(mock)
 	cfgName := testCfgName
 	bc.leadingClockData.clockID = "aabbcc.fffe.ddeeff"
-	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.controlledPortsConfig = testControlledCfg
 	bc.leadingClockData.downstreamTimeProperties = &protocol.TimePropertiesDS{
 		CurrentUtcOffset:      37,
 		CurrentUtcOffsetValid: true,
@@ -195,7 +312,7 @@ func TestAnnounceLocalData_Holdover165_NotTimeTraceable(t *testing.T) {
 	bc := newPMCTestTBCClock(mock)
 	cfgName := testCfgName
 	bc.leadingClockData.clockID = "aabbcc.fffe.ddeeff"
-	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.controlledPortsConfig = testControlledCfg
 	bc.leadingClockData.downstreamTimeProperties = &protocol.TimePropertiesDS{
 		CurrentUtcOffset: 37,
 	}
@@ -233,7 +350,7 @@ func TestAnnounceLocalData_NilDownstreamTimeProperties_SkipsGMSettings(t *testin
 	cfgName := testCfgName
 
 	bc.leadingClockData.clockID = "aabbcc.fffe.ddeeff"
-	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.controlledPortsConfig = testControlledCfg
 	bc.leadingClockData.downstreamTimeProperties = nil
 	bc.syncState = SyncState{
 		State:      event.PTP_HOLDOVER,
@@ -330,7 +447,7 @@ func TestDownstreamAnnounceIWF_FetchError_NoEvent(t *testing.T) {
 func TestHandleDownstreamAnnounceIWF_Locked_AppliesAndSets(t *testing.T) {
 	mock := &pmc.MockClient{}
 	bc := newPMCTestTBCClock(mock)
-	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
 
 	upstream := &event.ParentTimeCurrentDS{
@@ -394,7 +511,7 @@ func TestHandleDownstreamAnnounceIWF_NotLocked_Aborts(t *testing.T) {
 func TestHandleDownstreamAnnounceIWF_StaleGeneration_Drops(t *testing.T) {
 	mock := &pmc.MockClient{}
 	bc := newPMCTestTBCClock(mock)
-	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
 	bc.announceToken = 5
 
@@ -425,7 +542,7 @@ func TestReset_AdvancesGeneration(t *testing.T) {
 func TestHandleDownstreamAnnounceIWF_OutOfOrder_LateResultDoesNotClobber(t *testing.T) {
 	mock := &pmc.MockClient{}
 	bc := newPMCTestTBCClock(mock)
-	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
 
 	// Two requests were issued; the second (token 11) supersedes the first
@@ -475,7 +592,7 @@ func TestUpdateDownstreamData_SupersededFetch_Dropped(t *testing.T) {
 		},
 	}
 	bc := newPMCTestTBCClock(mock)
-	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
 	rec := &eventRecorder{}
 	bc.sendEvent = rec.send
@@ -525,7 +642,7 @@ func TestUpdateDownstreamData_Locked_FetchesAndEmitsEvent(t *testing.T) {
 	bc := newPMCTestTBCClock(mock)
 	rec := &eventRecorder{}
 	bc.sendEvent = rec.send
-	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
 
 	bc.updateDownstreamData(testCfgName)
@@ -548,7 +665,7 @@ func TestUpdateDownstreamData_Freerun_CallsAnnounceLocalData(t *testing.T) {
 	bc := newPMCTestTBCClock(mock)
 	cfgName := testCfgName
 	bc.leadingClockData.clockID = "001122.fffe.334455"
-	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{
 		State:      event.PTP_FREERUN,
 		ClockClass: protocol.ClockClassFreerun,
@@ -567,15 +684,13 @@ func TestUpdateLeadingClockData_PTP4lProcessName(t *testing.T) {
 	ev := event.Event{
 		Source: event.PTP4lProcessName,
 		Data: &event.StateData{
-			ControlledPortsConfig: testConfig,
-			ClockID:               "clockID",
+			ClockID: "clockID",
 		},
 	}
 
 	bc := newPMCTestTBCClock(nil)
 	bc.updateLeadingClockData(ev)
 
-	assert.Equal(t, testConfig, bc.leadingClockData.controlledPortsConfig)
 	assert.Equal(t, "clockID", bc.leadingClockData.clockID)
 }
 
@@ -775,6 +890,26 @@ func TestFreeRunCondition(t *testing.T) {
 			data:         nil,
 			LeadingIFace: testIFace1,
 			threshold:    0,
+			expected:     true,
+		},
+		{
+			name: "TS2PHC freerun on leading interface does not trigger free run",
+			data: []*event.Data{
+				{ProcessName: event.DPLL, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_HOLDOVER}}},
+				{ProcessName: event.TS2PHCProcessName, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_FREERUN}}},
+			},
+			LeadingIFace: testIFace1,
+			threshold:    10,
+			expected:     false,
+		},
+		{
+			name: "TS2PHC freerun on non-leading interface triggers free run",
+			data: []*event.Data{
+				{ProcessName: event.DPLL, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_HOLDOVER}}},
+				{ProcessName: event.TS2PHCProcessName, Details: []*event.DataDetails{{IFace: testEno8703, State: event.PTP_FREERUN}}},
+			},
+			LeadingIFace: testIFace1,
+			threshold:    10,
 			expected:     true,
 		},
 	}

@@ -76,28 +76,6 @@ func TestAddEvent_StoresSpecFlags(t *testing.T) {
 	})
 }
 
-func TestWorstOfState(t *testing.T) {
-	tests := []struct {
-		a, b     event.PTPState
-		expected event.PTPState
-	}{
-		{event.PTP_LOCKED, event.PTP_LOCKED, event.PTP_LOCKED},
-		{event.PTP_LOCKED, event.PTP_FREERUN, event.PTP_FREERUN},
-		{event.PTP_FREERUN, event.PTP_LOCKED, event.PTP_FREERUN},
-		{event.PTP_HOLDOVER, event.PTP_LOCKED, event.PTP_HOLDOVER},
-		{event.PTP_LOCKED, event.PTP_HOLDOVER, event.PTP_HOLDOVER},
-		{event.PTP_FREERUN, event.PTP_HOLDOVER, event.PTP_FREERUN},
-		{event.PTP_HOLDOVER, event.PTP_FREERUN, event.PTP_FREERUN},
-		{event.PTP_HOLDOVER, event.PTP_HOLDOVER, event.PTP_HOLDOVER},
-		{event.PTP_FREERUN, event.PTP_FREERUN, event.PTP_FREERUN},
-	}
-	for _, tt := range tests {
-		t.Run(string(tt.a)+"_"+string(tt.b), func(t *testing.T) {
-			assert.Equal(t, tt.expected, WorstOfState(tt.a, tt.b))
-		})
-	}
-}
-
 func TestDeriveOSClockState(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -115,26 +93,6 @@ func TestDeriveOSClockState(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.expected, DeriveOSClockState(tt.e1, tt.phc2sys))
-		})
-	}
-}
-
-func TestWorstOfPtpStates(t *testing.T) {
-	tests := []struct {
-		name     string
-		states   []event.PTPState
-		expected event.PTPState
-	}{
-		{"empty", nil, event.PTP_NOTSET},
-		{"all notset", []event.PTPState{event.PTP_NOTSET, event.PTP_UNKNOWN}, event.PTP_NOTSET},
-		{"locked", []event.PTPState{event.PTP_LOCKED}, event.PTP_LOCKED},
-		{"notset ignored", []event.PTPState{event.PTP_NOTSET, event.PTP_LOCKED}, event.PTP_LOCKED},
-		{"holdover wins", []event.PTPState{event.PTP_LOCKED, event.PTP_HOLDOVER}, event.PTP_HOLDOVER},
-		{"freerun wins", []event.PTPState{event.PTP_LOCKED, event.PTP_HOLDOVER, event.PTP_FREERUN}, event.PTP_FREERUN},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, WorstOfPtpStates(tt.states))
 		})
 	}
 }

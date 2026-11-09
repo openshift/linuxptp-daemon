@@ -71,6 +71,7 @@ func processWithParser(process *ptpProcess, output string) {
 	}
 
 	process.hasCollectedMetrics = true
+	process.forwardSourceData(metrics, ptpEvent)
 	// Process metrics if available
 	if metrics != nil {
 		process.offset = metrics.Offset

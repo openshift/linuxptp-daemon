@@ -36,6 +36,9 @@ const (
 )
 
 type LeapManager struct {
+	mu        sync.RWMutex
+	runOnce   sync.Once
+	closeOnce sync.Once
 	// Ublox GNSS leap time indications channel
 	UbloxLsInd chan ublox.TimeLs
 	// Close channel
@@ -74,39 +77,46 @@ type LeapFile struct {
 
 var lock = &sync.Mutex{}
 
-var LeapMgr *LeapManager
+var leapMgr *LeapManager
+
+// GetManager returns the currently registered leap manager.
+func GetManager() *LeapManager {
+	lock.Lock()
+	defer lock.Unlock()
+	return leapMgr
+}
 
 func New(kubeclient kubernetes.Interface, namespace string) (*LeapManager, error) {
-	if LeapMgr == nil {
-		lock.Lock()
-		defer lock.Unlock()
-		if LeapMgr == nil {
-			lm := &LeapManager{
-				UbloxLsInd:         make(chan ublox.TimeLs, 2),
-				Close:              make(chan bool),
-				client:             kubeclient,
-				namespace:          namespace,
-				leapFile:           LeapFile{},
-				leapFilePath:       defaultLeapFilePath,
-				leapFileName:       defaultLeapFileName,
-				allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true},
-			}
-			err := lm.populateLeapData()
-			if err != nil {
-				return nil, err
-			}
-			LeapMgr = lm
+	lock.Lock()
+	defer lock.Unlock()
+	if leapMgr == nil {
+		lm := &LeapManager{
+			UbloxLsInd:         make(chan ublox.TimeLs, 2),
+			Close:              make(chan bool),
+			client:             kubeclient,
+			namespace:          namespace,
+			leapFile:           LeapFile{},
+			leapFilePath:       defaultLeapFilePath,
+			leapFileName:       defaultLeapFileName,
+			allowedLeapSources: map[uint8]bool{ublox.LeapSourceGPS: true},
 		}
+		err := lm.populateLeapData()
+		if err != nil {
+			return nil, err
+		}
+		leapMgr = lm
 	}
-	return LeapMgr, nil
+	return leapMgr, nil
 }
 
 func GetUtcOffset() int {
-	if LeapMgr != nil {
-		if time.Now().UTC().After(LeapMgr.utcOffsetTime) {
-			return LeapMgr.utcOffset
-		} else if len(LeapMgr.leapFile.LeapEvents) > 1 {
-			return LeapMgr.leapFile.LeapEvents[len(LeapMgr.leapFile.LeapEvents)-2].LeapSec
+	if manager := GetManager(); manager != nil {
+		manager.mu.RLock()
+		defer manager.mu.RUnlock()
+		if time.Now().UTC().After(manager.utcOffsetTime) {
+			return manager.utcOffset
+		} else if len(manager.leapFile.LeapEvents) > 1 {
+			return manager.leapFile.LeapEvents[len(manager.leapFile.LeapEvents)-2].LeapSec
 		}
 	}
 	glog.Fatal("failed to get UTC offset")
@@ -160,6 +170,8 @@ func parseLeapFile(b []byte) (*LeapFile, error) {
 }
 
 func (l *LeapManager) SetPtp4lConfigPath(path string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	glog.Info("set Leap manager ptp4l config file name to ", path)
 	l.ptp4lConfigPath = path
 }
@@ -167,8 +179,13 @@ func (l *LeapManager) SetPtp4lConfigPath(path string) {
 // SetAllowedLeapSources configures which GNSS leap second sources
 // are accepted by processLeapIndication. Keys are ublox.LeapSourceXxx constants.
 func (l *LeapManager) SetAllowedLeapSources(sources map[uint8]bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	glog.Infof("set Leap manager allowed leap sources to %v", sources)
-	l.allowedLeapSources = sources
+	l.allowedLeapSources = make(map[uint8]bool, len(sources))
+	for source, allowed := range sources {
+		l.allowedLeapSources[source] = allowed
+	}
 }
 
 func (l *LeapManager) renderLeapData() (*bytes.Buffer, error) {
@@ -246,51 +263,81 @@ func (l *LeapManager) populateLeapData() error {
 }
 
 func (l *LeapManager) Run() {
+	l.runOnce.Do(l.run)
+}
+
+// Stop requests shutdown and waits until the worker has released its registration.
+func (l *LeapManager) Stop() {
+	l.closeOnce.Do(func() { close(l.Close) })
+	// Run's sync.Once also joins an active worker, including deferred cleanup.
+	// If no worker has started, Run executes the loop with shutdown already
+	// signaled so deferred cleanup releases the registration; later Run calls
+	// are no-ops.
+	l.Run()
+}
+
+func (l *LeapManager) run() {
 	glog.Info("starting Leap file manager")
 	ticker := time.NewTicker(MaintenancePeriod)
+	defer ticker.Stop()
+	defer func() {
+		lock.Lock()
+		defer lock.Unlock()
+		if leapMgr == l {
+			leapMgr = nil
+		}
+	}()
 	for {
 		select {
 		case v := <-l.UbloxLsInd:
 			l.handleLeapIndication(&v)
 		case <-l.Close:
-			LeapMgr = nil
 			return
 		case <-ticker.C:
-			if l.retryUpdate {
-				l.updateLeapConfigmap()
-			}
-			if l.IsLeapInWindow(time.Now().UTC(), -pmcWindowStartHours*time.Hour, -pmcWindowEndSeconds*time.Second) {
-				if !l.pmcLeapSent {
-					g, err := pmc.RunPMCExpGetGMSettings(l.ptp4lConfigPath)
-					if err != nil {
-						glog.Error("error in Leap:", err)
-						continue
-					}
-					leapDiff := l.leapFile.LeapEvents[len(l.leapFile.LeapEvents)-1].LeapSec - int(g.TimePropertiesDS.CurrentUtcOffset)
-					if leapDiff > 0 {
-						g.TimePropertiesDS.Leap59 = false
-						g.TimePropertiesDS.Leap61 = true
-					} else if leapDiff < 0 {
-						g.TimePropertiesDS.Leap59 = true
-						g.TimePropertiesDS.Leap61 = false
-					} else {
-						// No actual change in leap seconds, don't send anything
-						l.pmcLeapSent = true
-						continue
-					}
-					glog.Info("Sending PMC command in Leap window")
-					glog.Infof("Leap time properties: %++v", g.TimePropertiesDS)
-					err = pmc.RunPMCExpSetGMSettings(l.ptp4lConfigPath, g)
-					if err != nil {
-						glog.Error("failed to send PMC for Leap: ", err)
-						continue
-					}
-					l.pmcLeapSent = true
-				}
-			} else {
-				l.pmcLeapSent = false
-			}
+			l.maintain()
 		}
+	}
+}
+
+func (l *LeapManager) maintain() {
+	if l.retryUpdate {
+		l.updateLeapConfigmap()
+	}
+	l.mu.RLock()
+	inWindow := l.isLeapInWindow(time.Now().UTC(), -pmcWindowStartHours*time.Hour, -pmcWindowEndSeconds*time.Second)
+	configPath := l.ptp4lConfigPath
+	leapSec := l.leapFile.LeapEvents[len(l.leapFile.LeapEvents)-1].LeapSec
+	l.mu.RUnlock()
+	if inWindow {
+		if !l.pmcLeapSent {
+			g, err := pmc.RunPMCExpGetGMSettings(configPath)
+			if err != nil {
+				glog.Error("error in Leap:", err)
+				return
+			}
+			leapDiff := leapSec - int(g.TimePropertiesDS.CurrentUtcOffset)
+			if leapDiff > 0 {
+				g.TimePropertiesDS.Leap59 = false
+				g.TimePropertiesDS.Leap61 = true
+			} else if leapDiff < 0 {
+				g.TimePropertiesDS.Leap59 = true
+				g.TimePropertiesDS.Leap61 = false
+			} else {
+				// No actual change in leap seconds, don't send anything
+				l.pmcLeapSent = true
+				return
+			}
+			glog.Info("Sending PMC command in Leap window")
+			glog.Infof("Leap time properties: %++v", g.TimePropertiesDS)
+			err = pmc.RunPMCExpSetGMSettings(configPath, g)
+			if err != nil {
+				glog.Error("failed to send PMC for Leap: ", err)
+				return
+			}
+			l.pmcLeapSent = true
+		}
+	} else {
+		l.pmcLeapSent = false
 	}
 }
 
@@ -362,12 +409,16 @@ func (l *LeapManager) updateLeapConfigmap() {
 }
 
 func (l *LeapManager) handleLeapIndication(data *ublox.TimeLs) {
+	l.mu.Lock()
 	r, err := l.processLeapIndication(data)
+	if r != nil {
+		l.updateLeapFile(r.leapTime, r.leapSec, r.updateTime)
+	}
+	l.mu.Unlock()
 	if err != nil {
 		glog.Error(err)
 	}
 	if r != nil {
-		l.updateLeapFile(r.leapTime, r.leapSec, r.updateTime)
 		l.updateLeapConfigmap()
 	}
 }
@@ -429,6 +480,12 @@ func (l *LeapManager) processLeapIndication(data *ublox.TimeLs) (*leapIndResult,
 
 // IsLeapInWindow() returns whether a leap event is occuring within the specified time window from now
 func (l *LeapManager) IsLeapInWindow(now time.Time, startOffset, endOffset time.Duration) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.isLeapInWindow(now, startOffset, endOffset)
+}
+
+func (l *LeapManager) isLeapInWindow(now time.Time, startOffset, endOffset time.Duration) bool {
 	startTime := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
 	lastLeap := l.leapFile.LeapEvents[len(l.leapFile.LeapEvents)-1]
 	lastLeapTime, err := strconv.Atoi(lastLeap.LeapTime)

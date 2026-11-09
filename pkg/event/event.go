@@ -9,6 +9,7 @@ import (
 	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 type ValueType string
@@ -41,7 +42,6 @@ const (
 	InSyncConditionThreshold  ValueType = "in-sync-th"
 	InSyncConditionTimes      ValueType = "in-sync-times"
 	ToFreeRunThreshold        ValueType = "free-run_th"
-	ControlledPortsConfig     ValueType = "controlled-ports-config"
 	ClockIDKey                ValueType = "clock-id"
 	MaxInSpecOffset           ValueType = "max-in-spec"
 )
@@ -111,6 +111,21 @@ const (
 	PTP_NOTSET PTPState = "-2"
 )
 
+// WorstOfState returns the more degraded of two PTP states using the O-RAN
+// priority FREERUN > HOLDOVER > LOCKED. A NOTSET input propagates as NOTSET.
+func WorstOfState(a, b PTPState) PTPState {
+	if a == PTP_NOTSET || b == PTP_NOTSET {
+		return PTP_NOTSET
+	}
+	if a == PTP_FREERUN || b == PTP_FREERUN {
+		return PTP_FREERUN
+	}
+	if a == PTP_HOLDOVER || b == PTP_HOLDOVER {
+		return PTP_HOLDOVER
+	}
+	return PTP_LOCKED
+}
+
 // Clock state metric values for openshift_ptp_clock_state gauge.
 const (
 	ClockStateFreerun  float64 = 0
@@ -160,6 +175,38 @@ func (d *OffsetData) String() string {
 	}
 	parts = append(parts, fmt.Sprintf("%s %d", OFFSET, d.Offset), string(d.State))
 	return strings.Join(parts, " ")
+}
+
+// PTPSourceObservation is a fresh upstream PTP fact, before offset averaging.
+// Event identifies the local contributor, config and physical interface. Reply
+// must be buffered (capacity one); it lets the scanner apply hardware changes
+// after clock evaluation, without running hardware I/O under the manager lock.
+type PTPSourceObservation struct {
+	Generation uint64
+	PortRole   *parserconstants.PTPPortRole
+	Offset     float64
+	ServoState string
+	SourceLost bool
+	Reply      chan SourceQualification
+}
+
+func (*PTPSourceObservation) eventData() {}
+
+func (d *PTPSourceObservation) String() string {
+	return fmt.Sprintf("PTP source generation=%d role=%v servo=%s offset=%v lost=%t", d.Generation, d.PortRole, d.ServoState, d.Offset, d.SourceLost)
+}
+
+// SourceQualification identifies the active upstream PTP input of one profile's
+// ptp4l instance, not aggregate clock lock or the remote GM's time reference.
+// SourceType identifies the local contributor; the embedded Source identifies
+// the evaluated/reset input. IFace labels the last selected PTP port for control.
+// An empty SourceType means the observation was rejected or unrelated. Generation
+// prevents an old scanner from affecting a replacement profile or reset clock.
+type SourceQualification struct {
+	SourceType EventSource
+	IFace      string
+	Generation uint64
+	utils.QualificationResult
 }
 
 // DPLLData is a DPLL status sample. Offset/PhaseStatus/FrequencyStatus are nil when FlagNo* is set.
@@ -237,12 +284,11 @@ func (d *SyncEData) String() string {
 	return strings.Join(parts, " ")
 }
 
-// StateData is a lock/holdover transition. ClockID and ControlledPortsConfig are set on T-BC transitions.
+// StateData is a lock/holdover transition. ClockID set on T-BC transitions.
 type StateData struct {
-	State                 PTPState
-	SourceLost            bool
-	ControlledPortsConfig string
-	ClockID               string
+	State      PTPState
+	SourceLost bool
+	ClockID    string
 }
 
 func (*StateData) eventData() {}
@@ -251,9 +297,6 @@ func (d *StateData) String() string {
 	parts := make([]string, 0, 3)
 	if d.ClockID != "" {
 		parts = append(parts, fmt.Sprintf("%s %s", ClockIDKey, d.ClockID))
-	}
-	if d.ControlledPortsConfig != "" {
-		parts = append(parts, fmt.Sprintf("%s %s", ControlledPortsConfig, d.ControlledPortsConfig))
 	}
 	parts = append(parts, string(d.State))
 	return strings.Join(parts, " ")

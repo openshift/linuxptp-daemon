@@ -88,12 +88,6 @@ func (c *BaseClock) ProcessData() []*event.Data {
 	return append(d, c.osClock.ProcessData()...)
 }
 
-// ProcessDataForConfig returns this clock's source data. Composite clocks
-// override it to preserve the requested member's identity.
-func (c *BaseClock) ProcessDataForConfig(_ string) []*event.Data {
-	return c.ProcessData()
-}
-
 // SetOsClock Set OsClock
 func (c *BaseClock) SetOsClock(osClock *OsClock) {
 	c.osClock = osClock
