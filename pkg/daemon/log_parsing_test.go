@@ -13,6 +13,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
 // TestReplayDualUpstreamLog replays the actual ptp4l log sequence from OCPBUGS-111881
@@ -138,6 +139,105 @@ func TestSourceLostOnListening(t *testing.T) {
 		assert.True(t, ok && ptp.SourceLost, "emitted event must carry SourceLost=true")
 		assert.Equal(t, "ens3f0", evs[0].IFace)
 	}
+}
+
+func TestProcessParsedMetricsResolvesMasterIfaceAndDeletesPlaceholder(t *testing.T) {
+	InitializeOffsetMaps()
+	previousNodeName := NodeName
+	NodeName = "ptp4l-master-iface-test"
+	const cfgName = "ptp4l.master-iface.config"
+	const ifaceName = "master-iface-test0"
+	masterOffsetLabels := []string{constants.Master, ptp4lProcessName, NodeName, master}
+	masterClockStateLabels := []string{ptp4lProcessName, NodeName, master}
+	ifaceLabels := []string{constants.Master, ptp4lProcessName, NodeName, alias.GetAlias(ifaceName)}
+
+	Offset.DeleteLabelValues(masterOffsetLabels...)
+	MaxOffset.DeleteLabelValues(masterOffsetLabels...)
+	FrequencyAdjustment.DeleteLabelValues(masterOffsetLabels...)
+	Delay.DeleteLabelValues(masterOffsetLabels...)
+	ClockState.DeleteLabelValues(masterClockStateLabels...)
+	t.Cleanup(func() {
+		Offset.DeleteLabelValues(masterOffsetLabels...)
+		MaxOffset.DeleteLabelValues(masterOffsetLabels...)
+		FrequencyAdjustment.DeleteLabelValues(masterOffsetLabels...)
+		Delay.DeleteLabelValues(masterOffsetLabels...)
+		ClockState.DeleteLabelValues(masterClockStateLabels...)
+		Offset.DeleteLabelValues(ifaceLabels...)
+		MaxOffset.DeleteLabelValues(ifaceLabels...)
+		FrequencyAdjustment.DeleteLabelValues(ifaceLabels...)
+		Delay.DeleteLabelValues(ifaceLabels...)
+		ClockState.DeleteLabelValues(ptp4lProcessName, NodeName, alias.GetAlias(ifaceName))
+		InterfaceRole.DeleteLabelValues(ptp4lProcessName, NodeName, ifaceName)
+		NodeName = previousNodeName
+		InitializeOffsetMaps()
+	})
+
+	process := &ptpProcess{
+		ExecProcess: ExecProcess{
+			name:       ptp4lProcessName,
+			configName: cfgName,
+			messageTag: "[" + cfgName + "]",
+			eventCh:    make(chan event.Event, 10),
+		},
+		clockType: event.TBC,
+		ifaces:    config.IFaces{{Name: ifaceName}},
+		ptpClockThreshold: &ptpv1.PtpClockThreshold{
+			MaxOffsetThreshold: 100,
+		},
+	}
+	metrics := &parser.Metrics{
+		Iface:      master,
+		Source:     constants.Master,
+		Offset:     12,
+		MaxOffset:  12,
+		ClockState: constants.ClockStateLocked,
+	}
+	processParsedMetrics(process, metrics)
+	assert.False(t, Offset.DeleteLabelValues(masterOffsetLabels...), "unresolved iface=master must not be exported")
+	assert.False(t, ClockState.DeleteLabelValues(masterClockStateLabels...), "unresolved iface=master clock state must not be exported")
+
+	// Simulate a placeholder left by an earlier sample/version. Learning the
+	// physical SLAVE port must remove it immediately, not wait for another offset.
+	updatePTPMetrics(master, ptp4lProcessName, master, 9, 9, 1, 1)
+	updateClockStateMetrics(ptp4lProcessName, master, LOCKED, "")
+	processParsedEvent(process, &parser.PTPEvent{PortID: 1, Role: constants.PortRoleSlave})
+	assert.False(t, Offset.DeleteLabelValues(masterOffsetLabels...), "SLAVE discovery must remove stale master offset")
+	assert.False(t, MaxOffset.DeleteLabelValues(masterOffsetLabels...))
+	assert.False(t, FrequencyAdjustment.DeleteLabelValues(masterOffsetLabels...))
+	assert.False(t, Delay.DeleteLabelValues(masterOffsetLabels...))
+	assert.False(t, ClockState.DeleteLabelValues(masterClockStateLabels...))
+
+	metrics.Offset = 24
+	processParsedMetrics(process, metrics)
+	assert.Equal(t, float64(24), testutil.ToFloat64(Offset.WithLabelValues(ifaceLabels...)))
+	assert.False(t, Offset.DeleteLabelValues(masterOffsetLabels...), "resolved metric must not recreate iface=master")
+}
+
+func TestExtractMetricsSkipsUnresolvedMasterIface(t *testing.T) {
+	InitializeOffsetMaps()
+	previousNodeName := NodeName
+	NodeName = "ptp4l-master-legacy-test"
+	const cfgName = "ptp4l.master-legacy.config"
+	const ifaceName = "master-legacy-test0"
+	masterOffsetIface.set(cfgName, master)
+	labels := []string{constants.Master, ptp4lProcessName, NodeName, master}
+	Offset.DeleteLabelValues(labels...)
+	t.Cleanup(func() {
+		Offset.DeleteLabelValues(labels...)
+		NodeName = previousNodeName
+		InitializeOffsetMaps()
+	})
+
+	gotConfigName, source, offset, state, iface := extractMetrics("["+cfgName+"]", ptp4lProcessName,
+		config.IFaces{{Name: ifaceName}},
+		"ptp4l[1.0]: ["+cfgName+"] master offset 12 s2 freq 0 path delay 10")
+
+	assert.Equal(t, cfgName, gotConfigName)
+	assert.Equal(t, ptp4lProcessName, source)
+	assert.Equal(t, float64(12), offset)
+	assert.Equal(t, LOCKED, state)
+	assert.Empty(t, iface)
+	assert.False(t, Offset.DeleteLabelValues(labels...), "legacy parser must not export unresolved iface=master")
 }
 
 func TestTS2PHCOffsetEventConversion(t *testing.T) {

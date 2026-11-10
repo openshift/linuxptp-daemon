@@ -12,6 +12,14 @@ import (
 
 func stubUtcOffset() int { return 37 }
 
+func TestBaseClockOffsetMetricUnavailableByDefault(t *testing.T) {
+	base := newBaseClock("ptp4l.0.config", event.PtpClockThreshold{})
+	sample, available := base.ClockOffsetMetric()
+
+	assert.False(t, available)
+	assert.Equal(t, OffsetSample{}, sample)
+}
+
 type ipcRecorder struct {
 	messages []ipc.Message
 }
