@@ -91,14 +91,10 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	}
 
 	// ptp4l logs a follower's offset as "master offset ..." with no interface
-	// token, so the parser reports iface="master". Resolve it to the real
-	// follower interface recorded on the SLAVE port transition (slaveIface) so
-	// the metrics and the event emitted below are labeled with the real name.
-	if ptpMetrics.Iface == master {
-		if follower := slaveIface.get(configName); follower != "" {
-			ptpMetrics.Iface = follower
-		}
-	}
+	// token. Resolve that parser placeholder to the physical follower when known;
+	// otherwise do not publish a metric with iface="master".
+	var masterIfaceResolved bool
+	ptpMetrics.Iface, masterIfaceResolved = resolvePTP4lMasterIface(configName, process.name, ptpMetrics.Iface)
 
 	// Convert interface from possible clock id
 	iface := process.ifaces.GetPhcID2IFace(ptpMetrics.Iface)
@@ -106,13 +102,16 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		iface = alias.GetAlias(iface)
 	}
 
-	// Update PTP metrics using the parsed data
-	updatePTPMetrics(ptpMetrics.Source, process.name, iface, ptpMetrics.Offset, ptpMetrics.MaxOffset, ptpMetrics.FreqAdj, ptpMetrics.Delay)
+	// Update PTP metrics using the parsed data. The synthetic master interface
+	// is not a valid Prometheus iface label until it resolves to a real follower.
+	if masterIfaceResolved {
+		updatePTPMetrics(ptpMetrics.Source, process.name, iface, ptpMetrics.Offset, ptpMetrics.MaxOffset, ptpMetrics.FreqAdj, ptpMetrics.Delay)
+	}
 
 	// Update clock state metrics if available. BC/OC clock_state is owned by the
 	// BCClock state machine (emitted from clockmgr as process="ptp4l"), so the
 	// log parser must not also emit it here.
-	if ptpMetrics.ClockState != "" && process.clockType != event.BC && process.clockType != event.OC {
+	if masterIfaceResolved && ptpMetrics.ClockState != "" && process.clockType != event.BC && process.clockType != event.OC {
 		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState), ptpMetrics.ServoState)
 	}
 
@@ -134,7 +133,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 
 	switch process.name {
 	case ptp4lProcessName:
-		if ptpMetrics.Iface != "" && configName != "" {
+		if masterIfaceResolved && ptpMetrics.Iface != "" && configName != "" {
 			masterOffsetIface.set(configName, ptpMetrics.Iface)
 		}
 
@@ -147,7 +146,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		// offset ..."; until the SLAVE port transition populates slaveIface the
 		// resolution above leaves Iface=="master", which is not a real interface
 		// and must not become the clock's leading interface.
-		if (process.clockType == event.BC || process.clockType == event.OC) && ptpMetrics.Iface != master {
+		if (process.clockType == event.BC || process.clockType == event.OC) && masterIfaceResolved && ptpMetrics.Iface != master {
 			select {
 			case process.eventCh <- event.Event{
 				Source:    event.PTP4l,
@@ -255,6 +254,7 @@ func processPtp4lEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 		case parserconstants.PortRoleSlave:
 			masterOffsetIface.set(configName, interfaceName)
 			slaveIface.set(configName, interfaceName)
+			deleteMasterPlaceholderMetrics(process.name)
 		case parserconstants.PortRoleFaulty, parserconstants.PortRoleListening:
 			// The active slave port lost its source: FAULTY = the port/link faulted; LISTENING = the master went away
 			// (announce timeout) while the link stayed up. Both mean the servo has no offset to track.

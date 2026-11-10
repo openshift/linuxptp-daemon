@@ -144,6 +144,20 @@ func (c *TBC) SetEventLoopbackFunc(f func(event.Event)) {
 // ClockType returns the clock type for this TBC clock.
 func (c *TBC) ClockType() event.ClockType { return event.TBC }
 
+// ClockOffsetMetric reports the largest current offset across the T-BC inputs.
+// The leading interface identifies the aggregate clock's metric series; it
+// does not limit which input offsets contribute to the value.
+func (c *TBC) ClockOffsetMetric() (OffsetSample, bool) {
+	if c.syncState.State == event.PTP_NOTSET || c.syncState.LeadingIFace == "" ||
+		c.syncState.LeadingIFace == event.LEADING_INTERFACE_UNKNOWN {
+		return OffsetSample{}, false
+	}
+	return OffsetSample{
+		IFace:  c.syncState.LeadingIFace,
+		Offset: c.getLargestOffset(),
+	}, true
+}
+
 // ClockClass returns the current clock class.
 func (c *TBC) ClockClass() fbprotocol.ClockClass { return c.syncState.ClockClass }
 
@@ -293,6 +307,7 @@ func (c *TBC) updateState() bool {
 		c.syncState.State = event.PTP_FREERUN
 		c.syncState.ClockClass = protocol.ClockClassFreerun
 		c.syncState.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
+		c.syncState.ClockOffset = FaultyPhaseOffset
 		c.syncState.LastLoggedTime = time.Now().Unix()
 		c.syncState.LeadingIFace = leadingInterface
 		glog.Info(c.status())
@@ -538,10 +553,11 @@ func (c *TBC) downstreamAnnounceIWF(cfgName string, generation uint64) {
 
 	// when results are eventually received, send an event back to the queue to be handled by the state machine
 	c.sendEvent(event.Event{
-		Source:  event.PMC,
-		CfgName: cfgName,
-		Time:    time.Now().UnixMilli(),
-		Data:    &event.ParentTimeCurrentDS{ParentTimeCurrentDS: upstreamData, Generation: generation},
+		Source:    event.PMC,
+		CfgName:   cfgName,
+		ClockType: event.TBC,
+		Time:      time.Now().UnixMilli(),
+		Data:      &event.ParentTimeCurrentDS{ParentTimeCurrentDS: upstreamData, Generation: generation},
 	})
 }
 

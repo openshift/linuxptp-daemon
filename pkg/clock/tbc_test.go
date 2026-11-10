@@ -154,6 +154,46 @@ func TestNewTBCProfileMode(t *testing.T) {
 	}
 }
 
+func TestUpdateStateWithoutDataSetsFaultyOffset(t *testing.T) {
+	bc, err := NewTBC(testPTP4lCfg, stubUtcOffset, &pmc.MockClient{}, "")
+	require.NoError(t, err)
+	bc.SetIPC(func(ipc.Message) {})
+	bc.SetOsClock(&OsClock{State: event.PTP_FREERUN})
+	bc.SetConfiguredLeadingInterface(testLeadingNIC)
+
+	state := bc.AddEvent(event.Event{Source: event.PMC, Data: &event.ParentDSData{}})
+
+	assert.Equal(t, event.PTP_FREERUN, state.State)
+	assert.Equal(t, FaultyPhaseOffset, state.ClockOffset)
+	sample, ok := bc.ClockOffsetMetric()
+	assert.True(t, ok)
+	assert.Equal(t, OffsetSample{IFace: testLeadingNIC, Offset: FaultyPhaseOffset}, sample)
+}
+
+func TestClockOffsetMetricUsesLargestOffset(t *testing.T) {
+	bc := newPMCTestTBCClock(nil)
+	bc.syncState.State = event.PTP_LOCKED
+	bc.syncState.ClockOffset = 999 // The metric must use getLargestOffset, not this state field.
+	bc.syncState.LeadingIFace = testLeadingNIC
+
+	window := utils.NewWindow(event.WindowSize)
+	for i := 0; i < event.WindowSize; i++ {
+		window.Insert(123)
+	}
+	bc.data = []*event.Data{{
+		ProcessName: event.DPLL,
+		Window:      window,
+		Details: []*event.DataDetails{{
+			IFace: testEth0, Offset: 123, Time: time.Now().UnixMilli(),
+		}},
+	}}
+
+	sample, ok := bc.ClockOffsetMetric()
+	require.True(t, ok)
+	assert.Equal(t, testLeadingNIC, sample.IFace)
+	assert.Equal(t, int64(123), sample.Offset)
+}
+
 func TestUpdateTSCState(t *testing.T) {
 	newClock := func(t *testing.T) *TBC {
 		t.Helper()
@@ -419,6 +459,7 @@ func TestDownstreamAnnounceIWF_Fetches_EmitsPMCEvent(t *testing.T) {
 	}
 	assert.Equal(t, event.PMC, events[0].Source)
 	assert.Equal(t, cfgName, events[0].CfgName)
+	assert.Equal(t, event.TBC, events[0].ClockType)
 	payload, ok := events[0].Data.(*event.ParentTimeCurrentDS)
 	if !assert.True(t, ok) {
 		return

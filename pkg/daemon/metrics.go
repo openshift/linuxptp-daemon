@@ -387,6 +387,32 @@ func updatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, freq
 		"process": process, "node": NodeName, "iface": iface}).Set(delay)
 }
 
+// resolvePTP4lMasterIface maps ptp4l's synthetic "master" interface to the
+// currently selected physical follower. Until ptp4l reports a SLAVE transition,
+// the offset is not safe to publish under an interface label.
+func resolvePTP4lMasterIface(configName, processName, iface string) (string, bool) {
+	if processName != ptp4lProcessName || iface != master {
+		return iface, true
+	}
+	follower := slaveIface.get(configName)
+	if follower == "" {
+		return iface, false
+	}
+	deleteMasterPlaceholderMetrics(processName)
+	return follower, true
+}
+
+// deleteMasterPlaceholderMetrics removes any placeholder series created by an
+// older/unresolved ptp4l sample once the physical follower interface is known.
+func deleteMasterPlaceholderMetrics(processName string) {
+	ptpLabels := prometheus.Labels{"from": master, "process": processName, "node": NodeName, "iface": master}
+	Offset.Delete(ptpLabels)
+	MaxOffset.Delete(ptpLabels)
+	FrequencyAdjustment.Delete(ptpLabels)
+	Delay.Delete(ptpLabels)
+	ClockState.Delete(prometheus.Labels{"process": processName, "node": NodeName, "iface": master})
+}
+
 func configNameFromMessageTag(messageTag string) string {
 	cfgName := strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
 	if cfgName != "" {
@@ -401,6 +427,13 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 	output = removeMessageSuffix(output)
 	if strings.Contains(output, " max ") {
 		ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay := extractSummaryMetrics(configName, processName, output)
+		originalIface := ifaceName
+		ifaceName, ifaceResolved := resolvePTP4lMasterIface(configName, processName, ifaceName)
+		if !ifaceResolved {
+			ifaceName = ""
+		} else if processName == ptp4lProcessName && originalIface == master {
+			ifaceName = alias.GetAlias(ifaceName)
+		}
 		if ifaceName != "" {
 			if ifaceName == clockRealTime {
 				updatePTPMetrics(phc, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
@@ -411,6 +444,13 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 		}
 	} else if strings.Contains(output, " offset ") {
 		err, ifaceName, clockstate, ptpOffset, maxPtpOffset, frequencyAdjustment, delay := extractRegularMetrics(configName, processName, output, ifaces)
+		originalIface := ifaceName
+		ifaceName, ifaceResolved := resolvePTP4lMasterIface(configName, processName, ifaceName)
+		if !ifaceResolved {
+			ifaceName = ""
+		} else if processName == ptp4lProcessName && originalIface == master {
+			ifaceName = alias.GetAlias(ifaceName)
+		}
 		if err != nil {
 			glog.Error(err)
 
@@ -440,6 +480,7 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 				case SLAVE:
 					masterOffsetIface.set(configName, ifaces[portId-1].Name)
 					slaveIface.set(configName, ifaces[portId-1].Name)
+					deleteMasterPlaceholderMetrics(processName)
 				case FAULTY:
 					if slaveIface.isFollowerIface(configName, ifaces[portId-1].Name) &&
 						masterOffsetSource.get(configName) == ptp4lProcessName {

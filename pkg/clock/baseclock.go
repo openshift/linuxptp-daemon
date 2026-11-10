@@ -63,6 +63,11 @@ type BaseClock struct {
 // ConfigName ..
 func (c *BaseClock) ConfigName() string { return c.cfgName }
 
+// ClockOffsetMetric is the default for clocks without an aggregate offset.
+func (c *BaseClock) ClockOffsetMetric() (OffsetSample, bool) {
+	return OffsetSample{}, false
+}
+
 // ConfigNames returns every config name events for this clock may arrive under. A
 // ptp4l-based clock also receives ts2phc events, which arrive under the matching
 // ts2phc.{runID}.config name, so that alias is included. Composite clocks override

@@ -24,6 +24,8 @@ import (
 
 const (
 	configLabel  = "config"
+	fromLabel    = "from"
+	ifaceLabel   = "iface"
 	nodeLabel    = "node"
 	processLabel = "process"
 )
@@ -440,17 +442,15 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	if prevState != event.PTP_NOTSET && prevState != clockState.State {
 		m.signalSyncStatus()
 	}
+	sample, available := clk.ClockOffsetMetric()
+	m.updateClockOffsetMetric(clk.ConfigName(), string(clk.ClockType()), sample, available)
 	if clockState.LeadingIFace != "" && clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
 		// BC/OC clock_state is scraped as process="ptp4l" (ptp4l is the
 		// servo), whereas GM/T-BC report under their clock-type label. The
 		// event's clock type is checked too: an HA clock is a composite whose
 		// member events carry ClockType=BC, and those must still report as
 		// ptp4l like a standalone BC follower.
-		process := string(ev.ClockType)
-		if clk.ClockType() == event.BC || clk.ClockType() == event.OC ||
-			ev.ClockType == event.BC || ev.ClockType == event.OC {
-			process = string(event.PTP4l)
-		}
+		process := clockStateMetricProcess(clk.ClockType(), ev.ClockType)
 		m.updateClockStateMetrics(clockState.State, process, alias.GetAlias(clockState.LeadingIFace))
 	}
 	// Use the clock class from the event's returned state, not clk.ClockClass().
@@ -466,6 +466,21 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	m.publishStats()
 }
 
+// clockStateMetricProcess selects the process label for a clock-state metric.
+// Synthetic events such as asynchronous T-BC PMC completions may omit
+// ClockType, so fall back to the clock that accepted the event. HA member
+// events retain their member type so BC/OC continue to report as ptp4l.
+func clockStateMetricProcess(clockType, eventClockType event.ClockType) string {
+	if eventClockType == event.ClockUnset {
+		eventClockType = clockType
+	}
+	if clockType == event.BC || clockType == event.OC ||
+		eventClockType == event.BC || eventClockType == event.OC {
+		return string(event.PTP4l)
+	}
+	return string(eventClockType)
+}
+
 // reset handles a reset event
 func (m *ClockManager) reset(ev event.Event) {
 	debug.ClearState()
@@ -478,6 +493,7 @@ func (m *ClockManager) reset(ev event.Event) {
 		} else {
 			clk.Reset()
 		}
+		m.deleteClockOffsetMetrics(clk.ConfigName(), string(clk.ClockType()))
 	}
 	m.osClock.E3State = event.PTP_NOTSET
 	if ev.Source == event.TS2PHC {
@@ -496,7 +512,7 @@ func (m *ClockManager) updateClockStateMetrics(state event.PTPState, process, iF
 		return
 	}
 	labels := prometheus.Labels{
-		processLabel: process, nodeLabel: m.nodeName, "iface": iFace}
+		processLabel: process, nodeLabel: m.nodeName, ifaceLabel: iFace}
 	switch state {
 	case event.PTP_LOCKED:
 		m.clockMetric.With(labels).Set(event.ClockStateLocked)
@@ -504,6 +520,50 @@ func (m *ClockManager) updateClockStateMetrics(state event.PTPState, process, iF
 		m.clockMetric.With(labels).Set(event.ClockStateHoldover)
 	default:
 		m.clockMetric.With(labels).Set(event.ClockStateFreerun)
+	}
+}
+
+// updateClockOffsetMetric exports an optional clock-provided aggregate offset.
+// It is separate from raw process samples emitted by updateMetrics.
+func (m *ClockManager) updateClockOffsetMetric(cfgName, process string, sample clock.OffsetSample, available bool) {
+	if !available || sample.IFace == "" || sample.IFace == event.LEADING_INTERFACE_UNKNOWN {
+		m.deleteClockOffsetMetrics(cfgName, process)
+		return
+	}
+	if m.offsetMetric == nil {
+		return
+	}
+
+	iface := alias.GetAlias(sample.IFace)
+	if !utils.CheckMetricSanity("PTPMetrics", process, iface) {
+		m.deleteClockOffsetMetrics(cfgName, process)
+		return
+	}
+
+	key := metricKey{cfgName: cfgName, process: process, iface: iface, dataType: event.OFFSET}
+	labels := prometheus.Labels{fromLabel: process, nodeLabel: m.nodeName, processLabel: process, ifaceLabel: iface}
+	if entry, found := m.metricCache[key]; found {
+		entry.labels = labels
+		entry.gauge.With(labels).Set(float64(sample.Offset))
+		m.metricCache[key] = entry
+		return
+	}
+
+	m.offsetMetric.With(labels).Set(float64(sample.Offset))
+	m.metricCache[key] = metricEntry{gauge: m.offsetMetric, labels: labels}
+}
+
+// deleteClockOffsetMetrics removes cached aggregate offset series for cfgName
+// and process.
+func (m *ClockManager) deleteClockOffsetMetrics(cfgName, process string) {
+	for key, entry := range m.metricCache {
+		if key.cfgName != cfgName || key.process != process || key.dataType != event.OFFSET {
+			continue
+		}
+		if entry.gauge != nil {
+			entry.gauge.Delete(entry.labels)
+		}
+		delete(m.metricCache, key)
 	}
 }
 
@@ -615,8 +675,8 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 			dataType: dataType,
 		}
 
-		labels := prometheus.Labels{"from": pName, nodeLabel: m.nodeName,
-			processLabel: string(ev.Source), "iface": iface}
+		labels := prometheus.Labels{fromLabel: pName, nodeLabel: m.nodeName,
+			processLabel: string(ev.Source), ifaceLabel: iface}
 
 		if entry, found := m.metricCache[key]; found {
 			entry.labels = labels
@@ -637,7 +697,7 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 						Subsystem: event.PTPSubsystem,
 						Name:      metricName,
 						Help:      event.ValueTypeHelpTxt[dataType],
-					}, []string{"from", nodeLabel, processLabel, "iface"})
+					}, []string{fromLabel, nodeLabel, processLabel, ifaceLabel})
 				glog.Infof("trying to register metrics %s for %s", metricName, dataType)
 				registerMetrics(gauge)
 				m.registeredGauges[metricName] = gauge

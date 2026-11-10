@@ -6,6 +6,14 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 )
 
+// OffsetSample carries an aggregate offset and the interface label identifying
+// its metric series. The label does not imply that the value came only from
+// that interface.
+type OffsetSample struct {
+	IFace  string
+	Offset int64
+}
+
 // Clock represents a PTP clock instance tied to a specific config profile.
 type Clock interface {
 	AddEvent(ev event.Event) SyncState
@@ -19,6 +27,8 @@ type Clock interface {
 	ConfigNames() []string
 	ClockType() event.ClockType
 	ClockClass() fbprotocol.ClockClass
+	// ClockOffsetMetric returns the clock's aggregate offset when available.
+	ClockOffsetMetric() (OffsetSample, bool)
 	SetIPC(func(message ipc.Message))
 	SetEventLoopbackFunc(f func(event.Event))
 	GetData(processName event.EventSource) *event.Data
