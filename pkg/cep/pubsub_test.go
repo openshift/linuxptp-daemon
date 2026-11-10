@@ -43,6 +43,15 @@ func testPubSub(t *testing.T, writers map[string]*bytes.Buffer) *PubSub {
 	})
 }
 
+func TestMarshalCloudEventID(t *testing.T) {
+	data, id, err := marshalCloudEvent(makeTestEvent(testPTPLockState))
+	require.NoError(t, err)
+
+	var got ce.Event
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, got.ID(), id)
+}
+
 func TestSubscribe(t *testing.T) {
 	t.Run("single subscription", func(t *testing.T) {
 		ps := testPubSub(t, nil)

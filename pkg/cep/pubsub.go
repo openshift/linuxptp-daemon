@@ -1,6 +1,7 @@
 package cep
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -169,30 +170,39 @@ func (ps *PubSub) getTargets(source string) []publishTarget {
 	return targets
 }
 
-// marshalCloudEvent converts an event to its newline-terminated CloudEvent JSON wire form.
-func marshalCloudEvent(e *event.Event) ([]byte, error) {
+// marshalCloudEvent returns the newline-terminated CloudEvent JSON and its generated ID.
+func marshalCloudEvent(e *event.Event) ([]byte, string, error) {
 	ce, err := e.NewCloudEventV2()
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert event to CloudEvent: %w", err)
+		return nil, "", fmt.Errorf("failed to convert event to CloudEvent: %w", err)
 	}
 	data, err := json.Marshal(ce)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal CloudEvent: %w", err)
+		return nil, "", fmt.Errorf("failed to marshal CloudEvent: %w", err)
 	}
-	return append(data, '\n'), nil
+	return append(data, '\n'), ce.ID(), nil
+}
+
+func logPublishingEvent(eventID string, data []byte) {
+	var pretty bytes.Buffer
+	_ = json.Indent(&pretty, data[:len(data)-1], "", "  ")
+	glog.Infof("Publishing event %s: '%s'", eventID, pretty.String())
 }
 
 // Publish converts the event to a CloudEvent and delivers it to all matching subscribers.
 func (ps *PubSub) Publish(e *event.Event) {
-	data, err := marshalCloudEvent(e)
+	data, eventID, err := marshalCloudEvent(e)
 	if err != nil {
 		glog.Error(err)
 		return
 	}
+	logPublishingEvent(eventID, data)
 
 	for _, t := range ps.getTargets(e.Source) {
 		if _, writeErr := t.w.Write(data); writeErr != nil {
 			glog.Errorf("failed to write event to subscriber %s: %v", t.id, writeErr)
+		} else {
+			glog.Infof("Event %s sent to subscriber %s", eventID, t.id)
 		}
 	}
 }
@@ -200,7 +210,7 @@ func (ps *PubSub) Publish(e *event.Event) {
 // PublishToID delivers the event to a single subscription by ID, if it exists and has a writer.
 // It is used to send the initial status notification required on subscription creation.
 func (ps *PubSub) PublishToID(id string, e *event.Event) {
-	data, err := marshalCloudEvent(e)
+	data, eventID, err := marshalCloudEvent(e)
 	if err != nil {
 		glog.Error(err)
 		return
@@ -219,8 +229,11 @@ func (ps *PubSub) PublishToID(id string, e *event.Event) {
 	if w == nil {
 		return
 	}
+	logPublishingEvent(eventID, data)
 	if _, writeErr := w.Write(data); writeErr != nil {
 		glog.Errorf("failed to write initial notification to subscriber %s: %v", id, writeErr)
+	} else {
+		glog.Infof("Initial event %s sent to subscriber %s", eventID, id)
 	}
 }
 
