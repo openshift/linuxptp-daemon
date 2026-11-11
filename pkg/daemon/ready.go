@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	utilwait "k8s.io/apimachinery/pkg/util/wait"
@@ -100,11 +102,21 @@ func (h readyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type portAliasesHandler struct{}
+
+func (portAliasesHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(alias.GetAllAliases()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 // StartReadyServer ...
 func StartReadyServer(bindAddress string, tracker *ReadyTracker) {
 	glog.Info("Starting Ready Server")
 	mux := http.NewServeMux()
 	mux.Handle("/ready", readyHandler{tracker: tracker})
+	mux.Handle("/port-aliases", portAliasesHandler{})
 	go utilwait.Until(func() {
 		err := http.ListenAndServe(bindAddress, mux)
 		if err != nil {
