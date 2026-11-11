@@ -7,9 +7,11 @@ import (
 	"time"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/prometheus/client_golang/prometheus"
@@ -26,6 +28,138 @@ type fixedStateClock struct {
 }
 
 func (c fixedStateClock) GetState() event.PTPState { return c.state }
+
+type fixedOffsetMetricClock struct {
+	clock.Clock
+	cfgName   string
+	clockType event.ClockType
+	syncState clock.SyncState
+}
+
+func (c *fixedOffsetMetricClock) AddEvent(event.Event) clock.SyncState { return c.syncState }
+func (c *fixedOffsetMetricClock) GetState() event.PTPState             { return c.syncState.State }
+func (c *fixedOffsetMetricClock) ClockType() event.ClockType           { return c.clockType }
+func (c *fixedOffsetMetricClock) ConfigName() string                   { return c.cfgName }
+func (c *fixedOffsetMetricClock) ProcessData() []*event.Data           { return nil }
+
+func (c *fixedOffsetMetricClock) ClockOffsetMetric() (clock.OffsetSample, bool) {
+	if c.syncState.State == event.PTP_NOTSET || c.syncState.LeadingIFace == "" ||
+		c.syncState.LeadingIFace == event.LEADING_INTERFACE_UNKNOWN {
+		return clock.OffsetSample{}, false
+	}
+	return clock.OffsetSample{IFace: c.syncState.LeadingIFace, Offset: c.syncState.ClockOffset}, true
+}
+
+func TestClockStateMetricProcess(t *testing.T) {
+	tests := []struct {
+		name           string
+		clockType      event.ClockType
+		eventClockType event.ClockType
+		want           string
+	}{
+		{
+			name:      "T-BC fallback for event without clock type",
+			clockType: event.TBC,
+			want:      string(event.TBC),
+		},
+		{
+			name:      "GM fallback for event without clock type",
+			clockType: event.GM,
+			want:      string(event.GM),
+		},
+		{
+			name:      "BC uses ptp4l process label",
+			clockType: event.BC,
+			want:      string(event.PTP4l),
+		},
+		{
+			name:           "HA BC member uses ptp4l process label",
+			clockType:      event.HA,
+			eventClockType: event.BC,
+			want:           string(event.PTP4l),
+		},
+		{
+			name:           "HA OC member uses ptp4l process label",
+			clockType:      event.HA,
+			eventClockType: event.OC,
+			want:           string(event.PTP4l),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, clockStateMetricProcess(tt.clockType, tt.eventClockType))
+		})
+	}
+}
+
+func TestClockManager_EmitsClockProvidedOffsetMetric(t *testing.T) {
+	const cfgName = "ptp4l.tbc-metric.config"
+	const nodeName = "tbc-offset-metric-test"
+	const processName = "GM"
+	const ifaceName = "clock-metric-iface"
+	offsetMetric := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "tbc_test_offset_ns"},
+		[]string{fromLabel, processLabel, nodeLabel, ifaceLabel},
+	)
+	cm := Init(nodeName, make(chan event.Event), offsetMetric, nil, nil, nil)
+	clk := &fixedOffsetMetricClock{
+		cfgName:   cfgName,
+		clockType: event.GM,
+		syncState: clock.SyncState{
+			State:        event.PTP_LOCKED,
+			ClockOffset:  42,
+			LeadingIFace: ifaceName,
+		},
+	}
+	cm.clocks[cfgName] = clk
+
+	labels := func(iface string) prometheus.Labels {
+		return prometheus.Labels{
+			fromLabel: processName, processLabel: processName,
+			nodeLabel: nodeName, ifaceLabel: alias.GetAlias(iface),
+		}
+	}
+	cm.ProcessEvent(event.Event{Source: event.PMC, CfgName: cfgName, Data: &event.ParentDSData{}})
+	metricLabels := labels(ifaceName)
+	assert.Equal(t, float64(42), testutil.ToFloat64(offsetMetric.With(metricLabels)))
+
+	clk.syncState = clock.SyncState{
+		State:        event.PTP_LOCKED,
+		ClockOffset:  43,
+		LeadingIFace: ifaceName,
+	}
+	cm.ProcessEvent(event.Event{Source: event.PMC, CfgName: cfgName, Data: &event.ParentDSData{}})
+	assert.Equal(t, float64(43), testutil.ToFloat64(offsetMetric.With(metricLabels)))
+
+	cm.unregisterMetrics(cfgName, processName)
+	assert.False(t, offsetMetric.Delete(metricLabels), "aggregate series should be removable through the metric cache")
+}
+
+func TestClockManagerResetDeletesAggregateTBCOffsetMetric(t *testing.T) {
+	const cfgName = "ptp4l.tbc-reset-metric.config"
+	const nodeName = "tbc-offset-reset-test"
+	offsetMetric := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "tbc_reset_test_offset_ns"},
+		[]string{fromLabel, processLabel, nodeLabel, ifaceLabel},
+	)
+	cm := Init(nodeName, make(chan event.Event), offsetMetric, nil, nil, nil)
+	tbc, err := clock.NewTBC(cfgName, cm.GetUtcOffset, &pmc.MockClient{}, "")
+	require.NoError(t, err)
+	require.NoError(t, cm.AddClock(tbc))
+	const ifaceName = "tbc-reset-iface"
+	cm.updateClockOffsetMetric(cfgName, string(event.TBC), clock.OffsetSample{
+		IFace: ifaceName, Offset: 7,
+	}, true)
+	labels := prometheus.Labels{
+		fromLabel: string(event.TBC), processLabel: string(event.TBC),
+		nodeLabel: nodeName, ifaceLabel: alias.GetAlias(ifaceName),
+	}
+	assert.Equal(t, float64(7), testutil.ToFloat64(offsetMetric.With(labels)))
+
+	cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: cfgName, Reset: true})
+	assert.False(t, offsetMetric.Delete(labels), "reset should delete the aggregate T-BC series")
+}
 
 // SnapshotStatsForTest exposes filtered snapshots only to tests, not production callers.
 func SnapshotStatsForTest(m *ClockManager, requests []process.StatsRequest) process.EventStats {
