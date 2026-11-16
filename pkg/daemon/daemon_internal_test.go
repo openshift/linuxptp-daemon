@@ -343,11 +343,11 @@ func Test_applyProfile_TBC(t *testing.T) {
 	}{
 		{
 			dataFile:          "testdata/profile-tbc-tt.yaml",
-			expectedProcesses: []string{ptp4lProcessName},
+			expectedProcesses: []string{event.Ptp4lProcessName},
 		},
 		{
 			dataFile:          "testdata/profile-tbc-tr.yaml",
-			expectedProcesses: []string{ptp4lProcessName, ptp4lProcessName, ts2phcProcessName, phc2sysProcessName},
+			expectedProcesses: []string{event.Ptp4lProcessName, event.Ptp4lProcessName, event.Ts2PhcProcessName, event.Phc2SysProcessName},
 		},
 	}
 	stopCh := make(<-chan struct{})
@@ -404,14 +404,14 @@ func Test_applyProfile_TBC(t *testing.T) {
 		actualProcesses := []string{}
 		for _, p := range dn.processManager.process {
 			actualProcesses = append(actualProcesses, p.Name())
-			if p.Name() == phc2sysProcessName {
+			if p.Name() == event.Phc2SysProcessName {
 				cond := process.GetCondition(p, process.ActionStart, process.Immediate{})
 				offsetCond, ok := cond.(process.OnStateAndOffsetForCount)
 				assert.True(t, ok, "T-BC phc2sys must wait on ptp4l lock/offset, got %s", cond)
 				assert.Equal(t, event.PTP4l, offsetCond.Source)
 				assert.True(t, strings.HasPrefix(offsetCond.ConfigName, "ptp4l."), offsetCond.ConfigName)
 			}
-			if p.Name() == ts2phcProcessName {
+			if p.Name() == event.Ts2PhcProcessName {
 				cond := process.GetCondition(p, process.ActionStart, process.Immediate{})
 				assert.NotEqual(t, process.Immediate{}, cond, "Ensure ts2phc is startup-delayed for T-BC")
 			}
@@ -470,7 +470,7 @@ func Test_applyProfile_DualNICBCHAClockType(t *testing.T) {
 	}
 
 	for _, proc := range dn.processManager.process {
-		if ptpProc, ok := proc.(*ptpProcess); ok && ptpProc.Name() == phc2sysProcessName {
+		if ptpProc, ok := proc.(*ptpProcess); ok && ptpProc.Name() == event.Phc2SysProcessName {
 			assert.Equal(t, string(event.SysClock), reportedClockType(ptpProc))
 			assert.Equal(t, process.Immediate{}, process.GetCondition(ptpProc, process.ActionStart, process.Immediate{}))
 			assert.ElementsMatch(t, []string{"ens1f0", "ens1f1"}, ptpProc.haProfile["bc1"])
@@ -525,14 +525,14 @@ func Test_applyProfile_TGM(t *testing.T) {
 			continue
 		}
 		switch ptp.Name() {
-		case ts2phcProcessName:
+		case event.Ts2PhcProcessName:
 			ts2phcProc = ptp
 			cond := process.GetCondition(ptp, process.ActionStart, process.Immediate{})
 			_, isTBCDelay := cond.(process.OnPluginEvent)
 			assert.False(t, isTBCDelay, "T-GM ts2phc must not have a delayed start condition")
-		case ptp4lProcessName:
+		case event.Ptp4lProcessName:
 			ptp4lProc = ptp
-		case phc2sysProcessName:
+		case event.Phc2SysProcessName:
 			cond := process.GetCondition(ptp, process.ActionStart, process.Immediate{})
 			var offsetCond process.OnStateAndOffsetForCount
 			offsetCond, isOffsetCond := cond.(process.OnStateAndOffsetForCount)
@@ -548,8 +548,8 @@ func Test_applyProfile_TGM(t *testing.T) {
 		for i, d := range ts2phcProc.depProcess {
 			depNames[i] = d.Name()
 		}
-		assert.Contains(t, depNames, GPSD_PROCESSNAME, "gpsd must be a dependent process of ts2phc for T-GM")
-		assert.Contains(t, depNames, GPSPIPE_PROCESSNAME, "gpspipe must be a dependent process of ts2phc for T-GM")
+		assert.Contains(t, depNames, event.GpsdProcessName, "gpsd must be a dependent process of ts2phc for T-GM")
+		assert.Contains(t, depNames, event.GpsPipeProcessName, "gpspipe must be a dependent process of ts2phc for T-GM")
 
 		for _, d := range ts2phcProc.depProcess {
 			if gpsd, ok := d.(*GPSD); ok {
@@ -2525,8 +2525,8 @@ func TestReady_NoProcesses(t *testing.T) {
 
 func TestReady_AllRunningWithMetrics(t *testing.T) {
 	rt := makeReadyTracker(asProcesses(
-		readyProc(ptp4lProcessName, false, true, false),
-		readyProc(phc2sysProcessName, false, true, false),
+		readyProc(event.Ptp4lProcessName, false, true, false),
+		readyProc(event.Phc2SysProcessName, false, true, false),
 	))
 	ok, msg := rt.Ready()
 	assert.True(t, ok, msg)
@@ -2534,21 +2534,21 @@ func TestReady_AllRunningWithMetrics(t *testing.T) {
 
 func TestReady_StoppedProcessReportsNotReady(t *testing.T) {
 	rt := makeReadyTracker(asProcesses(
-		readyProc(ptp4lProcessName, false, true, false),
-		readyProc(phc2sysProcessName, true, false, false),
+		readyProc(event.Ptp4lProcessName, false, true, false),
+		readyProc(event.Phc2SysProcessName, true, false, false),
 	))
 	ok, msg := rt.Ready()
 	assert.False(t, ok)
 	assert.Contains(t, msg, "Stopped")
-	assert.Contains(t, msg, phc2sysProcessName)
+	assert.Contains(t, msg, event.Phc2SysProcessName)
 }
 
 func TestReady_DelayedPhc2sysNotReportedAsStopped(t *testing.T) {
 	// phc2sys is intentionally delayed (start condition set): the pod
 	// should be considered ready without it.
 	rt := makeReadyTracker(asProcesses(
-		readyProc(ptp4lProcessName, false, true, false),
-		readyProc(phc2sysProcessName, true, false, true),
+		readyProc(event.Ptp4lProcessName, false, true, false),
+		readyProc(event.Phc2SysProcessName, true, false, true),
 	))
 	ok, msg := rt.Ready()
 	assert.True(t, ok, msg)
@@ -2556,9 +2556,9 @@ func TestReady_DelayedPhc2sysNotReportedAsStopped(t *testing.T) {
 
 func TestReady_DelayedTs2phcNotReportedAsStopped(t *testing.T) {
 	rt := makeReadyTracker(asProcesses(
-		readyProc(ptp4lProcessName, false, true, false),
-		readyProc(ts2phcProcessName, true, false, true),
-		readyProc(phc2sysProcessName, true, false, true),
+		readyProc(event.Ptp4lProcessName, false, true, false),
+		readyProc(event.Ts2PhcProcessName, true, false, true),
+		readyProc(event.Phc2SysProcessName, true, false, true),
 	))
 	ok, msg := rt.Ready()
 	assert.True(t, ok, msg)
@@ -2567,7 +2567,7 @@ func TestReady_DelayedTs2phcNotReportedAsStopped(t *testing.T) {
 func TestReady_NilProcessEntrySkipped(t *testing.T) {
 	// nil slots in the process slice must not panic.
 	rt := makeReadyTracker([]process.Process{
-		readyProc(ptp4lProcessName, false, true, false),
+		readyProc(event.Ptp4lProcessName, false, true, false),
 		nil,
 	})
 	ok, msg := rt.Ready()
@@ -2575,7 +2575,7 @@ func TestReady_NilProcessEntrySkipped(t *testing.T) {
 }
 
 func TestReady_DelayedHaPhc2sysNotReportedAsStopped(t *testing.T) {
-	haPhc2sys := readyProc(phc2sysProcessName, true, false, false)
+	haPhc2sys := readyProc(event.Phc2SysProcessName, true, false, false)
 	haPhc2sys.conditions = map[process.Action]process.Condition{
 		process.ActionStart: process.Any{Conditions: []process.Condition{
 			process.OnStateAndOffsetForCount{ClockID: "ptp4l.0.config", ConfigName: "ptp4l.0.config", Source: event.PTP4l},
@@ -2583,7 +2583,7 @@ func TestReady_DelayedHaPhc2sysNotReportedAsStopped(t *testing.T) {
 		}},
 	}
 	rt := makeReadyTracker(asProcesses(
-		readyProc(ptp4lProcessName, false, true, false),
+		readyProc(event.Ptp4lProcessName, false, true, false),
 		haPhc2sys,
 	))
 	ok, msg := rt.Ready()
@@ -2594,7 +2594,7 @@ func TestReady_AllProcessesDelayed(t *testing.T) {
 	// If every process has a delayed start condition (e.g. a phc2sys-only HA profile
 	// where ptp4l lives in separate profiles), the pod must not report ready.
 	rt := makeReadyTracker(asProcesses(
-		readyProc(phc2sysProcessName, true, false, true),
+		readyProc(event.Phc2SysProcessName, true, false, true),
 	))
 	ok, msg := rt.Ready()
 	assert.False(t, ok)
@@ -2616,18 +2616,18 @@ func TestProcessStatusHelperDoesNotSetMetric(t *testing.T) {
 func TestFindProcessesByName(t *testing.T) {
 	pm := &ProcessManager{
 		process: asProcesses(
-			&ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName}},
-			&ptpProcess{ExecProcess: ExecProcess{name: phc2sysProcessName}},
-			&ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName}},
+			&ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName}},
+			&ptpProcess{ExecProcess: ExecProcess{name: event.Phc2SysProcessName}},
+			&ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName}},
 		),
 	}
 
-	procs := pm.findProcessesByName(ptp4lProcessName)
+	procs := pm.findProcessesByName(event.Ptp4lProcessName)
 	assert.Equal(t, 2, len(procs))
-	assert.Equal(t, ptp4lProcessName, procs[0].Name())
-	assert.Equal(t, ptp4lProcessName, procs[1].Name())
+	assert.Equal(t, event.Ptp4lProcessName, procs[0].Name())
+	assert.Equal(t, event.Ptp4lProcessName, procs[1].Name())
 
-	procs = pm.findProcessesByName(phc2sysProcessName)
+	procs = pm.findProcessesByName(event.Phc2SysProcessName)
 	assert.Equal(t, 1, len(procs))
 
 	procs = pm.findProcessesByName("nonexistent")
@@ -2697,7 +2697,7 @@ func TestChronydConf_ResolveInterfaceNames(t *testing.T) {
 	conf := "binddevice ens5f0\nbindacqdevice ens5f1\nhwtimestamp ens5f0 minpoll 0\nhwtimestamp *\nallow 10.0.0.0/8"
 	profile := &ptpv1.PtpProfile{ChronydConf: &conf}
 	resolver := network.NewInterfaceResolverWithInterfaces([]string{"ens5f0np0", "ens5f1np1", "*np0"})
-	p := &ptpProcess{ExecProcess: ExecProcess{name: chronydProcessName}}
+	p := &ptpProcess{ExecProcess: ExecProcess{name: event.ChronydProcessName}}
 	output, _, err := p.loadProcessConf(ptpProcessEnv{
 		nodeProfile: profile,
 		dn:          &Daemon{interfaceResolver: resolver},
@@ -2727,7 +2727,7 @@ func TestTs2PhcConf_ResolveTodSource(t *testing.T) {
 			conf := "[global]\nts2phc.tod_source " + tt.source + "\n[nmea]\nts2phc.master 1"
 			profile := &ptpv1.PtpProfile{Ts2PhcConf: &conf}
 			resolver := network.NewInterfaceResolverWithInterfaces([]string{"ens5f0np0", "genericnp0", "nmeanp0"})
-			p := &ptpProcess{ExecProcess: ExecProcess{name: ts2phcProcessName}}
+			p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ts2PhcProcessName}}
 			output, _, err := p.loadProcessConf(ptpProcessEnv{
 				nodeProfile: profile,
 				dn:          &Daemon{interfaceResolver: resolver},
@@ -2759,9 +2759,9 @@ func TestUpdateClockStateMetrics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.state, func(t *testing.T) {
-			updateClockStateMetrics(ptp4lProcessName, testDUTLeadingIface, tt.state, "")
+			updateClockStateMetrics(event.Ptp4lProcessName, testDUTLeadingIface, tt.state, "")
 			gauge, err := ClockState.GetMetricWith(prometheus.Labels{
-				labelProcess: ptp4lProcessName, labelNode: NodeName, labelIface: testDUTLeadingIface,
+				labelProcess: event.Ptp4lProcessName, labelNode: NodeName, labelIface: testDUTLeadingIface,
 			})
 			assert.NoError(t, err)
 			actual := testutil.ToFloat64(gauge)
@@ -2797,11 +2797,11 @@ func TestDeleteMetrics_CleansPhc2sysProcessSeries(t *testing.T) {
 			ProcessStatus.Reset()
 			ProcessRestartCount.Reset()
 
-			UpdateProcessStatusMetrics(phc2sysProcessName, tt.metricCfgName, PtpProcessUp)
+			UpdateProcessStatusMetrics(event.Phc2SysProcessName, tt.metricCfgName, PtpProcessUp)
 			assert.Equal(t, 1, testutil.CollectAndCount(ProcessStatus))
 			assert.Equal(t, 1, testutil.CollectAndCount(ProcessRestartCount))
 
-			deleteMetrics(nil, nil, phc2sysProcessName, "phc2sys.1.config", "[ptp4l.1.config:{level}]")
+			deleteMetrics(nil, nil, event.Phc2SysProcessName, "phc2sys.1.config", "[ptp4l.1.config:{level}]")
 
 			assert.Equal(t, 0, testutil.CollectAndCount(ProcessStatus))
 			assert.Equal(t, 0, testutil.CollectAndCount(ProcessRestartCount))

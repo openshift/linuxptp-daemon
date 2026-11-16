@@ -62,31 +62,39 @@ var ValueTypeHelpTxt = map[ValueType]string{
 	PROCESS_STATUS:   "0 = DOWN, 1 = UP",
 }
 
-// PTP4lProcessName ...
-const PTP4lProcessName = "ptp4l"
-
-// TS2PHCProcessName ...
-const TS2PHCProcessName = "ts2phc"
-
-// SYNCEProcessName ...
-const SYNCEProcessName = "synce"
+// Process names identify the daemon processes and parser sources.
+const (
+	Ptp4lProcessName   = "ptp4l"
+	Phc2SysProcessName = "phc2sys"
+	Ts2PhcProcessName  = "ts2phc"
+	Synce4lProcessName = "synce4l"
+	ChronydProcessName = "chronyd"
+	DpllProcessName    = "dpll"
+	GmProcessName      = "gm"
+	GnssProcessName    = "gnss"
+	GpsdProcessName    = "gpsd"
+	GpsPipeProcessName = "gpspipe"
+	PMCProcessName     = "pmc"
+	SynceProcessName   = "synce"
+)
 
 // EventSource ...
 type EventSource string
 
+// Event sources identify the origin of a clock event.
 const (
-	GNSS       EventSource = "gnss"
-	DPLL       EventSource = "dpll"
-	TS2PHC     EventSource = "ts2phc"
-	PTP4l      EventSource = "ptp4l"
-	PHC2SYS    EventSource = "phc2sys"
+	GNSS       EventSource = EventSource(GnssProcessName)
+	DPLL       EventSource = EventSource(DpllProcessName)
+	TS2PHC     EventSource = EventSource(Ts2PhcProcessName)
+	PTP4l      EventSource = EventSource(Ptp4lProcessName)
+	PHC2SYS    EventSource = EventSource(Phc2SysProcessName)
 	PPS        EventSource = "1pps"
-	SYNCE      EventSource = "synce4l"
-	CHRONYD    EventSource = "chronyd"
+	SYNCE      EventSource = EventSource(Synce4lProcessName)
+	CHRONYD    EventSource = EventSource(ChronydProcessName)
 	MONITORING EventSource = "monitoring"
-	PMC        EventSource = "pmc"
-	GPSD       EventSource = "gpsd"
-	GPSPIPE    EventSource = "gpspipe"
+	PMC        EventSource = EventSource(PMCProcessName)
+	GPSD       EventSource = EventSource(GpsdProcessName)
+	GPSPIPE    EventSource = EventSource(GpsPipeProcessName)
 )
 
 // PTPState ...

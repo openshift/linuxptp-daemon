@@ -370,16 +370,16 @@ func TestApplyNodePtpProfileStartupConditions(t *testing.T) {
 	t.Run("T-GM", func(t *testing.T) {
 		ct := NewCondiitonsTester(t, event.GM)
 		processes, _ := applyProfilesWithStubProcesses(t, ct, "profile-tgm.yaml")
-		ts2phc := findStubProcess(processes, ts2phcProcessName)
-		phc2sys := findStubProcess(processes, phc2sysProcessName)
+		ts2phc := findStubProcess(processes, event.Ts2PhcProcessName)
+		phc2sys := findStubProcess(processes, event.Phc2SysProcessName)
 		require.NotNil(t, ts2phc)
 		require.NotNil(t, phc2sys)
 
 		ct.StartProcesses()
 		ct.StartCM()
 		assert.Zero(t, ts2phc.Starts(), "T-GM ts2phc must wait for its constructed process-up condition")
-		gpsd := findStubProcess(processes, GPSD_PROCESSNAME)
-		gpspipe := findStubProcess(processes, GPSPIPE_PROCESSNAME)
+		gpsd := findStubProcess(processes, event.GpsdProcessName)
+		gpspipe := findStubProcess(processes, event.GpsPipeProcessName)
 		require.NotNil(t, gpsd)
 		require.NotNil(t, gpspipe)
 		ct.SendProcessStatus(event.GPSD, gpsd.ConfigName(), PtpProcessUp)
@@ -396,20 +396,20 @@ func TestApplyNodePtpProfileStartupConditions(t *testing.T) {
 		processes, profiles := applyProfilesWithStubProcesses(t, ct, "profile-tbc-tt.yaml", "profile-tbc-tr.yaml")
 		ttProfileName := *profiles[0].Name
 		trProfileName := *profiles[1].Name
-		phc2sys := findStubProcessForProfile(processes, phc2sysProcessName, trProfileName)
-		ts2phc := findStubProcessForProfile(processes, ts2phcProcessName, trProfileName)
-		ptp4l := findStubProcessForProfile(processes, ptp4lProcessName, trProfileName)
+		phc2sys := findStubProcessForProfile(processes, event.Phc2SysProcessName, trProfileName)
+		ts2phc := findStubProcessForProfile(processes, event.Ts2PhcProcessName, trProfileName)
+		ptp4l := findStubProcessForProfile(processes, event.Ptp4lProcessName, trProfileName)
 		require.NotNil(t, phc2sys)
 		require.NotNil(t, ts2phc)
 		require.NotNil(t, ptp4l)
-		require.NotNil(t, findStubProcessForProfile(processes, ptp4lProcessName, ttProfileName))
+		require.NotNil(t, findStubProcessForProfile(processes, event.Ptp4lProcessName, ttProfileName))
 
 		ct.StartProcesses()
 		ct.StartCM()
 		assert.Zero(t, phc2sys.Starts())
 		assert.Zero(t, ts2phc.Starts())
 		for _, ptp4lProcess := range processes {
-			if ptp4lProcess.Name() == ptp4lProcessName {
+			if ptp4lProcess.Name() == event.Ptp4lProcessName {
 				ct.SendProcessStatus(event.PTP4l, ptp4lProcess.ConfigName(), PtpProcessUp)
 			}
 		}
@@ -505,14 +505,14 @@ func TestForwardEvents_ProcessStatusDownDeadRestarts(t *testing.T) {
 func TestProcessStatusEventsUpdateMetrics(t *testing.T) {
 	const configName = "phc2sys.999.config"
 	ct := NewCondiitonsTester(t, event.BC)
-	ct.AddProcess(&stubProcess{name: phc2sysProcessName, cfgName: configName, state: process.Running})
+	ct.AddProcess(&stubProcess{name: event.Phc2SysProcessName, cfgName: configName, state: process.Running})
 	ct.StartPM()
 
-	status := ProcessStatus.WithLabelValues(phc2sysProcessName, NodeName, configName)
-	restarts := ProcessRestartCount.WithLabelValues(phc2sysProcessName, NodeName, configName)
+	status := ProcessStatus.WithLabelValues(event.Phc2SysProcessName, NodeName, configName)
+	restarts := ProcessRestartCount.WithLabelValues(event.Phc2SysProcessName, NodeName, configName)
 	t.Cleanup(func() {
-		ProcessStatus.DeleteLabelValues(phc2sysProcessName, NodeName, configName)
-		ProcessRestartCount.DeleteLabelValues(phc2sysProcessName, NodeName, configName)
+		ProcessStatus.DeleteLabelValues(event.Phc2SysProcessName, NodeName, configName)
+		ProcessRestartCount.DeleteLabelValues(event.Phc2SysProcessName, NodeName, configName)
 	})
 
 	ct.SendProcessStatus(event.PHC2SYS, configName, PtpProcessUp)
@@ -626,7 +626,7 @@ func TestStartProcesses_ImmediateDoesNotCauseProcessToBeRestartedWhileRunning(t 
 func TestEvalActions_StopRunningProcess(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC)
 	phc2sys := ct.AddProcess(&stubProcess{
-		name:  phc2sysProcessName,
+		name:  event.Phc2SysProcessName,
 		state: process.Running,
 		conds: map[process.Action]process.Condition{
 			process.ActionStop: process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
@@ -643,7 +643,7 @@ func TestEvalActions_StopRunningProcess(t *testing.T) {
 func TestEvalActions_StartStoppedProcess(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC)
 	phc2sys := ct.AddProcess(&stubProcess{
-		name:  phc2sysProcessName,
+		name:  event.Phc2SysProcessName,
 		state: process.Stopped,
 		conds: map[process.Action]process.Condition{
 			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
@@ -698,7 +698,7 @@ func TestEvalActions_StartStopChronyD(t *testing.T) {
 func TestEvalActions_StartNotCheckedWhenRunning(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC)
 	phc2sys := ct.AddProcess(&stubProcess{
-		name:  phc2sysProcessName,
+		name:  event.Phc2SysProcessName,
 		state: process.Running,
 		conds: map[process.Action]process.Condition{
 			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
@@ -731,7 +731,7 @@ func TestEvalActions_StartOnlyWhenStopped(t *testing.T) {
 
 func TestEvalActions_NoActionWithoutCondition(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC)
-	stub := ct.AddProcess(&stubProcess{name: ptp4lProcessName, state: process.Running})
+	stub := ct.AddProcess(&stubProcess{name: event.Ptp4lProcessName, state: process.Running})
 	ct.StartPM()
 
 	ct.SendPluginEvent(ntpfailover, generic.GnssRecoveredEventName)
@@ -742,7 +742,7 @@ func TestEvalActions_FailOverStart(t *testing.T) {
 	inbound := make(chan event.Event, 4)
 	handler := make(chan event.Event, 4)
 	phc2sys := &stubProcess{
-		name:  phc2sysProcessName,
+		name:  event.Phc2SysProcessName,
 		state: process.Created,
 		conds: map[process.Action]process.Condition{
 			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
@@ -774,7 +774,7 @@ func TestEvalActions_FailOverStart(t *testing.T) {
 func TestEvalActions_FullFailoverFlow(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC)
 	phc2sys := ct.AddProcess(&stubProcess{
-		name:  phc2sysProcessName,
+		name:  event.Phc2SysProcessName,
 		state: process.Running,
 		conds: map[process.Action]process.Condition{
 			process.ActionStart: process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
@@ -832,7 +832,7 @@ func TestEvalActions_DelayedPhc2sysStartOnSubSecondOffset(t *testing.T) {
 	const count = 3
 	ct := NewCondiitonsTester(t, event.OC, testTs2phcConfig)
 	phc2sys := ct.AddProcess(&stubProcess{
-		name:  phc2sysProcessName,
+		name:  event.Phc2SysProcessName,
 		state: process.Created,
 		conds: map[process.Action]process.Condition{
 			process.ActionStart: process.OnStateAndOffsetForCount{
@@ -866,7 +866,7 @@ func TestEvalActions_DelayedPhc2sysStartOnSubSecondOffset(t *testing.T) {
 func TestEvalActions_DelayedPhc2sysWrongStateDoesNotStart(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC, testTs2phcConfig)
 	phc2sys := ct.AddProcess(&stubProcess{
-		name:  phc2sysProcessName,
+		name:  event.Phc2SysProcessName,
 		state: process.Created,
 		conds: map[process.Action]process.Condition{
 			process.ActionStart: process.OnStateAndOffsetForCount{
@@ -890,7 +890,7 @@ func TestEvalActions_DelayedPhc2sysTBCWaitsForPtp4l(t *testing.T) {
 	const cfgName = "ptp4l.0.config"
 	ct := NewCondiitonsTester(t, event.OC, cfgName, testTs2phcConfig)
 	phc2sys := ct.AddProcess(&stubProcess{
-		name:  phc2sysProcessName,
+		name:  event.Phc2SysProcessName,
 		state: process.Created,
 		conds: map[process.Action]process.Condition{
 			process.ActionStart: process.OnStateAndOffsetForCount{
@@ -919,7 +919,7 @@ func TestEvalActions_DelayedPhc2sysHAProfile(t *testing.T) {
 	master2 := testPtp4l1Config
 	ct := NewCondiitonsTester(t, event.BC, master1, master2)
 	phc2sys := ct.AddProcess(&stubProcess{
-		name:  phc2sysProcessName,
+		name:  event.Phc2SysProcessName,
 		state: process.Created,
 		conds: map[process.Action]process.Condition{
 			process.ActionStart: process.Any{Conditions: []process.Condition{
@@ -1004,8 +1004,8 @@ func TestPhc2sysOffsetStartCondition_HA(t *testing.T) {
 	require.NoError(t, err)
 
 	ct := NewCondiitonsTester(t, event.OC)
-	ct.AddProcess(&ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName, configName: "ptp4l.0.config"}, nodeProfile: &profile1})
-	ct.AddProcess(&ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName, configName: "ptp4l.1.config"}, nodeProfile: &profile2})
+	ct.AddProcess(&ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config"}, nodeProfile: &profile1})
+	ct.AddProcess(&ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.1.config"}, nodeProfile: &profile2})
 
 	c := phc2sysOffsetStartCondition(ct.Env(5, &haProfile, event.TBC, &topology))
 	anyCond, ok := c.(process.Any)

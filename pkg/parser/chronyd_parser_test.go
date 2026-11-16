@@ -3,6 +3,7 @@ package parser_test
 import (
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/stretchr/testify/assert"
@@ -23,7 +24,7 @@ func TestChronydParser(t *testing.T) {
 				Iface:      constants.ClockRealTime,
 				ClockState: constants.ClockStateLocked,
 				Offset:     0,
-				Source:     constants.CHRONYD,
+				Source:     event.ChronydProcessName,
 			},
 		},
 		{
@@ -33,7 +34,7 @@ func TestChronydParser(t *testing.T) {
 				Iface:      constants.ClockRealTime,
 				ClockState: constants.ClockStateFreeRun,
 				Offset:     0,
-				Source:     constants.CHRONYD,
+				Source:     event.ChronydProcessName,
 			},
 		},
 		{
@@ -43,7 +44,7 @@ func TestChronydParser(t *testing.T) {
 				Iface:      constants.ClockRealTime,
 				ClockState: constants.ClockStateLocked,
 				Offset:     0,
-				Source:     constants.CHRONYD,
+				Source:     event.ChronydProcessName,
 			},
 		},
 		{

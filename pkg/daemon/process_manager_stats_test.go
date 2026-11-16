@@ -96,7 +96,7 @@ func TestSourceQualificationStartupAndRestart(t *testing.T) {
 	setQualified(true)
 	setQualified(false) // no historical TRUE may release the pending process
 	waiter := ct.AddProcess(&stubProcess{
-		name: ts2phcProcessName, cfgName: "ts2phc.0.config", state: process.Created,
+		name: event.Ts2PhcProcessName, cfgName: "ts2phc.0.config", state: process.Created,
 		conds: map[process.Action]process.Condition{
 			process.ActionStart: &process.All{Conditions: []process.Condition{
 				process.OnSourceQualified{ConfigName: ptp4lConfig},

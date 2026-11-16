@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 
 	"gonum.org/v1/gonum/stat"
 )
@@ -17,8 +18,6 @@ import (
 const (
 	defaultEnhancedFilterTime   = "30s"
 	defaultOffsetFlushThreshold = "0"
-	ptp4lProcessName            = "ptp4l"
-	phc2sysProcessName          = "phc2sys"
 )
 
 // LogFilter represents a specific filter that can be used to control logging
@@ -87,9 +86,10 @@ func reprLogFilter(filter *LogFilter) string {
 func getLogFiltersEnhanced(processName string, messageTag string, batchLength string, threshold string) []*LogFilter {
 	var logFilters []*LogFilter
 	offsetString := ""
-	if processName == ptp4lProcessName {
+	switch processName {
+	case event.Ptp4lProcessName:
 		offsetString = "master offset"
-	} else if processName == phc2sysProcessName {
+	case event.Phc2SysProcessName:
 		offsetString = "phc offset"
 	}
 

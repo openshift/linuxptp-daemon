@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/addons/generic"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 )
 
@@ -20,7 +21,7 @@ func NewChronydProcess(env ptpProcessEnv) (*chronydProcess, error) {
 	configFile := fmt.Sprintf("chronyd.%d.config", env.runID)
 	configPath := fmt.Sprintf("%s/%s", configPrefix, configFile)
 	messageTag := fmt.Sprintf("[chronyd.%d.config]", env.runID)
-	p := newPtpProcess(chronydProcessName, configFile, configPath, "", messageTag, env.nodeProfile, env.clockType, env.dn)
+	p := newPtpProcess(event.ChronydProcessName, configFile, configPath, "", messageTag, env.nodeProfile, env.clockType, env.dn)
 	output, opts, err := p.loadProcessConf(env)
 	if err != nil {
 		return nil, err
@@ -33,7 +34,7 @@ func NewChronydProcess(env ptpProcessEnv) (*chronydProcess, error) {
 	if err = p.writeProcessConf(output, configOutput); err != nil {
 		return nil, err
 	}
-	p.cmd = buildCmd(buildPtpCmdLine(chronydProcessName, configPath, opts, env.nodeProfile))
+	p.cmd = buildCmd(buildPtpCmdLine(event.ChronydProcessName, configPath, opts, env.nodeProfile))
 	cp := &chronydProcess{ptpProcess: p}
 	cp.conditions = map[process.Action]process.Condition{
 		process.ActionStart: process.OnPluginEvent{EventName: generic.GnssFailoverEventName},

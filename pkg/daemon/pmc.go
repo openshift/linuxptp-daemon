@@ -18,8 +18,6 @@ import (
 )
 
 const (
-	// PMCProcessName is the name identifier for PMC processes
-	PMCProcessName = "pmc"
 	// defaultMonitorWaitInterval bounds how long the monitor loop will block waiting for a NOTIFY_PARENT_DATA_SET push
 	// before it re-polls the parent data set on its own.
 	defaultMonitorWaitInterval = 30 * time.Second
@@ -74,7 +72,7 @@ type PMCProcess struct {
 
 // Name returns the process name.
 func (pmc *PMCProcess) Name() string {
-	return PMCProcessName
+	return event.PMCProcessName
 }
 
 // ConfigName ...
@@ -144,7 +142,7 @@ func (pmc *PMCProcess) Stop() error {
 
 // ProcessStatus processes status updates for the PMC process.
 func (pmc *PMCProcess) ProcessStatus(status int64) {
-	processStatus(PMCProcessName, pmc.messageTag, status)
+	processStatus(event.PMCProcessName, pmc.messageTag, status)
 }
 
 func btof(b bool) string {

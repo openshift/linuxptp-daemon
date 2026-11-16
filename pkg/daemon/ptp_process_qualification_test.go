@@ -80,7 +80,7 @@ func TestSourceQualificationFreshSamplesAndHardware(t *testing.T) {
 			t.Parallel()
 			var actions []bool
 			p := &ptpProcess{
-				ExecProcess:   ExecProcess{name: ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 20)},
+				ExecProcess:   ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 20)},
 				nodeProfile:   &ptpv1.PtpProfile{},
 				tBCAttributes: tBCProcessAttributes{trIfaceNames: []string{"tr0", "tr1"}, perPortState: map[string]event.PTPState{}},
 				sourceQualification: &sourceQualificationRuntime{
@@ -132,7 +132,7 @@ func TestSourceQualificationFreshSamplesAndHardware(t *testing.T) {
 func TestSourceQualificationHardwareFailure(t *testing.T) {
 	t.Parallel()
 	fail := true
-	p := &ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 10)}, nodeProfile: &ptpv1.PtpProfile{},
+	p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 10)}, nodeProfile: &ptpv1.PtpProfile{},
 		tBCAttributes: tBCProcessAttributes{activePort: "tr0", trIfaceNames: []string{"tr0"}, perPortState: map[string]event.PTPState{"tr0": event.PTP_LOCKED}},
 		sourceQualification: &sourceQualificationRuntime{apply: func(bool) error {
 			if fail {
@@ -268,7 +268,7 @@ func TestSourceQualificationParsedPipeline(t *testing.T) {
 		}},
 	}}
 	p := &ptpProcess{
-		ExecProcess: ExecProcess{name: ptp4lProcessName, configName: "ptp4l.0.config", messageTag: "[ptp4l.0.config:{level}]", eventCh: events},
+		ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", messageTag: "[ptp4l.0.config:{level}]", eventCh: events},
 		nodeProfile: profile, clockType: event.TBC, logParser: parser.NewPTP4LExtractor(), ptpClockThreshold: getPTPThreshold(profile),
 		ifaces: config.IFaces{{Name: "tr0"}}, pm: plugins,
 		dn:            &Daemon{processManager: &ProcessManager{clockMgr: cm}},
@@ -346,7 +346,7 @@ func TestSourceQualificationHardwareDoesNotBlockEventPipeline(t *testing.T) {
 	started, release, scanDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	finish := func() { once.Do(func() { close(release) }) }
-	p := &ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName, configName: "ptp4l.0.config", eventCh: in}, nodeProfile: &ptpv1.PtpProfile{},
+	p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: in}, nodeProfile: &ptpv1.PtpProfile{},
 		sourceQualification: &sourceQualificationRuntime{generation: generation, ctx: ctx, apply: func(qualified bool) error {
 			if qualified {
 				close(started)
@@ -413,7 +413,7 @@ func TestSourceQualificationDropsWhenEventChannelFull(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			applied := make(chan bool, 1)
-			p := &ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, tc.capacity)},
+			p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, tc.capacity)},
 				sourceQualification: &sourceQualificationRuntime{ctx: ctx, apply: func(value bool) error { applied <- value; return nil }}}
 			if tc.capacity > 0 {
 				p.eventCh <- event.Event{}
@@ -445,7 +445,7 @@ func TestSourceQualificationTransitionsWaitForDeliveryOrShutdown(t *testing.T) {
 			t.Run(tc.name+"/"+outcome, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				applied := make(chan bool, 1)
-				p := &ptpProcess{ExecProcess: ExecProcess{name: ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 1)},
+				p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 1)},
 					tBCAttributes: tBCProcessAttributes{lastReportedState: event.PTP_FREERUN},
 					sourceQualification: &sourceQualificationRuntime{ctx: ctx, generation: 7,
 						apply: func(value bool) error { applied <- value; return nil }}}

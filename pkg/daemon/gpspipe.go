@@ -18,8 +18,6 @@ import (
 )
 
 const (
-	// GPSPIPE_PROCESSNAME ... gpspipe process name
-	GPSPIPE_PROCESSNAME = "gpspipe"
 	// GPSPIPE_SERIALPORT ... gpspipe serial port
 	GPSPIPE_SERIALPORT = "/gpsd/data"
 	// GPSD_DIR ... gpsd directory
@@ -53,7 +51,7 @@ func NewGpsPipeProcess(messageTag string, nodeProfile *ptpv1.PtpProfile, eventCh
 	args := strings.Split(cmdLine, " ")
 
 	gp := &GpsPipe{
-		name:       GPSPIPE_PROCESSNAME,
+		name:       event.GpsPipeProcessName,
 		cmdLine:    cmdLine,
 		cmd:        NewExecCmd(exec.Command(args[0], args[1:]...)),
 		serialPort: GPSPIPE_SERIALPORT,

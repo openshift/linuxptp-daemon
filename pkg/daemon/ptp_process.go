@@ -319,14 +319,14 @@ func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.Plugin
 // chronyd prefix, plugin processing, clock ID replacement, log filtering,
 // metrics extraction, TBC transition check, and HA failover.
 func (p *ptpProcess) processOutput(output string) string {
-	if p.name == chronydProcessName {
-		output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Pid(), p.messageTag, output)
+	if p.name == event.ChronydProcessName {
+		output = fmt.Sprintf("%s[%d]%s: %s", event.ChronydProcessName, p.cmd.Pid(), p.messageTag, output)
 	}
 	output = p.pm.ProcessLog(p.name, output)
 	output = p.replaceClockID(output)
 	printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 	p.processPTPMetrics(output)
-	if p.name == ptp4lProcessName {
+	if p.name == event.Ptp4lProcessName {
 		if p.profileClockType() == TBC {
 			p.tBCTransitionCheck(output, p.pm)
 		}
@@ -440,7 +440,7 @@ func (p *ptpProcess) run() {
 		processStatus(p.name, p.messageTag, PtpProcessUp)
 		sendProcessStatusEvent(p.eventCh, event.EventSource(p.name), p.configName, p.clockType, "", PtpProcessUp)
 
-		if p.name == ts2phcProcessName {
+		if p.name == event.Ts2PhcProcessName {
 			p.resetPollCycle()
 		}
 		p.runScanner(cmdReader)
@@ -449,7 +449,7 @@ func (p *ptpProcess) run() {
 			glog.Errorf("CmdRun() error waiting for %s: %v", p.name, waitErr)
 		}
 
-		if p.profileClockType() == TBC && p.name == ptp4lProcessName {
+		if p.profileClockType() == TBC && p.name == event.Ptp4lProcessName {
 			p.pm.AfterRunPTPCommand(p.nodeProfile, "reset-to-default")
 		}
 	}()
@@ -462,7 +462,7 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 	state := event.PTP_FREERUN
 	if p.logParser != nil {
 		processWithParser(p, output)
-	} else if p.name == syncEProcessName {
+	} else if p.name == event.Synce4lProcessName {
 		configName := strings.Replace(strings.Replace(p.messageTag, "]", "", 1), "[", "", 1)
 		if configName == "" {
 			return
@@ -476,7 +476,7 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
 			var nmeaLocked *bool
 			ifaceName := masterOffsetIface.getByAlias(configName, iface).name
-			if iface != clockRealTime && p.name == ts2phcProcessName {
+			if iface != clockRealTime && p.name == event.Ts2PhcProcessName {
 				eventSource := p.ifaces.GetEventSource(ifaceName)
 				if eventSource == event.GNSS {
 					nmeaLocked = utils.ToPtr(true)
@@ -551,7 +551,7 @@ func (p *ptpProcess) processTs2PhcEvents(ptpOffset float64, source string, iface
 		ptpState = event.PTP_FREERUN
 	}
 
-	if source == ts2phcProcessName { // for ts2phc send it to event to create metrics and events
+	if source == event.Ts2PhcProcessName { // for ts2phc send it to event to create metrics and events
 		select {
 		case p.eventCh <- event.Event{
 			Source:     event.TS2PHC,
@@ -586,7 +586,7 @@ func (p *ptpProcess) processTs2PhcEvents(ptpOffset float64, source string, iface
 
 // linuxptp 4.2 uses ptp device id ; this function will replace the ptp device id by the interface name
 func (p *ptpProcess) replaceClockID(input string) (output string) {
-	if p.name != ts2phcProcessName {
+	if p.name != event.Ts2PhcProcessName {
 		return input
 	}
 	// replace only for value with offset
@@ -645,7 +645,7 @@ func (p *ptpProcess) updateGMStatusOnProcessDown(process string) {
 	// TODO refactor into tsphc specific process
 
 	// need to update GM status for  following process kill for  ts2phc
-	if process == ts2phcProcessName {
+	if process == event.Ts2PhcProcessName {
 		// ts2phc process dead should update GM-STATUS
 		// Reset the entire event subsystem
 		// (this nullifies the remaining pieces in the event data if ts2phc was killed during ptp profile change)
@@ -710,9 +710,9 @@ func (p *ptpProcess) processSynceEvents(logEntry synce.LogEntry) {
 				})
 				data.State = sDeviceConfig.LastClockState
 				populated = true
-				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", logEntry.QL)
-				UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.QL_DEFAULT_ENHSSM)
-				UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.QL_DEFAULT_ENHSSM))
+				UpdateSynceQLMetrics(event.Synce4lProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", logEntry.QL)
+				UpdateSynceQLMetrics(event.Synce4lProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", synce.QL_DEFAULT_ENHSSM)
+				UpdateSynceClockQlMetrics(event.Synce4lProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(logEntry.QL)+int(synce.QL_DEFAULT_ENHSSM))
 			} else if sDeviceConfig.ExtendedTlv == synce.ExtendedTLV_ENABLED {
 				var lastQLState *synce.QualityLevelInfo
 				var ok bool
@@ -737,9 +737,9 @@ func (p *ptpProcess) processSynceEvents(logEntry synce.LogEntry) {
 						Priority:    0,
 					})
 
-					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", lastQLState.SSM)
-					UpdateSynceQLMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", logEntry.ExtQl)
-					UpdateSynceClockQlMetrics(syncEProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(lastQLState.SSM)+int(logEntry.ExtQl))
+					UpdateSynceQLMetrics(event.Synce4lProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "SSM", lastQLState.SSM)
+					UpdateSynceQLMetrics(event.Synce4lProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, "Extended SSM", logEntry.ExtQl)
+					UpdateSynceClockQlMetrics(event.Synce4lProcessName, p.configName, iface, sDeviceConfig.NetworkOption, sDeviceConfig.Name, int(lastQLState.SSM)+int(logEntry.ExtQl))
 
 					data.State = sDeviceConfig.LastClockState
 					populated = true
@@ -941,20 +941,20 @@ func (p *ptpProcess) profileClockType() string {
 
 func optsFor(name string, profile *ptpv1.PtpProfile) *string {
 	switch name {
-	case ptp4lProcessName:
+	case event.Ptp4lProcessName:
 		if profile.Ptp4lOpts == nil {
 			// ptp4l is still constructed when Opts is omitted (legacy dummy).
 			s := " "
 			return &s
 		}
 		return profile.Ptp4lOpts
-	case phc2sysProcessName:
+	case event.Phc2SysProcessName:
 		return profile.Phc2sysOpts
-	case ts2phcProcessName:
+	case event.Ts2PhcProcessName:
 		return profile.Ts2PhcOpts
-	case syncEProcessName:
+	case event.Synce4lProcessName:
 		return profile.Synce4lOpts
-	case chronydProcessName:
+	case event.ChronydProcessName:
 		return profile.ChronydOpts
 	default:
 		return nil
@@ -963,15 +963,15 @@ func optsFor(name string, profile *ptpv1.PtpProfile) *string {
 
 func confFor(name string, profile *ptpv1.PtpProfile) *string {
 	switch name {
-	case ptp4lProcessName:
+	case event.Ptp4lProcessName:
 		return profile.Ptp4lConf
-	case phc2sysProcessName:
+	case event.Phc2SysProcessName:
 		return profile.Phc2sysConf
-	case ts2phcProcessName:
+	case event.Ts2PhcProcessName:
 		return profile.Ts2PhcConf
-	case syncEProcessName:
+	case event.Synce4lProcessName:
 		return profile.Synce4lConf
-	case chronydProcessName:
+	case event.ChronydProcessName:
 		return profile.ChronydConf
 	default:
 		return nil
@@ -1012,9 +1012,9 @@ func (p *ptpProcess) loadProcessConf(env ptpProcessEnv) (*Ptp4lConf, *string, er
 	if env.dn != nil && env.dn.interfaceResolver != nil {
 		output.ResolveInterfaceNames(env.dn.interfaceResolver)
 		switch p.name {
-		case chronydProcessName:
+		case event.ChronydProcessName:
 			output.ResolveChronydInterfaceNames(env.dn.interfaceResolver)
-		case ts2phcProcessName:
+		case event.Ts2PhcProcessName:
 			output.ResolveTs2PhcInterfaceNames(env.dn.interfaceResolver)
 		}
 	}
@@ -1047,7 +1047,7 @@ func (p *ptpProcess) renderPtp4lConf(env ptpProcessEnv, output *Ptp4lConf, opts 
 	p.addMonitorFlags(output, opts)
 	configOutput, ifaces := output.RenderPtp4lConf()
 	p.ifaces = ifaces
-	if p.name == ts2phcProcessName {
+	if p.name == event.Ts2PhcProcessName {
 		p.resetPollCycle()
 	}
 	return p.writeProcessConf(output, configOutput)
@@ -1069,7 +1069,7 @@ func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	}
 	configFile := getPtp4lConfig(env.runID)
 	p := newPtpProcess(
-		ptp4lProcessName,
+		event.Ptp4lProcessName,
 		configFile,
 		fmt.Sprintf("%s/%s", configPrefix, configFile),
 		getPtp4lSocket(configPrefix, env.runID),
@@ -1090,7 +1090,7 @@ func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
 			p.ifaces[i].Source = event.PTP4l
 		}
 	}
-	p.cmd = buildCmd(buildPtpCmdLine(ptp4lProcessName, p.configPath, opts, env.nodeProfile))
+	p.cmd = buildCmd(buildPtpCmdLine(event.Ptp4lProcessName, p.configPath, opts, env.nodeProfile))
 	p.tBCAttributes = tBCProcessAttributes{
 		trPortsConfigFile: configFile,
 		lastReportedState: event.PTP_NOTSET,
@@ -1145,7 +1145,7 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		messageTag = fmt.Sprintf("[ptp4l.%d.config:{level}]", env.runID)
 	}
 	p := newPtpProcess(
-		phc2sysProcessName,
+		event.Phc2SysProcessName,
 		configFile,
 		configPath,
 		socketPath,
@@ -1167,7 +1167,7 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		*opts += " " + haSocketOpts(env.topology)
 	}
 
-	cmdLine := buildPtpCmdLine(phc2sysProcessName, configPath, opts, env.nodeProfile)
+	cmdLine := buildPtpCmdLine(event.Phc2SysProcessName, configPath, opts, env.nodeProfile)
 	p.cmd = buildCmd(cmdLine)
 	if p.conditions == nil {
 		p.conditions = map[process.Action]process.Condition{}
@@ -1275,7 +1275,7 @@ func NewTs2phcProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	configPath := fmt.Sprintf("%s/%s", configPrefix, configFile)
 	socketPath := fmt.Sprintf("%s/ptp4l.%d.socket", configPrefix, env.runID)
 	messageTag := fmt.Sprintf("[ts2phc.%d.config:{level}]", env.runID)
-	p := newPtpProcess(ts2phcProcessName, configFile, configPath, socketPath, messageTag, env.nodeProfile, env.clockType, env.dn)
+	p := newPtpProcess(event.Ts2PhcProcessName, configFile, configPath, socketPath, messageTag, env.nodeProfile, env.clockType, env.dn)
 	// DPLL is considered to be running along with ts2phc
 	maxInSpecOffset, maxHoldoverOffSet, maxHoldoverTimeout, inSpecTimer, frequencyTraceable := dpll.CalculateTimer(env.nodeProfile)
 	if env.clockType == event.GM {
@@ -1309,7 +1309,7 @@ func NewTs2phcProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	if err = p.renderPtp4lConf(env, output, opts); err != nil {
 		return nil, err
 	}
-	p.cmd = buildCmd(buildPtpCmdLine(ts2phcProcessName, configPath, opts, env.nodeProfile))
+	p.cmd = buildCmd(buildPtpCmdLine(event.Ts2PhcProcessName, configPath, opts, env.nodeProfile))
 	if profileClockType(env.nodeProfile) == TBC && env.dn != nil && p.conditions == nil {
 		p.conditions = ts2phcConditionsForTBC(p, env)
 	}
@@ -1373,7 +1373,7 @@ func NewSyncEProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	configFile := fmt.Sprintf("synce4l.%d.config", env.runID)
 	configPath := fmt.Sprintf("%s/%s", configPrefix, configFile)
 	messageTag := fmt.Sprintf("[synce4l.%d.config]", env.runID)
-	p := newPtpProcess(syncEProcessName, configFile, configPath, "", messageTag, env.nodeProfile, env.clockType, env.dn)
+	p := newPtpProcess(event.Synce4lProcessName, configFile, configPath, "", messageTag, env.nodeProfile, env.clockType, env.dn)
 	output, opts, err := p.loadProcessConf(env)
 	if err != nil {
 		return nil, err
@@ -1385,7 +1385,7 @@ func NewSyncEProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	if err = p.writeProcessConf(output, configOutput); err != nil {
 		return nil, err
 	}
-	p.cmd = buildCmd(buildPtpCmdLine(syncEProcessName, configPath, opts, env.nodeProfile))
+	p.cmd = buildCmd(buildPtpCmdLine(event.Synce4lProcessName, configPath, opts, env.nodeProfile))
 	return p, nil
 }
 

@@ -87,7 +87,7 @@ func waitProcessStatus(t *testing.T, ch <-chan event.Event, want int64) {
 func newTestPtpProcess(cmd ProcessCmd, ch chan event.Event) *ptpProcess {
 	return &ptpProcess{
 		ExecProcess: ExecProcess{
-			name:       ptp4lProcessName,
+			name:       event.Ptp4lProcessName,
 			configName: ptp4lConfig,
 			eventCh:    ch,
 		},

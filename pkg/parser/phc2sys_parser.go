@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
@@ -127,7 +128,7 @@ func (p *phc2sysParsed) Populate(line string, matched, feilds []string) error {
 // NewPhc2SysExtractor creates a new metrics extractor for phc2sys process
 func NewPhc2SysExtractor() *BaseMetricsExtractor[*phc2sysParsed] {
 	return &BaseMetricsExtractor[*phc2sysParsed]{
-		ProcessNameStr: constants.PHC2SYS,
+		ProcessNameStr: event.Phc2SysProcessName,
 		NewParsed:      func() *phc2sysParsed { return &phc2sysParsed{} },
 		RegexExtractorPairs: []RegexExtractorPair[*phc2sysParsed]{
 			{

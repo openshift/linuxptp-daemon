@@ -100,19 +100,19 @@ func GetAndResetSecurityFilesChanged() bool {
 var configPrefix = config.DefaultConfigPath
 
 var ptpProcesses = []string{
-	chronydProcessName, // there can be only one chronyd process in the system
-	ts2phcProcessName,  // there can be only one ts2phc process in the system
-	syncEProcessName,   // there can be only one synce Process per profile
-	ptp4lProcessName,   // there could be more than one ptp4l in the system
-	phc2sysProcessName, // there can be only one phc2sys process in the system
+	event.ChronydProcessName, // there can be only one chronyd process in the system
+	event.Ts2PhcProcessName,  // there can be only one ts2phc process in the system
+	event.Synce4lProcessName, // there can be only one synce Process per profile
+	event.Ptp4lProcessName,   // there could be more than one ptp4l in the system
+	event.Phc2SysProcessName, // there can be only one phc2sys process in the system
 }
 
 var ptpTmpFiles = []string{
-	ts2phcProcessName,
-	syncEProcessName,
-	ptp4lProcessName,
-	phc2sysProcessName,
-	chronydProcessName,
+	event.Ts2PhcProcessName,
+	event.Synce4lProcessName,
+	event.Ptp4lProcessName,
+	event.Phc2SysProcessName,
+	event.ChronydProcessName,
 	pmcSocketName,
 }
 
@@ -568,7 +568,7 @@ func NewProfileTopology(nodeProfiles []ptpv1.PtpProfile) (ProfileTopology, error
 			result.controllingProfiles[controller] = profileName
 		}
 
-		if processShouldRun(&profile, phc2sysProcessName) {
+		if processShouldRun(&profile, event.Phc2SysProcessName) {
 			result.phc2sysProfiles = append(result.phc2sysProfiles, profileName)
 
 			if referencedProfiles := listHAMemberProfiles(&profile); len(referencedProfiles) > 0 {
@@ -628,16 +628,16 @@ func NewProfileTopology(nodeProfiles []ptpv1.PtpProfile) (ProfileTopology, error
 
 func processShouldRun(profile *ptpv1.PtpProfile, processName string) bool {
 	switch processName {
-	case ptp4lProcessName:
+	case event.Ptp4lProcessName:
 		// (Ptp4lOpts != nil && Ptp4lOpts != "") && (Ptp4lConf != nil && Ptp4lConf != "")
 		return true
-	case phc2sysProcessName:
+	case event.Phc2SysProcessName:
 		return (profile.Phc2sysOpts != nil && *profile.Phc2sysOpts != "") || (profile.Phc2sysConf != nil && *profile.Phc2sysConf != "")
-	case ts2phcProcessName:
+	case event.Ts2PhcProcessName:
 		return (profile.Ts2PhcOpts != nil && *profile.Ts2PhcOpts != "") && (profile.Ts2PhcConf != nil && *profile.Ts2PhcConf != "")
-	case syncEProcessName:
+	case event.Synce4lProcessName:
 		return (profile.Synce4lOpts != nil && *profile.Synce4lOpts != "") && (profile.Synce4lConf != nil && *profile.Synce4lConf != "")
-	case chronydProcessName:
+	case event.ChronydProcessName:
 		return (profile.ChronydOpts != nil && *profile.ChronydOpts != "") && (profile.ChronydConf != nil && *profile.ChronydConf != "")
 	}
 	glog.Warningf("Requesting if unknown process %q should run", processName)
@@ -702,8 +702,8 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 
 	glog.Infof("updating NodePTPProfiles to:")
 	slices.SortFunc(dn.ptpUpdate.NodeProfiles, func(a, b ptpv1.PtpProfile) int {
-		aHasPhc2sys := processShouldRun(&a, phc2sysProcessName)
-		bHasPhc2sys := processShouldRun(&b, phc2sysProcessName)
+		aHasPhc2sys := processShouldRun(&a, event.Phc2SysProcessName)
+		bHasPhc2sys := processShouldRun(&b, event.Phc2SysProcessName)
 		// sorted in ascending order
 		// here having phc2sysOptions is considered a high number
 		if !aHasPhc2sys && bHasPhc2sys {
@@ -961,7 +961,7 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 		var dprocess process.Process
 		var err error
 		switch pProcess {
-		case ptp4lProcessName:
+		case event.Ptp4lProcessName:
 			var ptpProc *ptpProcess
 			ptpProc, err = NewPtp4lProcess(env)
 			if err != nil {
@@ -979,14 +979,14 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 				ptpProc.depProcess = append(ptpProc.depProcess, pmcProcess)
 			}
 			dprocess = ptpProc
-		case phc2sysProcessName:
+		case event.Phc2SysProcessName:
 			osFilter := osClockFilterConfig(nodeProfile)
 			dn.processManager.clockMgr.ConfigureOSClockFilter(osFilter)
 			if clockType == event.TBC && nodeProfile.PtpSettings["controllingProfile"] == "" {
 				updateOSClockThresholdMetrics(Threshold, NodeName, *nodeProfile.Name, osFilter)
 			}
 			dprocess, err = NewPhc2sysProcess(env)
-		case ts2phcProcessName:
+		case event.Ts2PhcProcessName:
 			if manager := leap.GetManager(); manager != nil {
 				manager.SetPtp4lConfigPath(clockCfgName(runID))
 			}
@@ -1001,9 +1001,9 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 			}
 			dn.setupDPLL(nodeProfile, clockType, ts2phcProc)
 			dprocess = ts2phcProc
-		case syncEProcessName:
+		case event.Synce4lProcessName:
 			dprocess, err = NewSyncEProcess(env)
-		case chronydProcessName:
+		case event.ChronydProcessName:
 			dprocess, err = NewChronydProcess(env)
 		}
 
@@ -1067,7 +1067,7 @@ func (dn *Daemon) assembleHAClock(haProfileName string, memberNames []string, to
 		return err
 	}
 
-	haCfgName := fmt.Sprintf("%s.%d.config", phc2sysProcessName, haRunID)
+	haCfgName := fmt.Sprintf("%s.%d.config", event.Phc2SysProcessName, haRunID)
 	haClock, err := clock.NewHA(haCfgName, members...)
 	if err != nil {
 		return err
@@ -1117,7 +1117,7 @@ func (*Daemon) inspectProfile(nodeProfile *ptpv1.PtpProfile) (event.ClockType, s
 		ptp4lOutput := &Ptp4lConf{}
 		// Parsing ptp4l needs to be done here to get the fallback clock type.
 		// Needs to be done outside the loop as we need to guarantee clockType
-		// set before the ts2phcProcessName case where it is used.
+		// set before the event.Ts2PhcProcessName case where it is used.
 		err := ptp4lOutput.PopulatePtp4lConf(nodeProfile.Ptp4lConf, nodeProfile.Ptp4lOpts)
 		if err != nil {
 			return "", "", nil, err
@@ -1486,8 +1486,8 @@ func haSocketOpts(topology *ProfileTopology) string {
 
 // populateHAInterfaces sets each HA phc2sys process interface map
 func (dn *Daemon) populateHAInterfaces(topology *ProfileTopology) {
-	phc2sysProcesses := dn.processManager.findProcessesByName(phc2sysProcessName)
-	ptp4lProcesses := dn.processManager.findProcessesByName(ptp4lProcessName)
+	phc2sysProcesses := dn.processManager.findProcessesByName(event.Phc2SysProcessName)
+	ptp4lProcesses := dn.processManager.findProcessesByName(event.Ptp4lProcessName)
 
 	if len(phc2sysProcesses) > 1 {
 		glog.Warning("there is more than one phc2sys process")

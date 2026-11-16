@@ -39,7 +39,7 @@ func TestOSClockFilterConfig(t *testing.T) {
 
 func TestProcessParsedMetrics_Phc2sysEmitsRawSamples(t *testing.T) {
 	p := &ptpProcess{
-		ExecProcess:       ExecProcess{name: phc2sysProcessName, eventCh: make(chan event.Event, 10)},
+		ExecProcess:       ExecProcess{name: event.Phc2SysProcessName, eventCh: make(chan event.Event, 10)},
 		ptpClockThreshold: &ptpv1.PtpClockThreshold{MaxOffsetThreshold: 100},
 	}
 	for _, tt := range []struct {

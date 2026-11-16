@@ -42,7 +42,7 @@ func TestSourceQualificationTransitionLogs(t *testing.T) {
 		return
 	}
 	p := &ptpProcess{
-		ExecProcess:         ExecProcess{name: ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 8)},
+		ExecProcess:         ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 8)},
 		nodeProfile:         &ptpv1.PtpProfile{Name: utils.ToPtr("source-log-test")},
 		tBCAttributes:       tBCProcessAttributes{activePort: "tr0", trIfaceNames: []string{"tr0"}, perPortState: map[string]event.PTPState{"tr0": event.PTP_LOCKED}},
 		sourceQualification: &sourceQualificationRuntime{apply: func(bool) error { return nil }},

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
@@ -143,7 +144,7 @@ func (p *ptp4lParsed) Populate(line string, matched, feilds []string) error {
 // NewPTP4LExtractor creates a new PTP4LExtractor.
 func NewPTP4LExtractor() *BaseMetricsExtractor[*ptp4lParsed] {
 	return &BaseMetricsExtractor[*ptp4lParsed]{
-		ProcessNameStr: constants.PTP4L,
+		ProcessNameStr: event.Ptp4lProcessName,
 		NewParsed:      func() *ptp4lParsed { return &ptp4lParsed{} },
 		RegexExtractorPairs: []RegexExtractorPair[*ptp4lParsed]{
 			{

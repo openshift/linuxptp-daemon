@@ -28,20 +28,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// Metric identifiers and labels used by the daemon.
 const (
-	PTPNamespace       = "openshift"
-	PTPSubsystem       = "ptp"
-	GNSS               = "gnss"
-	DPLL               = "dpll"
-	ptp4lProcessName   = "ptp4l"
-	phc2sysProcessName = "phc2sys"
-	ts2phcProcessName  = "ts2phc"
-	syncEProcessName   = "synce4l"
-	chronydProcessName = "chronyd"
-	clockRealTime      = "CLOCK_REALTIME"
-	master             = "master"
-	pmcSocketName      = "pmc"
-	thresholdMetric    = "threshold"
+	PTPNamespace    = "openshift"
+	PTPSubsystem    = "ptp"
+	clockRealTime   = "CLOCK_REALTIME"
+	master          = "master"
+	pmcSocketName   = "pmc"
+	thresholdMetric = "threshold"
 
 	faultyOffset = 999999
 
@@ -391,7 +385,7 @@ func updatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, freq
 // currently selected physical follower. Until ptp4l reports a SLAVE transition,
 // the offset is not safe to publish under an interface label.
 func resolvePTP4lMasterIface(configName, processName, iface string) (string, bool) {
-	if processName != ptp4lProcessName || iface != master {
+	if processName != event.Ptp4lProcessName || iface != master {
 		return iface, true
 	}
 	follower := slaveIface.get(configName)
@@ -431,7 +425,7 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 		ifaceName, ifaceResolved := resolvePTP4lMasterIface(configName, processName, ifaceName)
 		if !ifaceResolved {
 			ifaceName = ""
-		} else if processName == ptp4lProcessName && originalIface == master {
+		} else if processName == event.Ptp4lProcessName && originalIface == master {
 			ifaceName = alias.GetAlias(ifaceName)
 		}
 		if ifaceName != "" {
@@ -448,7 +442,7 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 		ifaceName, ifaceResolved := resolvePTP4lMasterIface(configName, processName, ifaceName)
 		if !ifaceResolved {
 			ifaceName = ""
-		} else if processName == ptp4lProcessName && originalIface == master {
+		} else if processName == event.Ptp4lProcessName && originalIface == master {
 			ifaceName = alias.GetAlias(ifaceName)
 		}
 		if err != nil {
@@ -472,7 +466,7 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 		state = clockstate
 		iface = ifaceName
 	}
-	if processName == ptp4lProcessName {
+	if processName == event.Ptp4lProcessName {
 		if portId, role := extractPTP4lEventState(output); portId > 0 {
 			if len(ifaces) >= portId-1 {
 				UpdateInterfaceRoleMetrics(processName, ifaces[portId-1].Name, role)
@@ -483,9 +477,9 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 					deleteMasterPlaceholderMetrics(processName)
 				case FAULTY:
 					if slaveIface.isFollowerIface(configName, ifaces[portId-1].Name) &&
-						masterOffsetSource.get(configName) == ptp4lProcessName {
+						masterOffsetSource.get(configName) == event.Ptp4lProcessName {
 						updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
-						updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
+						updatePTPMetrics(phc, event.Phc2SysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
 						updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN, "")
 						masterOffsetIface.set(configName, "")
 						slaveIface.set(configName, "")
@@ -606,7 +600,7 @@ func extractRegularMetrics(configName, processName, output string, ifaces config
 	// linux 4.2 doesnt have master so we need to add that
 	//    0                1      2              3
 	//ts2phc.0.config  /dev/ptp6 offset          0 s2 freq      +0 (in linux 4.2)
-	if processName == ts2phcProcessName {
+	if processName == event.Ts2PhcProcessName {
 		if fields[2] == offset || fields[3] == offset { // no master in log string
 			fields[1] = ifaces.GetPhcID2IFace(fields[1])
 			masterOffsetIface.set(configName, fields[1])
@@ -665,7 +659,7 @@ func extractRegularMetrics(configName, processName, output string, ifaces config
 		clockState = FREERUN
 	}
 	// TS@PHC has holdover state when it is out of sync
-	if processName == ts2phcProcessName && strings.Contains(output, "holdover") {
+	if processName == event.Ts2PhcProcessName && strings.Contains(output, "holdover") {
 		clockState = HOLDOVER
 	}
 
@@ -675,7 +669,7 @@ func extractRegularMetrics(configName, processName, output string, ifaces config
 		return
 	}
 
-	if processName == ts2phcProcessName {
+	if processName == event.Ts2PhcProcessName {
 		// ts2phc acts as GM so no path delay
 		delay = 0
 	} else if len(fields) > 8 {
@@ -719,7 +713,7 @@ func UpdateInterfaceRoleMetrics(process string, iface string, role ptpPortRole) 
 // UpdateClockClassMetrics ... update clock class metrics
 func UpdateClockClassMetrics(cfgName string, clockClass float64) {
 	ClockClassMetrics.With(prometheus.Labels{
-		"process": ptp4lProcessName, "config": cfgName, "node": NodeName}).Set(float64(clockClass))
+		"process": event.Ptp4lProcessName, "config": cfgName, "node": NodeName}).Set(float64(clockClass))
 }
 
 func UpdateProcessStatusMetrics(process, cfgName string, status int64) {
@@ -775,14 +769,14 @@ func deleteMetrics(ifaces config.IFaces, haProfiles map[string][]string, process
 		deleteProcessStatusMetrics(config, process)
 	}
 
-	if process == phc2sysProcessName {
+	if process == event.Phc2SysProcessName {
 		deleteOsClockStateMetrics(haProfiles)
 		return
 	}
 
 	for _, iface := range ifaces {
 		InterfaceRole.Delete(prometheus.Labels{
-			"process": ptp4lProcessName, "node": NodeName, "iface": iface.Name})
+			"process": event.Ptp4lProcessName, "node": NodeName, "iface": iface.Name})
 	}
 	for _, iface := range masterOffsetIface.iface {
 		ClockState.Delete(prometheus.Labels{
@@ -800,18 +794,18 @@ func deleteMetrics(ifaces config.IFaces, haProfiles map[string][]string, process
 
 func deleteOsClockStateMetrics(profiles map[string][]string) {
 	ClockState.Delete(prometheus.Labels{
-		"process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+		"process": event.Phc2SysProcessName, "node": NodeName, "iface": clockRealTime})
 	Delay.Delete(prometheus.Labels{
-		"from": phc, "process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+		"from": phc, "process": event.Phc2SysProcessName, "node": NodeName, "iface": clockRealTime})
 	FrequencyAdjustment.Delete(prometheus.Labels{
-		"from": phc, "process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+		"from": phc, "process": event.Phc2SysProcessName, "node": NodeName, "iface": clockRealTime})
 	MaxOffset.Delete(prometheus.Labels{
-		"from": phc, "process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+		"from": phc, "process": event.Phc2SysProcessName, "node": NodeName, "iface": clockRealTime})
 	Offset.Delete(prometheus.Labels{
-		"from": phc, "process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+		"from": phc, "process": event.Phc2SysProcessName, "node": NodeName, "iface": clockRealTime})
 	for profile := range profiles {
 		PTPHAMetrics.Delete(prometheus.Labels{
-			"process": phc2sysProcessName, "node": NodeName, "profile": profile})
+			"process": event.Phc2SysProcessName, "node": NodeName, "profile": profile})
 	}
 }
 
@@ -988,5 +982,5 @@ func (mp *masterOffsetSourceProcess) get(configName string) string {
 	if s, found := mp.name[configName]; found {
 		return s
 	}
-	return ptp4lProcessName // default is ptp4l
+	return event.Ptp4lProcessName // default is ptp4l
 }

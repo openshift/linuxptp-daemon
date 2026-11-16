@@ -37,7 +37,7 @@ func TestReplayDualUpstreamLog(t *testing.T) {
 
 	process := &ptpProcess{
 		ExecProcess: ExecProcess{
-			name:       ptp4lProcessName,
+			name:       event.Ptp4lProcessName,
 			configName: "ptp4l.1.config",
 			messageTag: "[ptp4l.1.config]",
 			eventCh:    make(chan event.Event, 10),
@@ -62,8 +62,8 @@ func TestReplayDualUpstreamLog(t *testing.T) {
 	for _, line := range bootLines {
 		processWithParser(process, line)
 	}
-	assert.Equal(t, float64(SLAVE), testutil.ToFloat64(InterfaceRole.WithLabelValues(ptp4lProcessName, NodeName, "eno8303")), "boot: eno8303 should be SLAVE")
-	assert.Equal(t, float64(MASTER), testutil.ToFloat64(InterfaceRole.WithLabelValues(ptp4lProcessName, NodeName, "eno8403")), "boot: eno8403 should be MASTER")
+	assert.Equal(t, float64(SLAVE), testutil.ToFloat64(InterfaceRole.WithLabelValues(event.Ptp4lProcessName, NodeName, "eno8303")), "boot: eno8303 should be SLAVE")
+	assert.Equal(t, float64(MASTER), testutil.ToFloat64(InterfaceRole.WithLabelValues(event.Ptp4lProcessName, NodeName, "eno8403")), "boot: eno8403 should be MASTER")
 
 	// --- Phase 2: Switchover (eno8303 link down) ---
 	// eno8403 transitions MASTER → UNCALIBRATED (BMCA re-eval, not FAULTY) → SLAVE
@@ -75,8 +75,8 @@ func TestReplayDualUpstreamLog(t *testing.T) {
 	for _, line := range switchoverLines {
 		processWithParser(process, line)
 	}
-	assert.Equal(t, float64(FAULTY), testutil.ToFloat64(InterfaceRole.WithLabelValues(ptp4lProcessName, NodeName, "eno8303")), "switchover: eno8303 should be FAULTY")
-	assert.Equal(t, float64(SLAVE), testutil.ToFloat64(InterfaceRole.WithLabelValues(ptp4lProcessName, NodeName, "eno8403")), "switchover: eno8403 should be SLAVE")
+	assert.Equal(t, float64(FAULTY), testutil.ToFloat64(InterfaceRole.WithLabelValues(event.Ptp4lProcessName, NodeName, "eno8303")), "switchover: eno8303 should be FAULTY")
+	assert.Equal(t, float64(SLAVE), testutil.ToFloat64(InterfaceRole.WithLabelValues(event.Ptp4lProcessName, NodeName, "eno8403")), "switchover: eno8403 should be SLAVE")
 
 	// --- Phase 3: Recovery (eno8303 link up) ---
 	// ptp4l logs all transitions; eno8403 goes SLAVE → PRE_MASTER → MASTER as eno8303 takes over
@@ -90,8 +90,8 @@ func TestReplayDualUpstreamLog(t *testing.T) {
 	for _, line := range recoveryLines {
 		processWithParser(process, line)
 	}
-	assert.Equal(t, float64(SLAVE), testutil.ToFloat64(InterfaceRole.WithLabelValues(ptp4lProcessName, NodeName, "eno8303")), "recovery: eno8303 should be SLAVE")
-	assert.Equal(t, float64(MASTER), testutil.ToFloat64(InterfaceRole.WithLabelValues(ptp4lProcessName, NodeName, "eno8403")), "recovery: eno8403 should be MASTER")
+	assert.Equal(t, float64(SLAVE), testutil.ToFloat64(InterfaceRole.WithLabelValues(event.Ptp4lProcessName, NodeName, "eno8303")), "recovery: eno8303 should be SLAVE")
+	assert.Equal(t, float64(MASTER), testutil.ToFloat64(InterfaceRole.WithLabelValues(event.Ptp4lProcessName, NodeName, "eno8403")), "recovery: eno8403 should be MASTER")
 }
 
 // TestSourceLostOnListening covers a dual-follower OC whose grandmaster is
@@ -104,7 +104,7 @@ func TestSourceLostOnListening(t *testing.T) {
 
 	process := &ptpProcess{
 		ExecProcess: ExecProcess{
-			name:       ptp4lProcessName,
+			name:       event.Ptp4lProcessName,
 			configName: "ptp4l.0.config",
 			messageTag: "[ptp4l.0.config]",
 			eventCh:    make(chan event.Event, 10),
@@ -147,9 +147,9 @@ func TestProcessParsedMetricsResolvesMasterIfaceAndDeletesPlaceholder(t *testing
 	NodeName = "ptp4l-master-iface-test"
 	const cfgName = "ptp4l.master-iface.config"
 	const ifaceName = "master-iface-test0"
-	masterOffsetLabels := []string{constants.Master, ptp4lProcessName, NodeName, master}
-	masterClockStateLabels := []string{ptp4lProcessName, NodeName, master}
-	ifaceLabels := []string{constants.Master, ptp4lProcessName, NodeName, alias.GetAlias(ifaceName)}
+	masterOffsetLabels := []string{constants.Master, event.Ptp4lProcessName, NodeName, master}
+	masterClockStateLabels := []string{event.Ptp4lProcessName, NodeName, master}
+	ifaceLabels := []string{constants.Master, event.Ptp4lProcessName, NodeName, alias.GetAlias(ifaceName)}
 
 	Offset.DeleteLabelValues(masterOffsetLabels...)
 	MaxOffset.DeleteLabelValues(masterOffsetLabels...)
@@ -166,15 +166,15 @@ func TestProcessParsedMetricsResolvesMasterIfaceAndDeletesPlaceholder(t *testing
 		MaxOffset.DeleteLabelValues(ifaceLabels...)
 		FrequencyAdjustment.DeleteLabelValues(ifaceLabels...)
 		Delay.DeleteLabelValues(ifaceLabels...)
-		ClockState.DeleteLabelValues(ptp4lProcessName, NodeName, alias.GetAlias(ifaceName))
-		InterfaceRole.DeleteLabelValues(ptp4lProcessName, NodeName, ifaceName)
+		ClockState.DeleteLabelValues(event.Ptp4lProcessName, NodeName, alias.GetAlias(ifaceName))
+		InterfaceRole.DeleteLabelValues(event.Ptp4lProcessName, NodeName, ifaceName)
 		NodeName = previousNodeName
 		InitializeOffsetMaps()
 	})
 
 	process := &ptpProcess{
 		ExecProcess: ExecProcess{
-			name:       ptp4lProcessName,
+			name:       event.Ptp4lProcessName,
 			configName: cfgName,
 			messageTag: "[" + cfgName + "]",
 			eventCh:    make(chan event.Event, 10),
@@ -198,8 +198,8 @@ func TestProcessParsedMetricsResolvesMasterIfaceAndDeletesPlaceholder(t *testing
 
 	// Simulate a placeholder left by an earlier sample/version. Learning the
 	// physical SLAVE port must remove it immediately, not wait for another offset.
-	updatePTPMetrics(master, ptp4lProcessName, master, 9, 9, 1, 1)
-	updateClockStateMetrics(ptp4lProcessName, master, LOCKED, "")
+	updatePTPMetrics(master, event.Ptp4lProcessName, master, 9, 9, 1, 1)
+	updateClockStateMetrics(event.Ptp4lProcessName, master, LOCKED, "")
 	processParsedEvent(process, &parser.PTPEvent{PortID: 1, Role: constants.PortRoleSlave})
 	assert.False(t, Offset.DeleteLabelValues(masterOffsetLabels...), "SLAVE discovery must remove stale master offset")
 	assert.False(t, MaxOffset.DeleteLabelValues(masterOffsetLabels...))
@@ -220,7 +220,7 @@ func TestExtractMetricsSkipsUnresolvedMasterIface(t *testing.T) {
 	const cfgName = "ptp4l.master-legacy.config"
 	const ifaceName = "master-legacy-test0"
 	masterOffsetIface.set(cfgName, master)
-	labels := []string{constants.Master, ptp4lProcessName, NodeName, master}
+	labels := []string{constants.Master, event.Ptp4lProcessName, NodeName, master}
 	Offset.DeleteLabelValues(labels...)
 	t.Cleanup(func() {
 		Offset.DeleteLabelValues(labels...)
@@ -228,12 +228,12 @@ func TestExtractMetricsSkipsUnresolvedMasterIface(t *testing.T) {
 		InitializeOffsetMaps()
 	})
 
-	gotConfigName, source, offset, state, iface := extractMetrics("["+cfgName+"]", ptp4lProcessName,
+	gotConfigName, source, offset, state, iface := extractMetrics("["+cfgName+"]", event.Ptp4lProcessName,
 		config.IFaces{{Name: ifaceName}},
 		"ptp4l[1.0]: ["+cfgName+"] master offset 12 s2 freq 0 path delay 10")
 
 	assert.Equal(t, cfgName, gotConfigName)
-	assert.Equal(t, ptp4lProcessName, source)
+	assert.Equal(t, event.Ptp4lProcessName, source)
 	assert.Equal(t, float64(12), offset)
 	assert.Equal(t, LOCKED, state)
 	assert.Empty(t, iface)
@@ -256,7 +256,7 @@ func TestTS2PHCOffsetEventConversion(t *testing.T) {
 					p := newTS2PHCPollTestProcess()
 					p.ifaces[0].Source = source
 					processParsedMetrics(p, &parser.Metrics{
-						From: constants.TS2PHC, Iface: "ens0", Source: constants.Master,
+						From: event.Ts2PhcProcessName, Iface: "ens0", Source: constants.Master,
 						ClockState: constants.ClockStateFreeRun,
 						Offset:     tt.offset, MaxOffset: tt.offset,
 					})
@@ -278,7 +278,7 @@ func TestTS2PHCOffsetEventConversion(t *testing.T) {
 						require.Len(t, d.Details, 1)
 						assert.False(t, d.Details[0].HasOffset)
 						assert.True(t, math.IsNaN(testutil.ToFloat64(Offset.WithLabelValues(
-							constants.Master, ts2phcProcessName, NodeName, alias.GetAlias("ens0")))))
+							constants.Master, event.Ts2PhcProcessName, NodeName, alias.GetAlias("ens0")))))
 					} else {
 						require.IsType(t, &event.OffsetData{}, ev.Data)
 						od := ev.Data.(*event.OffsetData)

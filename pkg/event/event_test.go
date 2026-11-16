@@ -104,7 +104,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			desc:             "gnss is locked and has dpll in locked state,but ts2phc has not yet reported so GM will be FREERUN ",
 		},
 		{
-			processName:      event.TS2PHCProcessName,
+			processName:      event.Ts2PhcProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
 			data:             &event.OffsetData{State: event.PTP_LOCKED, Offset: 0},
@@ -114,7 +114,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			desc:             "ts2phc is now reported as locked, GM should be in locked state",
 		},
 		{
-			processName:      event.TS2PHCProcessName,
+			processName:      event.Ts2PhcProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
 			data:             &event.OffsetData{State: event.PTP_FREERUN, Offset: 5000},
@@ -124,7 +124,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			desc:             "ts2phc is reporting FREERUN, GM should be in FREERUN state",
 		},
 		{
-			processName:      event.TS2PHCProcessName,
+			processName:      event.Ts2PhcProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
 			data:             &event.OffsetData{State: event.PTP_LOCKED, Offset: 0},
@@ -184,7 +184,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			desc:             "everything is in locked state",
 		},
 		{
-			processName:      event.TS2PHCProcessName,
+			processName:      event.Ts2PhcProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
 			data:             &event.OffsetData{State: event.PTP_HOLDOVER, Offset: 99999, NMEALocked: utils.ToPtr(false)},
@@ -194,7 +194,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			desc:             "ts2phc is not in locked state",
 		},
 		{
-			processName:      event.TS2PHCProcessName,
+			processName:      event.Ts2PhcProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
 			data:             &event.OffsetData{State: event.PTP_FREERUN, Offset: 99999, NMEALocked: utils.ToPtr(false)},
@@ -204,7 +204,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			desc:             "ts2phc is not in locked state",
 		},
 		{
-			processName:      event.TS2PHCProcessName,
+			processName:      event.Ts2PhcProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens1f0",
 			data:             &event.OffsetData{State: event.PTP_LOCKED, Offset: 0, NMEALocked: utils.ToPtr(true)},
@@ -214,7 +214,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			desc:             "everything is in locked state",
 		},
 		{
-			processName:      event.TS2PHCProcessName,
+			processName:      event.Ts2PhcProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens2f0",
 			data:             &event.OffsetData{State: event.PTP_FREERUN, Offset: 5000},
@@ -224,7 +224,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			desc:             "2nd card ts2phc offset spiked",
 		},
 		{
-			processName:      event.TS2PHCProcessName,
+			processName:      event.Ts2PhcProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens2f0",
 			data:             &event.OffsetData{State: event.PTP_LOCKED, Offset: 0, NMEALocked: utils.ToPtr(true)},
@@ -264,7 +264,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 			desc:             "dpll 2 is on Holdover, where source is lost, moving to holdover state",
 		},
 		{ // 2nd card spiking stay in holdover
-			processName:      event.TS2PHCProcessName,
+			processName:      event.Ts2PhcProcessName,
 			cfgName:          "ts2phc.0.config",
 			iface:            "ens2f0",
 			data:             &event.OffsetData{State: event.PTP_FREERUN, Offset: 5000},
@@ -786,12 +786,12 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 	eChannel <- sendGM(event.GNSS, event.PTP_LOCKED, false)
 	time.Sleep(100 * time.Millisecond)
 
-	eChannel <- sendGM(event.TS2PHCProcessName, event.PTP_FREERUN, false)
+	eChannel <- sendGM(event.Ts2PhcProcessName, event.PTP_FREERUN, false)
 	time.Sleep(100 * time.Millisecond)
 
 	drainIPCMessages(socketCh, 500*time.Millisecond)
 
-	eChannel <- sendGM(event.TS2PHCProcessName, event.PTP_LOCKED, false)
+	eChannel <- sendGM(event.Ts2PhcProcessName, event.PTP_LOCKED, false)
 
 	msgs := drainIPCMessages(socketCh, 2*time.Second)
 

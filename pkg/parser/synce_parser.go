@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
@@ -23,7 +24,7 @@ func (p *syncEParsed) Populate(line string, matched, fields []string) error {
 // NewSynceExtractor ...
 func NewSynceExtractor() *BaseMetricsExtractor[*syncEParsed] {
 	return &BaseMetricsExtractor[*syncEParsed]{
-		ProcessNameStr:      constants.SYNCE,
+		ProcessNameStr:      event.SynceProcessName,
 		NewParsed:           func() *syncEParsed { return &syncEParsed{} },
 		RegexExtractorPairs: []RegexExtractorPair[*syncEParsed]{},
 	}

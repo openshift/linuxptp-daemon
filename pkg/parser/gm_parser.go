@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
@@ -24,7 +25,7 @@ func (p *gmParsed) Populate(line string, matched, fields []string) error {
 // NewGMExtractor ...
 func NewGMExtractor() *BaseMetricsExtractor[*gmParsed] {
 	return &BaseMetricsExtractor[*gmParsed]{
-		ProcessNameStr:      constants.GM,
+		ProcessNameStr:      event.GmProcessName,
 		NewParsed:           func() *gmParsed { return &gmParsed{} },
 		RegexExtractorPairs: []RegexExtractorPair[*gmParsed]{},
 	}

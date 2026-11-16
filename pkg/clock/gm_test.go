@@ -50,7 +50,7 @@ func gmData(process event.EventSource, state event.PTPState) *event.Data {
 			State: state,
 		}},
 	}
-	if process == event.TS2PHCProcessName {
+	if process == event.Ts2PhcProcessName {
 		d.Details[0].SignalSource = event.GNSS
 	}
 	return d
@@ -67,7 +67,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 		gm.data = []*event.Data{
 			gmData(event.GNSS, event.PTP_LOCKED),
 			gmData(event.DPLL, event.PTP_LOCKED),
-			gmData(event.TS2PHCProcessName, event.PTP_FREERUN),
+			gmData(event.Ts2PhcProcessName, event.PTP_FREERUN),
 		}
 		result := gm.updateState()
 		assert.Equal(t, event.PTP_FREERUN, result.State)
@@ -87,7 +87,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 		rio.messages = nil
 
 		// Second call: transition to LOCKED
-		gm.data[2] = gmData(event.TS2PHCProcessName, event.PTP_LOCKED)
+		gm.data[2] = gmData(event.Ts2PhcProcessName, event.PTP_LOCKED)
 		result = gm.updateState()
 		assert.Equal(t, event.PTP_LOCKED, result.State)
 		assert.Equal(t, fbprotocol.ClockClass6, result.ClockClass)
@@ -119,7 +119,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 		gm.data = []*event.Data{
 			gmData(event.GNSS, event.PTP_LOCKED),
 			gmData(event.DPLL, event.PTP_LOCKED),
-			gmData(event.TS2PHCProcessName, event.PTP_LOCKED),
+			gmData(event.Ts2PhcProcessName, event.PTP_LOCKED),
 		}
 		result := gm.updateState()
 		assert.Equal(t, event.PTP_LOCKED, result.State)
@@ -145,10 +145,10 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 		gm.data = []*event.Data{
 			gmData(event.GNSS, event.PTP_LOCKED),
 			gmData(event.DPLL, event.PTP_LOCKED),
-			gmData(event.TS2PHCProcessName, event.PTP_FREERUN),
+			gmData(event.Ts2PhcProcessName, event.PTP_FREERUN),
 		}
 		gm.updateState()
-		gm.data[2] = gmData(event.TS2PHCProcessName, event.PTP_LOCKED)
+		gm.data[2] = gmData(event.Ts2PhcProcessName, event.PTP_LOCKED)
 		gm.updateState()
 		rio.messages = nil // clear
 
@@ -182,7 +182,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 		gm.data = []*event.Data{
 			gmData(event.GNSS, event.PTP_LOCKED),
 			gmData(event.DPLL, event.PTP_LOCKED),
-			gmData(event.TS2PHCProcessName, event.PTP_FREERUN),
+			gmData(event.Ts2PhcProcessName, event.PTP_FREERUN),
 		}
 		gm.updateState()
 		gm.updateState()
@@ -200,7 +200,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 		gm.data = []*event.Data{
 			gmData(event.GNSS, event.PTP_LOCKED),
 			gmData(event.DPLL, event.PTP_LOCKED),
-			gmData(event.TS2PHCProcessName, event.PTP_FREERUN),
+			gmData(event.Ts2PhcProcessName, event.PTP_FREERUN),
 		}
 		gm.updateState()
 		rio.messages = nil
@@ -229,15 +229,15 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 		gm.data = []*event.Data{
 			gmData(event.GNSS, event.PTP_LOCKED),
 			gmData(event.DPLL, event.PTP_LOCKED),
-			gmData(event.TS2PHCProcessName, event.PTP_FREERUN),
+			gmData(event.Ts2PhcProcessName, event.PTP_FREERUN),
 		}
 		gm.updateState()
-		gm.data[2] = gmData(event.TS2PHCProcessName, event.PTP_LOCKED)
+		gm.data[2] = gmData(event.Ts2PhcProcessName, event.PTP_LOCKED)
 		gm.updateState()
 		rio.messages = nil
 
 		// ts2phc FREERUN → GM FREERUN
-		gm.data[2] = gmData(event.TS2PHCProcessName, event.PTP_FREERUN)
+		gm.data[2] = gmData(event.Ts2PhcProcessName, event.PTP_FREERUN)
 		result := gm.updateState()
 		assert.Equal(t, event.PTP_FREERUN, result.State)
 		assert.Equal(t, protocol.ClockClassFreerun, result.ClockClass)
@@ -434,7 +434,7 @@ func TestUpdateGMState(t *testing.T) {
 					events: []event.Event{
 						makeEvent(event.GNSS, event.PTP_LOCKED, false),
 						makeEvent(event.DPLL, event.PTP_LOCKED, false),
-						makeEvent(event.TS2PHCProcessName, event.PTP_LOCKED, false),
+						makeEvent(event.Ts2PhcProcessName, event.PTP_LOCKED, false),
 					},
 					wantState:      event.PTP_LOCKED,
 					wantClockClass: fbprotocol.ClockClass6,
@@ -448,7 +448,7 @@ func TestUpdateGMState(t *testing.T) {
 					events: []event.Event{
 						makeEvent(event.GNSS, event.PTP_LOCKED, false),
 						makeEvent(event.DPLL, event.PTP_LOCKED, false),
-						makeEvent(event.TS2PHCProcessName, event.PTP_FREERUN, false),
+						makeEvent(event.Ts2PhcProcessName, event.PTP_FREERUN, false),
 					},
 					wantState:      event.PTP_FREERUN,
 					wantClockClass: protocol.ClockClassFreerun,
@@ -462,7 +462,7 @@ func TestUpdateGMState(t *testing.T) {
 					events: []event.Event{
 						makeEvent(event.GNSS, event.PTP_LOCKED, false),
 						makeEvent(event.DPLL, event.PTP_HOLDOVER, false),
-						makeEvent(event.TS2PHCProcessName, event.PTP_LOCKED, false),
+						makeEvent(event.Ts2PhcProcessName, event.PTP_LOCKED, false),
 					},
 					wantState:      event.PTP_HOLDOVER,
 					wantClockClass: fbprotocol.ClockClass7,

@@ -11,7 +11,7 @@ func NewTestPtpProcess(cmd ProcessCmd, eventCh chan event.Event) *ptpProcess {
 	dn := &Daemon{
 		processManager: &ProcessManager{eventsIn: eventCh},
 	}
-	p := newPtpProcess(ptp4lProcessName, "ptp4l.0.config", "", "",
+	p := newPtpProcess(event.Ptp4lProcessName, "ptp4l.0.config", "", "",
 		"[ptp4l.0.config:{level}]", &ptpv1.PtpProfile{},
 		event.ClockUnset, dn)
 	p.cmd = cmd

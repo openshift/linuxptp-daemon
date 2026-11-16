@@ -3,6 +3,7 @@ package parser
 import (
 	"regexp"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
@@ -35,7 +36,7 @@ func (p *chronydParsed) Populate(_ string, matched, fields []string) error {
 // NewChronydExtractor creates a new metrics extractor for chronyd process
 func NewChronydExtractor() *BaseMetricsExtractor[*chronydParsed] {
 	return &BaseMetricsExtractor[*chronydParsed]{
-		ProcessNameStr: constants.CHRONYD,
+		ProcessNameStr: event.ChronydProcessName,
 		NewParsed:      func() *chronydParsed { return &chronydParsed{} },
 		RegexExtractorPairs: []RegexExtractorPair[*chronydParsed]{
 			{
@@ -45,7 +46,7 @@ func NewChronydExtractor() *BaseMetricsExtractor[*chronydParsed] {
 						Iface:      constants.ClockRealTime,
 						ClockState: constants.ClockStateLocked,
 						Offset:     0,
-						Source:     constants.CHRONYD,
+						Source:     event.ChronydProcessName,
 					}, nil, nil
 				},
 			},
@@ -56,7 +57,7 @@ func NewChronydExtractor() *BaseMetricsExtractor[*chronydParsed] {
 						Iface:      constants.ClockRealTime,
 						ClockState: constants.ClockStateFreeRun,
 						Offset:     0,
-						Source:     constants.CHRONYD,
+						Source:     event.ChronydProcessName,
 					}, nil, nil
 				},
 			},

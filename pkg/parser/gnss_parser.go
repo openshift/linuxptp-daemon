@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
@@ -24,7 +25,7 @@ func (p *gnssParsed) Populate(line string, matched, fields []string) error {
 // NewGNSSExtractor NewGNSSTExtractor creates a new metrics extractor for GNSS process
 func NewGNSSExtractor() *BaseMetricsExtractor[*gnssParsed] {
 	return &BaseMetricsExtractor[*gnssParsed]{
-		ProcessNameStr:      constants.GNSS,
+		ProcessNameStr:      event.GnssProcessName,
 		NewParsed:           func() *gnssParsed { return &gnssParsed{} },
 		RegexExtractorPairs: []RegexExtractorPair[*gnssParsed]{},
 	}

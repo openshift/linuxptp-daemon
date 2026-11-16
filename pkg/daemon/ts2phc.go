@@ -10,6 +10,7 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
@@ -371,7 +372,7 @@ func (c *pollCycle) unhandledMetrics() []*parser.Metrics {
 		}
 		offset := computeTSOffset(ts, c)
 		metrics = append(metrics, &parser.Metrics{
-			From:       constants.TS2PHC,
+			From:       event.Ts2PhcProcessName,
 			Iface:      ts.iface,
 			ClockState: constants.ClockStateFreeRun,
 			Source:     constants.Master,
@@ -400,7 +401,7 @@ func (c *pollCycle) missingMetrics(ifaces config.IFaces, roles map[string]parser
 		}
 		// We have no tstamp measurement for this missing interface, so we cannot measure the offset.
 		metrics = append(metrics, &parser.Metrics{
-			From:       constants.TS2PHC,
+			From:       event.Ts2PhcProcessName,
 			Iface:      iface.Name,
 			ClockState: constants.ClockStateFreeRun,
 			Source:     constants.Master,

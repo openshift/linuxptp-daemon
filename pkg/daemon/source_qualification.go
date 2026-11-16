@@ -89,7 +89,7 @@ func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPoli
 // them. The clock evaluates readiness; the scanner retains hardware application.
 func (p *ptpProcess) forwardSourceData(metrics *parser.Metrics, portEvent *parser.PTPEvent) {
 	q := p.sourceQualification
-	if q == nil || p.name != ptp4lProcessName {
+	if q == nil || p.name != event.Ptp4lProcessName {
 		return
 	}
 	if portEvent != nil && portEvent.Role != parserconstants.PortRoleUnknown {

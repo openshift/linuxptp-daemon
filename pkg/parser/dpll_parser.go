@@ -1,6 +1,9 @@
 package parser
 
-import "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
+import (
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
+)
 
 type dpllParsed struct {
 	Raw       string
@@ -22,7 +25,7 @@ func (p *dpllParsed) Populate(line string, matched, fields []string) error {
 // NewDPLLExtractor ...
 func NewDPLLExtractor() *BaseMetricsExtractor[*dpllParsed] {
 	return &BaseMetricsExtractor[*dpllParsed]{
-		ProcessNameStr:      constants.DPLL,
+		ProcessNameStr:      event.DpllProcessName,
 		NewParsed:           func() *dpllParsed { return &dpllParsed{} },
 		RegexExtractorPairs: []RegexExtractorPair[*dpllParsed]{},
 	}

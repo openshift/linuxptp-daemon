@@ -298,7 +298,7 @@ func (c *TBC) updateState() bool {
 			switch d.ProcessName {
 			case event.DPLL:
 				dpllState = d.State
-			case event.TS2PHCProcessName:
+			case event.Ts2PhcProcessName:
 				ts2phcState = d.State
 			}
 		}
@@ -705,7 +705,7 @@ func (c *TBC) getLargestOffset() int64 {
 		// ts2phc offsets are not window-filtered. On T-BC the leading NIC only
 		// reports ts2phc offsets in holdover, so requiring a full sliding window
 		// leaves a permanently partial window that poisons inSync with FaultyPhaseOffset.
-		if d.ProcessName == event.TS2PHCProcessName {
+		if d.ProcessName == event.Ts2PhcProcessName {
 			for _, dd := range d.Details {
 				if dd.Time < staleTime {
 					continue
@@ -779,7 +779,7 @@ func (c *TBC) freeRunCondition() bool {
 				glog.Infof("free-run condition on PTP4l, avg offset %d", ptp4lAvgOffset)
 				return true
 			}
-		case event.TS2PHCProcessName:
+		case event.Ts2PhcProcessName:
 			for _, dd := range d.Details {
 				// ts2phc reports `s0` when leading interface enters holdover. This is a
 				// transient condition that should not drop the clock state to freerun.
@@ -871,7 +871,7 @@ func (c *TBC) processSyncE(ev event.Event) {
 func (c *TBC) updateLeadingClockData(ev event.Event) {
 	switch data := ev.Data.(type) {
 	case *event.StateData:
-		if ev.Source != event.PTP4lProcessName {
+		if ev.Source != event.Ptp4lProcessName {
 			return
 		}
 		if data.ClockID != "" {

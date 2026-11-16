@@ -47,13 +47,13 @@ func convertParserClockStateEventPTPState(clockState parserconstants.ClockState)
 
 func getParser(processName string) parser.MetricsExtractor {
 	switch processName {
-	case ptp4lProcessName:
+	case event.Ptp4lProcessName:
 		return parser.NewPTP4LExtractor()
-	case phc2sysProcessName:
+	case event.Phc2SysProcessName:
 		return parser.NewPhc2SysExtractor()
-	case ts2phcProcessName:
+	case event.Ts2PhcProcessName:
 		return parser.NewTS2PHCExtractor()
-	case chronydProcessName:
+	case event.ChronydProcessName:
 		return parser.NewChronydExtractor()
 	default:
 		glog.Errorf("No parser available for process: %s", processName)
@@ -127,12 +127,12 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	// threshold rule where needed. Ultimately, forward raw observations and let
 	// clock objects own state evaluation, as OsClock already does for phc2sys.
 	// transition to FREERUN if offset is outside configured thresholds
-	if process.name != phc2sysProcessName && shouldFreeRun(state, ptpMetrics.Offset, process.ptpClockThreshold) {
+	if process.name != event.Phc2SysProcessName && shouldFreeRun(state, ptpMetrics.Offset, process.ptpClockThreshold) {
 		state = event.PTP_FREERUN
 	}
 
 	switch process.name {
-	case ptp4lProcessName:
+	case event.Ptp4lProcessName:
 		if masterIfaceResolved && ptpMetrics.Iface != "" && configName != "" {
 			masterOffsetIface.set(configName, ptpMetrics.Iface)
 		}
@@ -162,7 +162,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			default:
 			}
 		}
-	case ts2phcProcessName:
+	case event.Ts2PhcProcessName:
 		// Send event for ts2phc
 		eventSource := process.ifaces.GetEventSource(process.ifaces.GetPhcID2IFace(ptpMetrics.Iface))
 		// Preserve the state transition when the offset is unavailable, but
@@ -191,7 +191,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		}:
 		default:
 		}
-	case phc2sysProcessName:
+	case event.Phc2SysProcessName:
 		select {
 		case process.eventCh <- event.Event{
 			Source:    event.PHC2SYS,
@@ -206,7 +206,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		}:
 		default:
 		}
-	case chronydProcessName:
+	case event.ChronydProcessName:
 		select {
 		case process.eventCh <- event.Event{
 			Source:    event.CHRONYD,
@@ -227,11 +227,11 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 // processParsedEvent handles PTP events extracted by the parser
 func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 	switch process.name {
-	case phc2sysProcessName:
+	case event.Phc2SysProcessName:
 		processPhc2sysSelectedSource(process, ptpEvent)
-	case ptp4lProcessName:
+	case event.Ptp4lProcessName:
 		processPtp4lEvent(process, ptpEvent)
-	case ts2phcProcessName:
+	case event.Ts2PhcProcessName:
 		process.processTS2PhcEvent(ptpEvent)
 	}
 }
@@ -259,11 +259,11 @@ func processPtp4lEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 			// The active slave port lost its source: FAULTY = the port/link faulted; LISTENING = the master went away
 			// (announce timeout) while the link stayed up. Both mean the servo has no offset to track.
 			stateChanged := slaveIface.isFollowerIface(configName, interfaceName)
-			sourceIsPtp4l := masterOffsetSource.get(configName) == ptp4lProcessName
+			sourceIsPtp4l := masterOffsetSource.get(configName) == event.Ptp4lProcessName
 			if stateChanged && sourceIsPtp4l {
 				// Set fault metrics and clear slave & master offset interfaces
 				updatePTPMetrics(master, process.name, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
-				updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
+				updatePTPMetrics(phc, event.Phc2SysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
 				if process.clockType == event.BC || process.clockType == event.OC {
 					// Forward the raw fact (source lost) to the BCClock; it owns the
 					// LOCKED→HOLDOVER decision and the holdover timer. Do not emit

@@ -214,7 +214,7 @@ func TestUpdateTSCState(t *testing.T) {
 	}
 	lock := func(bc *TBC) SyncState {
 		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
-		bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_LOCKED, 10, false))
+		bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_LOCKED, 10, false))
 		fillBCDataWindows(bc, 10)
 		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
 		return bc.AddEvent(event.Event{Source: event.PMC, Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}}})
@@ -234,14 +234,14 @@ func TestUpdateTSCState(t *testing.T) {
 	t.Run("LOCKED to HOLDOVER", func(t *testing.T) {
 		bc := newClock(t)
 		require.Equal(t, event.PTP_LOCKED, lock(bc).State)
-		state := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+		state := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
 		assert.Equal(t, event.PTP_HOLDOVER, state.State)
 		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
 	})
 	t.Run("HOLDOVER in-spec to out-of-spec", func(t *testing.T) {
 		bc := newClock(t)
 		require.Equal(t, event.PTP_LOCKED, lock(bc).State)
-		holdover := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+		holdover := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
 		require.Equal(t, event.PTP_HOLDOVER, holdover.State)
 		require.Equal(t, fbprotocol.ClockClassSlaveOnly, holdover.ClockClass)
 		fillBCDataWindows(bc, 600)
@@ -723,7 +723,7 @@ func TestUpdateDownstreamData_Freerun_CallsAnnounceLocalData(t *testing.T) {
 
 func TestUpdateLeadingClockData_PTP4lProcessName(t *testing.T) {
 	ev := event.Event{
-		Source: event.PTP4lProcessName,
+		Source: event.Ptp4lProcessName,
 		Data: &event.StateData{
 			ClockID: "clockID",
 		},
@@ -811,7 +811,7 @@ func TestInSyncCondition(t *testing.T) {
 		bc.leadingClockData.initInSyncFilter()
 		bc.syncState.LeadingIFace = testIFace1
 		bc.data = []*event.Data{
-			{ProcessName: event.PTP4lProcessName, Details: []*event.DataDetails{{IFace: testIFace1, Offset: 0, Time: time.Now().UnixMilli()}}},
+			{ProcessName: event.Ptp4lProcessName, Details: []*event.DataDetails{{IFace: testIFace1, Offset: 0, Time: time.Now().UnixMilli()}}},
 		}
 		return bc
 	}
@@ -937,7 +937,7 @@ func TestFreeRunCondition(t *testing.T) {
 			name: "TS2PHC freerun on leading interface does not trigger free run",
 			data: []*event.Data{
 				{ProcessName: event.DPLL, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_HOLDOVER}}},
-				{ProcessName: event.TS2PHCProcessName, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_FREERUN}}},
+				{ProcessName: event.Ts2PhcProcessName, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_FREERUN}}},
 			},
 			LeadingIFace: testIFace1,
 			threshold:    10,
@@ -947,7 +947,7 @@ func TestFreeRunCondition(t *testing.T) {
 			name: "TS2PHC freerun on non-leading interface triggers free run",
 			data: []*event.Data{
 				{ProcessName: event.DPLL, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_HOLDOVER}}},
-				{ProcessName: event.TS2PHCProcessName, Details: []*event.DataDetails{{IFace: testEno8703, State: event.PTP_FREERUN}}},
+				{ProcessName: event.Ts2PhcProcessName, Details: []*event.DataDetails{{IFace: testEno8703, State: event.PTP_FREERUN}}},
 			},
 			LeadingIFace: testIFace1,
 			threshold:    10,
@@ -1174,7 +1174,7 @@ func TestUpdateBCState(t *testing.T) {
 	t.Run("LOCKED to HOLDOVER via source lost", func(t *testing.T) {
 		bc, _ := newLockedTBCClock()
 
-		result := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+		result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
 		assert.Equal(t, event.PTP_HOLDOVER, result.State, "should transition to HOLDOVER")
 		assert.Equal(t, fbprotocol.ClockClass(135), result.ClockClass, "clockClass should be 135 (holdover in-spec)")
 	})
@@ -1182,20 +1182,20 @@ func TestUpdateBCState(t *testing.T) {
 	t.Run("HOLDOVER to LOCKED", func(t *testing.T) {
 		bc, _ := newLockedTBCClock()
 
-		result := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+		result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
 		assert.Equal(t, event.PTP_HOLDOVER, result.State, "setup: should be HOLDOVER")
 
 		bc.leadingClockData.inSyncFilter.Reset()
 		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 5, false))
 		fillBCDataWindows(bc, 5)
-		result = bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_LOCKED, 5, false))
+		result = bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_LOCKED, 5, false))
 		assert.Equal(t, event.PTP_LOCKED, result.State, "should transition back to LOCKED")
 	})
 
 	t.Run("HOLDOVER to FREERUN via offset", func(t *testing.T) {
 		bc, _ := newLockedTBCClock()
 
-		result := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+		result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
 		assert.Equal(t, event.PTP_HOLDOVER, result.State, "setup: should be HOLDOVER")
 
 		result = bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_HOLDOVER, 2000, false))
@@ -1206,7 +1206,7 @@ func TestUpdateBCState(t *testing.T) {
 	t.Run("HOLDOVER in-spec to out-of-spec", func(t *testing.T) {
 		bc, _ := newLockedTBCClock()
 
-		result := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+		result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
 		assert.Equal(t, event.PTP_HOLDOVER, result.State, "setup: should be HOLDOVER")
 		assert.Equal(t, fbprotocol.ClockClass(135), result.ClockClass, "setup: should be in-spec (135)")
 
@@ -1267,7 +1267,7 @@ func TestUpdateBCStateHoldoverDisabled(t *testing.T) {
 			rec.messages = nil
 
 			// Upstream lost while the cached leading DPLL is still locked with a small offset.
-			result := bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_FREERUN, 10, true))
+			result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
 			assert.Equal(t, tt.wantState, result.State)
 			assert.Equal(t, tt.wantClass, result.ClockClass)
 
@@ -1469,7 +1469,7 @@ func newLockedTBCClock() (*TBC, *ipcRecorder) {
 		},
 	}
 	bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
-	bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_LOCKED, 10, false))
+	bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_LOCKED, 10, false))
 	fillBCDataWindows(bc, 10)
 	bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
 	return bc, &rec

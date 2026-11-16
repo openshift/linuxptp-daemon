@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
@@ -193,7 +194,7 @@ func (p *ts2phcParsed) Populate(line string, matched, fields []string) error {
 // NewTS2PHCExtractor creates a new TS2PHC metrics extractor
 func NewTS2PHCExtractor() *BaseMetricsExtractor[*ts2phcParsed] {
 	return &BaseMetricsExtractor[*ts2phcParsed]{
-		ProcessNameStr: constants.TS2PHC,
+		ProcessNameStr: event.Ts2PhcProcessName,
 		NewParsed: func() *ts2phcParsed {
 			return &ts2phcParsed{}
 		},
@@ -258,7 +259,7 @@ func extractTS2PHCOffset(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
 	NoSourceTSCount = 0
 
 	metrics := &Metrics{
-		From:       constants.TS2PHC,
+		From:       event.Ts2PhcProcessName,
 		Iface:      parsed.Interface,
 		Offset:     *parsed.Offset,
 		MaxOffset:  *parsed.Offset,
@@ -298,7 +299,7 @@ func extractTS2PHCnmeaStatus(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) 
 	}
 
 	return &Metrics{
-		From:       constants.TS2PHC,
+		From:       event.Ts2PhcProcessName,
 		Iface:      parsed.Interface,
 		Offset:     *parsed.Offset,
 		MaxOffset:  *parsed.Offset,

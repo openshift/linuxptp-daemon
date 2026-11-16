@@ -313,7 +313,7 @@ func (conf *Ptp4lConf) ExtendGlobalSection(profileName string, messageTag string
 		conf.gnss_serial_port = strings.TrimSpace(gnssSerialPort)
 		conf.setPtp4lConfOption(GlobalSectionName, "ts2phc.nmea_serialport", GPSPIPE_SERIALPORT, true)
 	}
-	if _, ok := conf.getPtp4lConfOptionOrEmptyString(GlobalSectionName, "leapfile"); ok || pProcess == ts2phcProcessName { // not required to check process if leapfile is always included
+	if _, ok := conf.getPtp4lConfOptionOrEmptyString(GlobalSectionName, "leapfile"); ok || pProcess == event.Ts2PhcProcessName { // not required to check process if leapfile is always included
 		conf.setPtp4lConfOption(GlobalSectionName, "leapfile", fmt.Sprintf("%s/%s", config.DefaultLeapConfigPath, os.Getenv("NODE_NAME")), true)
 	}
 }

@@ -42,10 +42,6 @@ const ( // phc2sys/chronyd Finite State Machine States
 	pcsmsFailover                  // chronyd setting time
 )
 
-const (
-	ts2phcPname = "ts2phc"
-)
-
 var (
 	ts2phcOffsetRegex = regexp.MustCompile("offset .*s3 freq")
 )
@@ -102,7 +98,7 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 		if pluginData.gnssFailover {
 			currentTime := time.Now()
 
-			if pname == ts2phcPname && ts2phcOffsetRegex.MatchString(log) {
+			if pname == event.Ts2PhcProcessName && ts2phcOffsetRegex.MatchString(log) {
 				pluginData.expiryTime = currentTime.Add(pluginData.ts2phcTolerance)
 			}
 
@@ -119,7 +115,7 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 					pluginData.emitEvent(GnssRecoveredEventName)
 					continue
 				case pcsmsActive:
-					if pname == ts2phcPname {
+					if pname == event.Ts2PhcProcessName {
 						if currentTime.After(pluginData.expiryTime) {
 							pluginData.pcfsmState = pcsmsOutOfSpec
 							continue
@@ -127,7 +123,7 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 					}
 					break done
 				case pcsmsOutOfSpec:
-					if pname == ts2phcPname {
+					if pname == event.Ts2PhcProcessName {
 						if currentTime.After(pluginData.expiryTime) {
 							pluginData.pcfsmState = pcsmsFailover
 							glog.Infof("ntpfailover: GNSS failover triggered")
@@ -137,7 +133,7 @@ func processLogNtpFailover(data *interface{}, pname string, log string) string {
 					}
 					break done
 				case pcsmsFailover:
-					if pname == ts2phcPname {
+					if pname == event.Ts2PhcProcessName {
 						if currentTime.Before(pluginData.expiryTime) {
 							pluginData.pcfsmState = pcsmsStartupDefault
 							glog.Infof("ntpfailover: GNSS recovered")

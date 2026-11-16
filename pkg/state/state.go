@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 )
 
 // PtpInterface represents a PTP interface with its name and alias
@@ -206,7 +206,7 @@ func (s *SharedState) GetMasterOffsetSource(configName string) string {
 	if source, found := s.masterOffsetSource.name[configName]; found {
 		return source
 	}
-	return constants.PTP4L // default is ptp4l
+	return event.Ptp4lProcessName // default is ptp4l
 }
 
 // SetMasterOffsetSource sets the master offset source for the given config name.

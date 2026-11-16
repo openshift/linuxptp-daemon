@@ -66,7 +66,7 @@ func TestAddEvent_StoresSpecFlags(t *testing.T) {
 			Data: &event.DPLLData{State: event.PTP_FREERUN, OutOfSpec: true, FrequencyTraceable: true, Offset: utils.ToPtr[int64](0)},
 		})
 
-		ts := &event.Data{ProcessName: event.TS2PHCProcessName, State: event.PTP_UNKNOWN, Window: utils.NewWindow(event.WindowSize)}
+		ts := &event.Data{ProcessName: event.Ts2PhcProcessName, State: event.PTP_UNKNOWN, Window: utils.NewWindow(event.WindowSize)}
 		ts.AddEvent(event.Event{
 			Source: event.TS2PHC, IFace: "ens1f0", ClockType: event.GM, Time: 0,
 			Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: 0},
