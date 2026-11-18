@@ -359,6 +359,15 @@ DPLL PTP State |  GNSS PTP STATE  |	TS2PHC PTP STATE| GM STATE | Clock Class
 | NA           |  LOCKED          |	LOCKED          | LOCKED   | 6
 
 */
+// gnssStateToIPCState maps the GNSS synchronization state to its O-RAN GNSS
+// CloudEvent value.
+func gnssStateToIPCState(s event.PTPState) string {
+	if s == event.PTP_LOCKED {
+		return ipc.GNSSSynchronized
+	}
+	return ipc.GNSSFailureNoFix
+}
+
 // updateState computes the composite GM state from DPLL, GNSS, and ts2phc
 // data sources. It emits TypePTPState and TypeClockClass IPC on state/class change.
 func (c *GM) updateState() SyncState {
@@ -505,7 +514,7 @@ func (c *GM) updateState() SyncState {
 			Type:    ipc.TypeGNSSState,
 			Profile: c.cfgName,
 			IFace:   leadingInterface,
-			Values:  ipc.GNSSStateValue{State: event.PtpStateToIPCState(gnssState)},
+			Values:  ipc.GNSSStateValue{State: gnssStateToIPCState(gnssState)},
 		})
 	}
 
