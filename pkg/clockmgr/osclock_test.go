@@ -72,6 +72,38 @@ func TestOSClock_FilteredSnapshotsAndE3(t *testing.T) {
 	assert.Equal(t, event.PTP_LOCKED, stats.OSClockState, "E3 must not overwrite the disciplining state")
 }
 
+func TestOSClock_Phc2sysDownEmitsFreerun(t *testing.T) {
+	cache := ipc.NewCache(20)
+	m := clockmgr.Init("test-node", make(chan event.Event), nil, nil, nil, cache)
+	m.ConfigureOSClockFilter(clock.OSClockFilterConfig{InSyncThreshold: 50, OutOfSyncThreshold: 100, Samples: 2})
+	bc, err := clock.NewBC(testClockmgrPtp4lConfig, false, event.PtpClockThreshold{MinOffsetThreshold: -100, MaxOffsetThreshold: 100})
+	require.NoError(t, err)
+	require.NoError(t, m.AddClock(bc))
+	m.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: "eth0", Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: 10}})
+	const cfg = "phc2sys.0.config"
+	sample := event.Event{Source: event.PHC2SYS, CfgName: cfg, IFace: parserconstants.ClockRealTime, Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: 10}}
+	m.ProcessEvent(sample)
+	m.ProcessEvent(sample)
+	osClockMessages(cache)
+
+	m.ProcessEvent(event.ProcessStatusEvent(event.PHC2SYS, cfg, event.BC, "", 0))
+	msgs := osClockMessages(cache)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, event.PtpStateToIPCState(event.PTP_FREERUN), msgs[0].Values.(ipc.StateValue).State)
+	assert.Equal(t, parserconstants.ClockRealTime, msgs[0].IFace)
+	stats := receiveStatsSnapshot(t, m.StatsUpdatesCh())
+	assert.Equal(t, event.PTP_FREERUN, stats.OSClockState)
+	assert.Equal(t, event.PTP_FREERUN, stats.States[cfg][event.PHC2SYS])
+
+	m.ProcessEvent(sample)
+	assert.Empty(t, osClockMessages(cache), "one sample must not restore LOCKED")
+	assert.Equal(t, event.PTP_NOTSET, receiveStatsSnapshot(t, m.StatsUpdatesCh()).States[cfg][event.PHC2SYS])
+	m.ProcessEvent(sample)
+	msgs = osClockMessages(cache)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, event.PtpStateToIPCState(event.PTP_LOCKED), msgs[0].Values.(ipc.StateValue).State)
+}
+
 func TestOSClock_ReportsWithoutRegisteredClocksAndAfterReset(t *testing.T) {
 	for _, source := range []event.EventSource{event.PHC2SYS, event.CHRONYD} {
 		t.Run(string(source), func(t *testing.T) {

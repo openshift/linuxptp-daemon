@@ -59,6 +59,14 @@ func (o *OsClock) GetData(source event.EventSource) *event.Data {
 // It returns true when the event was accepted, even during debounce or when the
 // state is unchanged. Rejected events remain available for normal clock routing.
 func (o *OsClock) AddEvent(ev event.Event) bool {
+	if status, ok := ev.Data.(*event.ProcessStatusData); ok && ev.Source == event.PHC2SYS && status.Status == 0 {
+		o.filter.Reset()
+		o.filteredState = event.PTP_NOTSET
+		o.State = event.PTP_FREERUN
+		o.Offset = 0
+		o.GetData(event.PHC2SYS).State = event.PTP_FREERUN
+		return true
+	}
 	ptp, ok := ev.Data.(*event.OffsetData)
 	if !ok || ptp == nil || (ev.Source != event.CHRONYD && ev.Source != event.PHC2SYS) {
 		return false

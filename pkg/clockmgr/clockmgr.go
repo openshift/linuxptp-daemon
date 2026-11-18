@@ -415,6 +415,9 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 		m.publishStats()
 		return
 	}
+	if _, ok := ev.Data.(*event.ProcessStatusData); ok {
+		return
+	}
 
 	// TODO: Move to better identifiers? Having to do this translation here is odd
 	lookupName := ev.CfgName
