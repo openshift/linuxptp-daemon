@@ -235,7 +235,6 @@ func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccura
 		return clockClass, clockAccuracy, err
 	}
 	g.TimePropertiesDS.PtpTimescale = true
-	g.TimePropertiesDS.FrequencyTraceable = true
 	g.TimePropertiesDS.CurrentUtcOffsetValid = true
 	g.TimePropertiesDS.CurrentUtcOffset = int32(c.getUtcOffset())
 	switch c.syncState.ClockClass {
@@ -243,6 +242,7 @@ func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccura
 		if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 || !g.TimePropertiesDS.TimeTraceable {
 			g.ClockQuality.ClockClass = fbprotocol.ClockClass6
 			g.TimePropertiesDS.TimeTraceable = true
+			g.TimePropertiesDS.FrequencyTraceable = true
 			g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
 			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
 			g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
@@ -252,6 +252,7 @@ func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccura
 		if g.ClockQuality.ClockClass != protocol.ClockClassOutOfSpec {
 			g.ClockQuality.ClockClass = protocol.ClockClassOutOfSpec
 			g.TimePropertiesDS.TimeTraceable = false
+			g.TimePropertiesDS.FrequencyTraceable = true
 			g.ClockQuality.ClockAccuracy = c.syncState.ClockAccuracy
 			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 			g.ClockQuality.OffsetScaledLogVariance = 0xffff
@@ -261,15 +262,17 @@ func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccura
 		if g.ClockQuality.ClockClass != fbprotocol.ClockClass7 {
 			g.ClockQuality.ClockClass = fbprotocol.ClockClass7
 			g.TimePropertiesDS.TimeTraceable = true
+			g.TimePropertiesDS.FrequencyTraceable = true
 			g.ClockQuality.ClockAccuracy = c.syncState.ClockAccuracy
 			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 			g.ClockQuality.OffsetScaledLogVariance = 0xffff
 			err = c.pmcClient.SetGMSettings(pmcCfgName, g)
 		}
 	case protocol.ClockClassFreerun:
-		if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
+		if g.ClockQuality.ClockClass != protocol.ClockClassFreerun || g.TimePropertiesDS.FrequencyTraceable {
 			g.ClockQuality.ClockClass = protocol.ClockClassFreerun
 			g.TimePropertiesDS.TimeTraceable = false
+			g.TimePropertiesDS.FrequencyTraceable = false
 			g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 			g.ClockQuality.OffsetScaledLogVariance = 0xffff
