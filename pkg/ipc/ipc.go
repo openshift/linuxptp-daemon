@@ -31,14 +31,14 @@ const (
 // GNSS synchronization state values.
 const (
 	GNSSSynchronized        = "SYNCHRONIZED"
-	GNSSAcquiringSync       = "ACQUIRING_SYNC"
-	GNSSAntennaDisconnected = "ANTENNA_DISCONNECTED"
+	GNSSAcquiringSync       = "ACQUIRING-SYNC"
+	GNSSAntennaDisconnected = "ANTENNA-DISCONNECTED"
 	GNSSBooting             = "BOOTING"
-	GNSSAntennaShortCircuit = "ANTENNA_SHORT_CIRCUIT"
-	GNSSFailureMultipath    = "FAILURE_MULTIPATH"
-	GNSSFailureNoFix        = "FAILURE_NOFIX"
-	GNSSFailureLowSNR       = "FAILURE_LOW_SNR"
-	GNSSFailurePLL          = "FAILURE_PLL"
+	GNSSAntennaShortCircuit = "ANTENNA-SHORT-CIRCUIT"
+	GNSSFailureMultipath    = "FAILURE-MULTIPATH"
+	GNSSFailureNoFix        = "FAILURE-NOFIX"
+	GNSSFailureLowSNR       = "FAILURE-LOW-SNR"
+	GNSSFailurePLL          = "FAILURE-PLL"
 )
 
 // Value is an interface implemented by all IPC message value types.
