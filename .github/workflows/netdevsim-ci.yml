@@ -10,10 +10,6 @@
 # NOTE: no `concurrency` here on purpose. The called workflow defines
 # it (evaluated in caller context), and defining the same group in both
 # the caller and the callee deadlocks the run.
-#
-# REVIEW NOTE: temporarily points at the ptp-operator PR branch
-# (k8snetworkplumbingwg/ptp-operator#364); flip to
-# k8snetworkplumbingwg/ptp-operator@main once that merges.
 
 name: Netdevsim CI
 
@@ -23,4 +19,4 @@ on:
 
 jobs:
   netdevsim-ci:
-    uses: ferikov/ptp-operator/.github/workflows/netdevsim-ci.yml@ci/netdevsim-reusable
+    uses: k8snetworkplumbingwg/ptp-operator/.github/workflows/netdevsim-ci.yml@main
