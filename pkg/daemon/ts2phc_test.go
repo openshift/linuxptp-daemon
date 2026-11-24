@@ -35,6 +35,7 @@ func TestTS2PHCPollSuccessIsDrivenByEvent(t *testing.T) {
 	}}
 	processWithParser(p, "metric only")
 	assert.False(t, p.ts2phcPoll.currentPollCycle.tstamps[0].handled)
+	assert.False(t, p.ts2phcPoll.currentPollCycle.tstamps[0].offsetReceived)
 	drainEvents(p.eventCh)
 
 	// The typed success event is sufficient without a metric, including PHC
@@ -44,6 +45,7 @@ func TestTS2PHCPollSuccessIsDrivenByEvent(t *testing.T) {
 	}}
 	processWithParser(p, "event only")
 	assert.True(t, p.ts2phcPoll.currentPollCycle.tstamps[0].handled)
+	assert.True(t, p.ts2phcPoll.currentPollCycle.tstamps[0].offsetReceived)
 	assert.Empty(t, drainEvents(p.eventCh))
 }
 
@@ -694,6 +696,165 @@ func TestTS2PHCPollCycleSuccessfulPoll(t *testing.T) {
 	assert.Empty(t, drainEvents(p.eventCh), "rollover must not report already consumed timestamps")
 }
 
+func TestTS2PHCPollTimeoutAfterHealthyBatch(t *testing.T) {
+	type timeoutExpectation struct {
+		timestamp   string
+		wantTimeout bool
+	}
+	for _, tt := range []struct {
+		name          string
+		sampleTime    string
+		unmanagedTime string
+		timeouts      []timeoutExpectation
+	}{
+		{
+			name: "same log second", sampleTime: "17515.100", unmanagedTime: "17515.100",
+			timeouts: []timeoutExpectation{
+				{timestamp: "17515.433"},
+				{timestamp: "17517.433", wantTimeout: true},
+			},
+		},
+		{
+			name: "across log second", sampleTime: "17515.989", unmanagedTime: "17515.989",
+			timeouts: []timeoutExpectation{
+				{timestamp: "17516.322"},
+				{timestamp: "17518.322", wantTimeout: true},
+			},
+		},
+		{
+			// Exercise the window boundary independently of the normal poll cadence.
+			name: "exactly one PPS period from first sample", sampleTime: "17515.989", unmanagedTime: "17515.999",
+			timeouts: []timeoutExpectation{{timestamp: "17516.989", wantTimeout: true}},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTS2PHCPollTestProcess()
+			feedTS2PHCPollLine(p, "17515.000", "unselecting /dev/ptp0 for synchronization")
+			feedTS2PHCPollLine(p, tt.sampleTime, "adding tstamp 1794159506.000000000 to clock /dev/ptp1")
+			feedTS2PHCPollLine(p, tt.sampleTime, "adding tstamp 1794159506.000000000 to clock /dev/ptp2")
+			feedTS2PHCPollLine(p, tt.sampleTime, "ens1 offset 0 s2 freq -0")
+			feedTS2PHCPollLine(p, tt.sampleTime, "ens2 offset 0 s2 freq -0")
+			feedTS2PHCPollLine(p, tt.unmanagedTime, "adding tstamp 1794159506.000000011 to clock /dev/ptp0")
+			healthyEvents := drainEvents(p.eventCh)
+			require.Len(t, healthyEvents, 2)
+			for _, ev := range healthyEvents {
+				require.IsType(t, &event.OffsetData{}, ev.Data)
+				assert.Equal(t, event.PTP_LOCKED, ev.Data.(*event.OffsetData).State)
+			}
+
+			cycle := p.ts2phcPoll.currentPollCycle
+			require.NotNil(t, cycle)
+			require.Len(t, cycle.tstamps, 3)
+			samples := append([]tstamp(nil), cycle.tstamps...)
+			for _, timeout := range tt.timeouts {
+				feedTS2PHCPollLine(p, timeout.timestamp, "poll returns zero, no events")
+				events := drainEvents(p.eventCh)
+				assert.Equal(t, timeout.wantTimeout, p.TS2phcHasTimeouts())
+				if !timeout.wantTimeout {
+					assert.Empty(t, events)
+					assert.Same(t, cycle, p.ts2phcPoll.currentPollCycle)
+					assert.Equal(t, samples, cycle.tstamps)
+					assert.False(t, cycle.counted)
+					assert.Zero(t, p.ts2phcPoll.pollTimeoutCount)
+					assert.Zero(t, p.ts2phcPoll.timeoutGroup)
+					continue
+				}
+
+				require.Len(t, events, 2, "only managed sinks should be reported missing")
+				assert.Equal(t, []string{"ens1", "ens2"}, []string{events[0].IFace, events[1].IFace})
+				for _, ev := range events {
+					require.IsType(t, &event.StateData{}, ev.Data)
+					assert.Equal(t, event.PTP_FREERUN, ev.Data.(*event.StateData).State)
+				}
+				assert.NotSame(t, cycle, p.ts2phcPoll.currentPollCycle)
+				assert.Empty(t, p.ts2phcPoll.currentPollCycle.tstamps)
+				assert.Equal(t, 1, p.ts2phcPoll.pollTimeoutCount)
+			}
+		})
+	}
+}
+
+func TestTS2PHCPollTimeoutAfterSinkReselection(t *testing.T) {
+	for _, reselected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reselected=%t", reselected), func(t *testing.T) {
+			p := newTS2PHCPollTestProcess()
+			feedTS2PHCPollLine(p, "17515.900", "unselecting /dev/ptp0 for synchronization")
+			if reselected {
+				feedTS2PHCPollLine(p, "17515.900", "unselecting /dev/ptp2 for synchronization")
+			}
+			feedTS2PHCPollLine(p, "17515.989", "adding tstamp 1794159506.000000000 to clock /dev/ptp1")
+			feedTS2PHCPollLine(p, "17515.989", "adding tstamp 1794159506.000000000 to clock /dev/ptp2")
+			feedTS2PHCPollLine(p, "17515.989", "ens1 offset 0 s2 freq -0")
+			if reselected {
+				feedTS2PHCPollLine(p, "17515.989", "selecting /dev/ptp2 for synchronization")
+			}
+			feedTS2PHCPollLine(p, "17515.989", "adding tstamp 1794159506.000000011 to clock /dev/ptp0")
+			require.Len(t, drainEvents(p.eventCh), 1)
+			cycle := p.ts2phcPoll.currentPollCycle
+			assert.Equal(t, reselected, cycle.tstamps[1].handled)
+			assert.False(t, cycle.tstamps[1].offsetReceived)
+
+			metrics, err := p.handlePollTimeout(&parser.Ts2PhcEvent{Timestamp: "17516.322"})
+			require.NoError(t, err)
+			require.Len(t, metrics, 2, "a current sink without an offset must prevent timeout suppression")
+			assert.ElementsMatch(t, []string{"ens1", "ens2"}, []string{metrics[0].Iface, metrics[1].Iface})
+			for _, metric := range metrics {
+				assert.Equal(t, constants.ClockStateFreeRun, string(metric.ClockState))
+				if reselected {
+					assert.True(t, math.IsNaN(metric.Offset), "the skipped sample must not be reopened")
+				}
+			}
+			assert.True(t, p.TS2phcHasTimeouts())
+			assert.Equal(t, 1, p.ts2phcPoll.pollTimeoutCount)
+
+			// Both sinks must continue to report offsets in the next PPS batch.
+			feedTS2PHCPollLine(p, "17516.989", "adding tstamp 1794159507.000000000 to clock /dev/ptp1")
+			feedTS2PHCPollLine(p, "17516.989", "adding tstamp 1794159507.000000000 to clock /dev/ptp2")
+			feedTS2PHCPollLine(p, "17516.989", "ens1 offset 0 s2 freq -0")
+			feedTS2PHCPollLine(p, "17516.989", "adding tstamp 1794159507.000000011 to clock /dev/ptp0")
+			require.Len(t, drainEvents(p.eventCh), 1)
+			assert.False(t, p.ts2phcPoll.currentPollCycle.tstamps[1].handled)
+
+			metrics, err = p.handlePollTimeout(&parser.Ts2PhcEvent{Timestamp: "17517.322"})
+			require.NoError(t, err)
+			require.Len(t, metrics, 2)
+			assert.ElementsMatch(t, []string{"ens1", "ens2"}, []string{metrics[0].Iface, metrics[1].Iface})
+			for _, metric := range metrics {
+				assert.Equal(t, constants.ClockStateFreeRun, string(metric.ClockState))
+			}
+			assert.True(t, p.TS2phcHasTimeouts())
+			assert.Equal(t, 1, p.ts2phcPoll.pollTimeoutCount)
+		})
+	}
+}
+
+func TestTS2PHCPollTimeoutRequiresEverySinkTimestamp(t *testing.T) {
+	p := newTS2PHCPollTestProcess()
+	feedTS2PHCPollLine(p, "17515.900", "unselecting /dev/ptp0 for synchronization")
+	feedTS2PHCPollLine(p, "17515.989", "adding tstamp 1794159506.000000000 to clock /dev/ptp1")
+	feedTS2PHCPollLine(p, "17515.989", "ens1 offset 0 s2 freq -0")
+	feedTS2PHCPollLine(p, "17515.989", "adding tstamp 1794159506.000000011 to clock /dev/ptp0")
+	require.Len(t, drainEvents(p.eventCh), 1)
+	cycle := p.ts2phcPoll.currentPollCycle
+
+	metrics, err := p.handlePollTimeout(&parser.Ts2PhcEvent{Timestamp: "17516.322"})
+	require.NoError(t, err)
+	assert.Empty(t, metrics, "missing-sink reporting is deferred while the batch is partial")
+	assert.Same(t, cycle, p.ts2phcPoll.currentPollCycle)
+	assert.True(t, p.TS2phcHasTimeouts(), "a healthy subset must not suppress the timeout")
+	assert.Equal(t, 1, p.ts2phcPoll.pollTimeoutCount)
+
+	metrics, err = p.handlePollTimeout(&parser.Ts2PhcEvent{Timestamp: "17518.322"})
+	require.NoError(t, err)
+	require.Len(t, metrics, 2)
+	assert.ElementsMatch(t, []string{"ens1", "ens2"}, []string{metrics[0].Iface, metrics[1].Iface})
+	for _, metric := range metrics {
+		assert.Equal(t, constants.ClockStateFreeRun, string(metric.ClockState))
+		assert.True(t, math.IsNaN(metric.Offset))
+	}
+	assert.Equal(t, 2, p.ts2phcPoll.pollTimeoutCount)
+}
+
 func TestTS2PHCPollCycleTimeoutSequence(t *testing.T) {
 	p := newTS2PHCPollTestProcess()
 	feedTS2PHCPollLine(p, "1066.140", "adding tstamp 1791217460.000000097 to clock /dev/ptp0")
@@ -954,6 +1115,9 @@ func TestTS2PHCPollFailureMetrics(t *testing.T) {
 		assert.Equal(t, parser.Metrics{
 			From: event.Ts2PhcProcessName, Iface: iface, ClockState: constants.ClockStateFreeRun, Source: constants.Master,
 		}, got)
+	}
+	for _, ts := range cycle.tstamps {
+		assert.False(t, ts.offsetReceived, "failure reporting must not count as an offset report")
 	}
 	assert.Empty(t, cycle.unhandledMetrics())
 }

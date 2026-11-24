@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
@@ -34,6 +35,8 @@ type pollCycle struct {
 
 // tstamp represents indivdiual collected tstamp poll messages, which correspond to ts2phc observing a PPS event.
 type tstamp struct {
+	// logTime is the full ts2phc log timestamp, not the PHC timestamp.
+	logTime time.Duration
 	// The PHC timestamp retrieved by ts2phc, kept in integer units to preserve
 	// nanosecond precision at epoch-sized values.
 	seconds     int64
@@ -47,6 +50,9 @@ type tstamp struct {
 	// handled means the sample was reported or intentionally skipped as a non-sink.
 	// Reselecting a sink must not reopen an old skipped sample.
 	handled bool
+	// offsetReceived is set only by an offset report, not by failure reporting
+	// or skipping a non-sink sample.
+	offsetReceived bool
 }
 
 // Each ts2phc process owns its poll state and configured PHC roles.
@@ -150,11 +156,16 @@ func (p *ptpProcess) handleAddedTstamp(data *parser.Ts2PhcEvent) ([]*parser.Metr
 	if err != nil {
 		return nil, err
 	}
+	logTime, err := time.ParseDuration(data.Timestamp + "s")
+	if err != nil {
+		return nil, err
+	}
 	if data.PHCTstamp == nil || data.PHCDevice == "" {
 		return nil, fmt.Errorf("ts2phc timestamp event is missing its PHC or timestamp")
 	}
 
 	ts := tstamp{
+		logTime:     logTime,
 		seconds:     data.PHCTstamp.Seconds,
 		nanoseconds: data.PHCTstamp.Nanoseconds,
 		device:      data.PHCDevice,
@@ -221,6 +232,7 @@ func (p *ptpProcess) handleSuccessfulPollFor(iface string) {
 		ts := &s.currentPollCycle.tstamps[i]
 		if ts.device == device {
 			ts.handled = true
+			ts.offsetReceived = true
 			return
 		}
 	}
@@ -235,6 +247,10 @@ func (p *ptpProcess) handlePollTimeout(data *parser.Ts2PhcEvent) ([]*parser.Metr
 	if err != nil {
 		return nil, err
 	}
+	logTime, err := time.ParseDuration(data.Timestamp + "s")
+	if err != nil {
+		return nil, err
+	}
 	s := &p.ts2phcPoll
 	s.pollCycleLock.Lock()
 	defer s.pollCycleLock.Unlock()
@@ -246,6 +262,15 @@ func (p *ptpProcess) handlePollTimeout(data *parser.Ts2PhcEvent) ([]*parser.Metr
 	}
 
 	cycle := s.currentPollCycle
+	// A completed PPS batch can be followed by a spurious timeout before the
+	// next edge, even across a log-second boundary. Require actual offsets,
+	// since handled samples also include failures and skipped non-sinks.
+	if len(cycle.tstamps) > 0 {
+		elapsed := logTime - cycle.tstamps[0].logTime
+		if elapsed >= 0 && elapsed < time.Second && cycle.allSinkOffsetsReceived(p.ifaces, s.roles) {
+			return nil, nil
+		}
+	}
 	metrics := cycle.unhandledMetrics()
 	// An already failed batch can be closed at a later timeout group. An
 	// entirely handled batch is also complete before the next timeout group.
@@ -302,6 +327,24 @@ func (c *pollCycle) allSinksHandled(ifaces config.IFaces, roles map[string]parse
 		}
 	}
 	return true
+}
+
+// allSinkOffsetsReceived requires at least one configured sink and an actual
+// offset report for every current sink in this batch.
+func (c *pollCycle) allSinkOffsetsReceived(ifaces config.IFaces, roles map[string]parser.TS2PHCRole) bool {
+	hasSink := false
+	for _, iface := range ifaces {
+		if roles[iface.PhcId] != parser.TS2PHCSink {
+			continue
+		}
+		hasSink = true
+		if !slices.ContainsFunc(c.tstamps, func(ts tstamp) bool {
+			return ts.device == iface.PhcId && ts.offsetReceived
+		}) {
+			return false
+		}
+	}
+	return hasSink
 }
 
 func (c *pollCycle) sourceTimestamps() []tstamp {
