@@ -139,15 +139,16 @@ func (pm *ProcessManager) processEvents(ctx context.Context) {
 				if p := pm.findProcess(ev); p != nil {
 					UpdateProcessStatusMetrics(p.Name(), p.ConfigName(), ps.Status)
 				}
-				if ps.Status == PtpProcessDown {
-					pm.handleProcessDown(ctx, ev)
-				}
-			} else {
+			}
+			if !isPS || ps.Status == PtpProcessDown {
 				select {
 				case pm.eventsOut <- ev:
 				case <-ctx.Done():
 					return
 				}
+			}
+			if isPS && ps.Status == PtpProcessDown {
+				pm.handleProcessDown(ctx, ev)
 			}
 			pm.evalActions(ctx, ev)
 		case stats, ok := <-pm.statsIn:

@@ -11,6 +11,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -499,7 +500,37 @@ func TestForwardEvents_ProcessStatusDownDeadRestarts(t *testing.T) {
 	ct.SendProcessStatus(event.PTP4l, ptp4lConfig, PtpProcessDown)
 
 	assert.Eventually(t, func() bool { return stub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond)
-	assert.Empty(t, ct.pm.eventsOut, "ProcessStatusData must not be forwarded to handler")
+	require.Len(t, ct.pm.eventsOut, 1, "process-down event must be forwarded")
+}
+
+func TestForwardEvents_Phc2sysDownEmitsOSClockFreerun(t *testing.T) {
+	ct := NewCondiitonsTester(t, event.BC)
+	cache := ipc.NewCache(20)
+	ct.cm = clockmgr.Init("test-node", ct.pm.eventsOut, nil, nil, nil, cache)
+	ct.pm.clockMgr = ct.cm
+	ct.pm.statsIn = ct.cm.StatsUpdatesCh()
+	const cfg = "phc2sys.0.config"
+	stub := ct.AddProcess(&stubProcess{name: event.Phc2SysProcessName, cfgName: cfg, state: process.Dead})
+	ct.Start()
+	ct.pm.eventsIn <- event.Event{Source: event.PHC2SYS, CfgName: cfg, IFace: "CLOCK_REALTIME", Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: 10}}
+	select {
+	case msg := <-cache.Out():
+		require.Equal(t, ipc.TypeOSClockState, msg.Type)
+		require.Equal(t, ipc.StateLocked, msg.Values.(ipc.StateValue).State)
+	case <-time.After(time.Second):
+		t.Fatal("OS clock did not become LOCKED")
+	}
+
+	ct.SendProcessStatus(event.PHC2SYS, cfg, PtpProcessDown)
+
+	select {
+	case msg := <-cache.Out():
+		require.Equal(t, ipc.TypeOSClockState, msg.Type)
+		require.Equal(t, ipc.StateFreerun, msg.Values.(ipc.StateValue).State)
+	case <-time.After(time.Second):
+		t.Fatal("phc2sys down did not emit OS clock FREERUN")
+	}
+	assert.Eventually(t, func() bool { return stub.Starts() == 1 }, time.Second, time.Millisecond)
 }
 
 func TestProcessStatusEventsUpdateMetrics(t *testing.T) {
@@ -533,7 +564,7 @@ func TestForwardEvents_ProcessStatusDownStoppedNoRestart(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, 0, stub.starts)
-	assert.Empty(t, ct.pm.eventsOut, "ProcessStatusData must not be forwarded to handler")
+	require.Len(t, ct.pm.eventsOut, 1, "process-down event must be forwarded")
 }
 
 func TestForwardEvents_ProcessStatusDownRestartsDep(t *testing.T) {
@@ -546,7 +577,7 @@ func TestForwardEvents_ProcessStatusDownRestartsDep(t *testing.T) {
 
 	assert.Eventually(t, func() bool { return dep.Starts() == 1 }, 2*time.Second, 10*time.Millisecond)
 	assert.Equal(t, 0, parent.starts)
-	assert.Empty(t, ct.pm.eventsOut, "ProcessStatusData must not be forwarded to handler")
+	require.Len(t, ct.pm.eventsOut, 1, "process-down event must be forwarded")
 }
 
 func TestStartProcesses_MissingConditionStartsImmediately(t *testing.T) {

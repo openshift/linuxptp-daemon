@@ -77,13 +77,13 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 			assert.NotEqual(t, ipc.TypePTPState, msg.Type, "no TypePTPState IPC from PTP_NOTSET→FREERUN")
 			if msg.Type == ipc.TypeGNSSState {
 				gv := msg.Values.(ipc.GNSSStateValue)
-				assert.Equal(t, ipc.StateLocked, gv.State)
+				assert.Equal(t, ipc.GNSSSynchronized, gv.State)
 				assert.Equal(t, cfg, msg.Profile)
 				assert.Equal(t, iface, msg.IFace)
 				gotGNSS = true
 			}
 		}
-		assert.True(t, gotGNSS, "expected TypeGNSSState LOCKED on initial GNSS transition")
+		assert.True(t, gotGNSS, "expected TypeGNSSState SYNCHRONIZED on initial GNSS transition")
 		rio.messages = nil
 
 		// Second call: transition to LOCKED
@@ -213,13 +213,13 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 		for _, msg := range rio.messages {
 			if msg.Type == ipc.TypeGNSSState {
 				gv := msg.Values.(ipc.GNSSStateValue)
-				assert.Equal(t, ipc.StateFreerun, gv.State)
+				assert.Equal(t, ipc.GNSSFailureNoFix, gv.State)
 				assert.Equal(t, cfg, msg.Profile)
 				assert.Equal(t, iface, msg.IFace)
 				gotGNSS = true
 			}
 		}
-		assert.True(t, gotGNSS, "expected TypeGNSSState FREERUN when GNSS drops")
+		assert.True(t, gotGNSS, "expected TypeGNSSState FAILURE-NOFIX when GNSS drops")
 	})
 
 	t.Run("LOCKED to FREERUN emits TypeClockClass 248", func(t *testing.T) {

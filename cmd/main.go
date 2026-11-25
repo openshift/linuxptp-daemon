@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
@@ -233,7 +234,9 @@ func setupControllerManager(cfg *rest.Config, nodeName string, ptpConfUpdate *da
 		Scheme:                 scheme,
 		HealthProbeBindAddress: ":8082",
 		LeaderElection:         false, // Disable leader election for daemon
-		// PtpConfig is cluster-scoped, so don't restrict cache by namespace
+		Cache: cache.Options{DefaultNamespaces: map[string]cache.Config{
+			daemon.PtpNamespace: {},
+		}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("unable to start controller manager: %w", err)
